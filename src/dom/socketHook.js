@@ -61,6 +61,9 @@ function parseSocketIOFrame(raw) {
         const eventName = String(arr[0] || '').toLowerCase();
         const payload = arr[1] || {};
 
+        GameMemory.wsActive = true;
+        GameMemory.wsLastMessageTime = Date.now();
+
         // 1. Sniff Room Settings & Player Identity at Match Init
         if (
             eventName.includes('game') ||
@@ -86,11 +89,45 @@ function parseSocketIOFrame(raw) {
                 }
             }
 
-            // Detect my player name if provided in initialization packet
-            if (payload.myId && Array.isArray(payload.players)) {
-                const me = payload.players.find(p => p.id === payload.myId || p.isMe || p.is_me);
+            // Immediately promote WebSocket as primary source of truth for player balances and identity
+            const myId = payload.myId || payload.my_id || payload.userId || payload.user_id || payload.playerId;
+            const playersList = Array.isArray(payload.players) ? payload.players : (Array.isArray(payload.playerList) ? payload.playerList : null);
+
+            if (playersList) {
+                const me = myId ? playersList.find(p => p.id === myId || p.userId === myId || p.isMe || p.is_me)
+                                : playersList.find(p => p.isMe || p.is_me);
                 if (me && (me.name || me.username)) {
                     GameMemory.setMyName(me.name || me.username);
+                }
+
+                for (const p of playersList) {
+                    const pName = p.name || p.username;
+                    if (!pName) continue;
+                    const rawMoney = typeof p.money === 'number' ? p.money : 
+                                     (typeof p.cash === 'number' ? p.cash : 
+                                     (typeof p.balance === 'number' ? p.balance : null));
+                    const isThisPlayerMe = GameMemory.isMe(pName) || (myId && p.id === myId) || Boolean(p.isMe || p.is_me);
+
+                    const playerPos = typeof p.position === 'number' ? p.position : 
+                                      (typeof p.pos === 'number' ? p.pos : (GameMemory.players[pName]?.pos || 0));
+
+                    if (rawMoney !== null) {
+                        GameMemory.players[pName] = {
+                            cash: rawMoney,
+                            pos: playerPos,
+                            inJail: Boolean(p.inJail || p.jailTurns || p.in_jail),
+                            isMe: isThisPlayerMe,
+                            bankrupt: Boolean(p.bankrupt)
+                        };
+
+                        if (isThisPlayerMe) {
+                            GameMemory.setMyName(pName);
+                            GameMemory.myCash = rawMoney;
+                            GameMemory.cashVerified = true;
+                            GameMemory.myPos = playerPos;
+                            if (typeof p.inJail === 'boolean') GameMemory.inJail = p.inJail;
+                        }
+                    }
                 }
             }
         }

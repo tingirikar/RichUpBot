@@ -1,6 +1,7 @@
 import { DICE_PROB } from '../data/diceProb.js';
 import { BOARD_TILES, HIGH_TRAFFIC_GROUPS } from '../data/boardTiles.js';
 import { GameMemory } from '../memory/gameMemory.js';
+import { OpponentTracker } from '../memory/opponentTracker.js';
 import { CONFIG } from '../config.js';
 
 /**

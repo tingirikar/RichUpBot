@@ -12,11 +12,17 @@ import { GameMemory } from '../memory/gameMemory.js';
 export function syncBoardStateFromDOM() {
     if (!document.body) return;
 
-    // 1. Detect Lobby Settings (Starting cash) and Player Identity from "Change appearance"
-    detectLobbySettingsAndIdentity();
+    const wsHealthy = typeof GameMemory.isWsHealthy === 'function' && GameMemory.isWsHealthy();
 
-    // 2. Detect Local Player & Exact Cash Balance from Scoreboard List
-    detectLocalPlayerFromPlayerList();
+    // 1. Detect Lobby Settings & Player Identity (run only if WS hasn't verified identity)
+    if (!wsHealthy || !GameMemory.myName) {
+        detectLobbySettingsAndIdentity();
+    }
+
+    // 2. Detect Local Player & Exact Cash Balance from Scoreboard List (Emergency fallback if WS is dormant)
+    if (!wsHealthy) {
+        detectLocalPlayerFromPlayerList();
+    }
 
     // 3. Dynamically read exact property prices from the board DOM
     syncBoardTilePricesFromDOM();
@@ -24,8 +30,12 @@ export function syncBoardStateFromDOM() {
     // 4. Sync Properties & House Counts from "My properties" Sidebar
     syncMyPropertiesFromSidebar();
 
-    // 5. Fallback: Parse Text Nodes for Other Players & Activity Logs
-    scanTextNodesAndActivityLogs();
+    // 5. Activity Logs: If WS is healthy, only parse activity log events without corrupting verified cash
+    if (!wsHealthy) {
+        scanTextNodesAndActivityLogs();
+    } else {
+        scanActivityLogsOnly();
+    }
 }
 
 /**
@@ -386,6 +396,22 @@ function syncMyPropertiesFromSidebar() {
             GameMemory.ownership[tileId].owner = null;
             GameMemory.ownership[tileId].houses = 0;
         }
+    }
+}
+
+function scanActivityLogsOnly() {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    const hud = document.getElementById('rubot-hud-panel');
+
+    let node = walker.nextNode();
+    while (node) {
+        if (!hud || !hud.contains(node.parentElement)) {
+            const line = node.nodeValue ? node.nodeValue.trim() : '';
+            if (line.length > 8 && line.length < 120 && !GameMemory.processedLogs.has(line)) {
+                parseActivityLogLine(line);
+            }
+        }
+        node = walker.nextNode();
     }
 }
 

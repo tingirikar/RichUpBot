@@ -39,12 +39,18 @@ export const GameMemory = {
 
     // Diagnostic & tracking logs
     processedLogs: new Set(),
+    wsActive: false,
+    wsLastMessageTime: 0,
     wsMessages: [],
     lastPurchasedBlock: null,
     lastDangerEV: 0,
     lastDynamicReserve: CONFIG.BASE_MIN_RESERVE,
     lastJailMode: 'AGR_EXIT',
     lastTradeVerdict: 'READY',
+
+    isWsHealthy() {
+        return Boolean(this.wsActive && (Date.now() - this.wsLastMessageTime < 15000) && this.cashVerified && this.myName);
+    },
 
     setMyName(name) {
         if (!name || typeof name !== 'string') return;

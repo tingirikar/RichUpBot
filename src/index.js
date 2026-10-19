@@ -64,40 +64,97 @@ async function evaluateAndAct() {
         if (!state.status || getIsActing() || isEvaluating) return;
         isEvaluating = true;
 
-        syncBoardStateFromDOM();
-        HUDPanel.updateTelemetry();
+        // Sync board state & telemetry with error boundaries
+        try {
+            syncBoardStateFromDOM();
+        } catch (err) {
+            logToBot(`[DOM Sync Warning] ${err}`);
+        }
+
+        try {
+            HUDPanel.updateTelemetry();
+        } catch (err) {
+            logToBot(`[Telemetry Warning] ${err}`);
+        }
 
         // Check for opponent chat messages and engage naturally
-        await ChatEngine.scanAndRespondToOpponentChat();
+        try {
+            await ChatEngine.scanAndRespondToOpponentChat();
+        } catch (err) {
+            logToBot(`[Chat Scan Warning] ${err}`);
+        }
 
-        const snapshot = createDOMSnapshot();
+        let snapshot;
+        try {
+            snapshot = createDOMSnapshot();
+        } catch (err) {
+            logToBot(`[DOM Snapshot Error] ${err}`);
+            return;
+        }
 
         // 1. Check for incoming trade modal (Hybrid Ollama / Minimax)
-        if (await ActionExecutor.handleTrade(snapshot)) return;
+        try {
+            if (await ActionExecutor.handleTrade(snapshot)) return;
+        } catch (err) {
+            logToBot(`[Trade Step Warning] ${err}`);
+        }
 
         // 2. Check for Debt Recovery / Mortgaging (Negative cash must be resolved to proceed)
-        if (ActionExecutor.handleDebtRecovery(snapshot)) return;
+        try {
+            if (ActionExecutor.handleDebtRecovery(snapshot)) return;
+        } catch (err) {
+            logToBot(`[Debt Step Warning] ${err}`);
+        }
 
         // 3. Check for Jail decisions (room & phase aware)
-        if (ActionExecutor.handleJail(snapshot)) return;
+        try {
+            if (ActionExecutor.handleJail(snapshot)) return;
+        } catch (err) {
+            logToBot(`[Jail Step Warning] ${err}`);
+        }
 
         // 4. Roll Dice if it's our turn to roll!
-        if (ActionExecutor.handleRollDice(snapshot)) return;
+        try {
+            if (ActionExecutor.handleRollDice(snapshot)) return;
+        } catch (err) {
+            logToBot(`[Roll Step Warning] ${err}`);
+        }
 
         // 5. Check for landing on unowned property (Buy vs Auction)
-        if (ActionExecutor.handleBuyOrAuction(snapshot)) return;
+        try {
+            if (ActionExecutor.handleBuyOrAuction(snapshot)) return;
+        } catch (err) {
+            logToBot(`[Buy/Auction Step Warning] ${err}`);
+        }
 
         // 6. Check for ongoing Auction bidding
-        if (ActionExecutor.handleAuction(snapshot)) return;
+        try {
+            if (ActionExecutor.handleAuction(snapshot)) return;
+        } catch (err) {
+            logToBot(`[Auction Bid Step Warning] ${err}`);
+        }
 
         // 7. Check for House Building upgrades (on monopolies)
-        if (ActionExecutor.handleHouseBuilding(snapshot)) return;
+        try {
+            if (ActionExecutor.handleHouseBuilding(snapshot)) return;
+        } catch (err) {
+            logToBot(`[Build Step Warning] ${err}`);
+        }
 
         // 8. Check for Proactive Mutual Monopoly Swaps
-        if (ActionExecutor.handleProactiveTrade(snapshot)) return;
+        try {
+            if (ActionExecutor.handleProactiveTrade(snapshot)) return;
+        } catch (err) {
+            logToBot(`[Proactive Trade Step Warning] ${err}`);
+        }
 
         // 9. Deliberate Strategic Review & Turn Completion (End Turn)
-        await ActionExecutor.deliberateBeforeEndTurn(snapshot);
+        try {
+            await ActionExecutor.deliberateBeforeEndTurn(snapshot);
+        } catch (err) {
+            logToBot(`[End Turn Step Warning] ${err}`);
+            try { ActionExecutor.handleEndTurn(snapshot); } catch (_) {}
+        }
 
     } catch (err) {
         logToBot(`Eval loop error: ${err}`);

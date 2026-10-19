@@ -285,12 +285,17 @@
     ownership: {},
     // Diagnostic & tracking logs
     processedLogs: /* @__PURE__ */ new Set(),
+    wsActive: false,
+    wsLastMessageTime: 0,
     wsMessages: [],
     lastPurchasedBlock: null,
     lastDangerEV: 0,
     lastDynamicReserve: CONFIG.BASE_MIN_RESERVE,
     lastJailMode: "AGR_EXIT",
     lastTradeVerdict: "READY",
+    isWsHealthy() {
+      return Boolean(this.wsActive && Date.now() - this.wsLastMessageTime < 15e3 && this.cashVerified && this.myName);
+    },
     setMyName(name) {
       if (!name || typeof name !== "string") return;
       const trimmed = name.trim();
@@ -416,6 +421,8 @@
       if (!Array.isArray(arr) || arr.length === 0) return;
       const eventName = String(arr[0] || "").toLowerCase();
       const payload = arr[1] || {};
+      GameMemory.wsActive = true;
+      GameMemory.wsLastMessageTime = Date.now();
       if (eventName.includes("game") || eventName.includes("init") || eventName.includes("state") || eventName.includes("room")) {
         if (payload.settings) {
           if (typeof payload.settings.can_collect_rent_in_jail === "boolean") {
@@ -434,10 +441,35 @@
             }
           }
         }
-        if (payload.myId && Array.isArray(payload.players)) {
-          const me = payload.players.find((p) => p.id === payload.myId || p.isMe || p.is_me);
+        const myId = payload.myId || payload.my_id || payload.userId || payload.user_id || payload.playerId;
+        const playersList = Array.isArray(payload.players) ? payload.players : Array.isArray(payload.playerList) ? payload.playerList : null;
+        if (playersList) {
+          const me = myId ? playersList.find((p) => p.id === myId || p.userId === myId || p.isMe || p.is_me) : playersList.find((p) => p.isMe || p.is_me);
           if (me && (me.name || me.username)) {
             GameMemory.setMyName(me.name || me.username);
+          }
+          for (const p of playersList) {
+            const pName = p.name || p.username;
+            if (!pName) continue;
+            const rawMoney = typeof p.money === "number" ? p.money : typeof p.cash === "number" ? p.cash : typeof p.balance === "number" ? p.balance : null;
+            const isThisPlayerMe = GameMemory.isMe(pName) || myId && p.id === myId || Boolean(p.isMe || p.is_me);
+            const playerPos = typeof p.position === "number" ? p.position : typeof p.pos === "number" ? p.pos : GameMemory.players[pName]?.pos || 0;
+            if (rawMoney !== null) {
+              GameMemory.players[pName] = {
+                cash: rawMoney,
+                pos: playerPos,
+                inJail: Boolean(p.inJail || p.jailTurns || p.in_jail),
+                isMe: isThisPlayerMe,
+                bankrupt: Boolean(p.bankrupt)
+              };
+              if (isThisPlayerMe) {
+                GameMemory.setMyName(pName);
+                GameMemory.myCash = rawMoney;
+                GameMemory.cashVerified = true;
+                GameMemory.myPos = playerPos;
+                if (typeof p.inJail === "boolean") GameMemory.inJail = p.inJail;
+              }
+            }
           }
         }
       }
@@ -819,11 +851,20 @@
   // src/dom/boardScanner.js
   function syncBoardStateFromDOM() {
     if (!document.body) return;
-    detectLobbySettingsAndIdentity();
-    detectLocalPlayerFromPlayerList();
+    const wsHealthy = typeof GameMemory.isWsHealthy === "function" && GameMemory.isWsHealthy();
+    if (!wsHealthy || !GameMemory.myName) {
+      detectLobbySettingsAndIdentity();
+    }
+    if (!wsHealthy) {
+      detectLocalPlayerFromPlayerList();
+    }
     syncBoardTilePricesFromDOM();
     syncMyPropertiesFromSidebar();
-    scanTextNodesAndActivityLogs();
+    if (!wsHealthy) {
+      scanTextNodesAndActivityLogs();
+    } else {
+      scanActivityLogsOnly();
+    }
   }
   function detectLobbySettingsAndIdentity() {
     const hud = document.getElementById("rubot-hud-panel");
@@ -1075,6 +1116,20 @@
         GameMemory.ownership[tileId].owner = null;
         GameMemory.ownership[tileId].houses = 0;
       }
+    }
+  }
+  function scanActivityLogsOnly() {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    const hud = document.getElementById("rubot-hud-panel");
+    let node = walker.nextNode();
+    while (node) {
+      if (!hud || !hud.contains(node.parentElement)) {
+        const line = node.nodeValue ? node.nodeValue.trim() : "";
+        if (line.length > 8 && line.length < 120 && !GameMemory.processedLogs.has(line)) {
+          parseActivityLogLine(line);
+        }
+      }
+      node = walker.nextNode();
     }
   }
   function scanTextNodesAndActivityLogs() {
@@ -1338,6 +1393,170 @@
     12: 1 / 36
   });
 
+  // src/memory/opponentTracker.js
+  var OpponentTracker = {
+    /**
+     * Comprehensive scan of all opponents
+     */
+    analyzeOpponents() {
+      const myName = GameMemory.myName || "__ME__";
+      const analysis = {};
+      const playerNames = new Set(Object.keys(GameMemory.players));
+      for (const info of Object.values(GameMemory.ownership)) {
+        if (info?.owner && !GameMemory.isMe(info.owner)) {
+          playerNames.add(info.owner);
+        }
+      }
+      for (const pName of playerNames) {
+        if (GameMemory.isMe(pName)) continue;
+        const pData = GameMemory.players[pName] || { cash: 500, pos: 0, bankrupt: false };
+        if (pData.bankrupt) continue;
+        const ownedTiles = [];
+        const hungrySets = [];
+        let totalPropertyNetWorth = 0;
+        for (const tile of BOARD_TILES2) {
+          if (!tile.group) continue;
+          const info = GameMemory.ownership[tile.id];
+          if (info && info.owner === pName) {
+            ownedTiles.push(tile);
+            totalPropertyNetWorth += tile.price;
+          }
+        }
+        for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
+          if (tiles[0].type !== "property") continue;
+          const ownedCount = tiles.filter((t) => GameMemory.ownership[t.id]?.owner === pName).length;
+          if (ownedCount === tiles.length - 1) {
+            const missingTile = tiles.find((t) => GameMemory.ownership[t.id]?.owner !== pName);
+            const holder = GameMemory.ownership[missingTile?.id]?.owner || "Unowned";
+            hungrySets.push({
+              group: groupName,
+              ownedCount,
+              total: tiles.length,
+              missingTile,
+              heldBy: holder,
+              weHoldIt: GameMemory.isMe(holder),
+              houseCost: missingTile?.houseCost || 100,
+              affordableHouses: Math.floor((pData.cash || 0) / (missingTile?.houseCost || 100))
+            });
+          }
+        }
+        analysis[pName] = {
+          name: pName,
+          cash: pData.cash || 0,
+          pos: pData.pos || 0,
+          inJail: pData.inJail || false,
+          ownedTiles,
+          hungrySets,
+          totalPropertyNetWorth,
+          threatLevel: hungrySets.length > 0 ? pData.cash > 400 ? "LETHAL" : "HIGH" : "MODERATE"
+        };
+      }
+      return analysis;
+    },
+    /**
+     * Returns a list of properties we own that are actively blocking
+     * an opponent from completing a monopoly.
+     * RULE: NEVER SELL/TRADE THESE unless we receive an immediate winning monopoly!
+     */
+    getCriticalBlockers() {
+      const blockers = [];
+      const opponents = this.analyzeOpponents();
+      for (const opp of Object.values(opponents)) {
+        for (const hungry of opp.hungrySets) {
+          if (hungry.weHoldIt && hungry.missingTile) {
+            blockers.push({
+              tile: hungry.missingTile,
+              blockingOpponent: opp.name,
+              targetGroup: hungry.group,
+              oppCash: opp.cash,
+              threat: hungry.affordableHouses >= 3 ? "IMMEDIATE_DEATH" : "HIGH"
+            });
+          }
+        }
+      }
+      return blockers;
+    },
+    /**
+     * Identifies the missing card(s) WE need to complete our own monopolies.
+     */
+    getMyMissingCards() {
+      const myMissing = [];
+      for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
+        if (tiles[0].type !== "property" && tiles[0].type !== "airport") continue;
+        const myCount = tiles.filter((t) => GameMemory.isMe(GameMemory.ownership[t.id]?.owner)).length;
+        if (myCount === tiles.length - 1) {
+          const missing = tiles.find((t) => !GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
+          const holder = GameMemory.ownership[missing.id]?.owner || null;
+          myMissing.push({
+            group: groupName,
+            missingTile: missing,
+            heldBy: holder,
+            isUnowned: !holder,
+            houseCost: missing.houseCost,
+            buildCostTo3Houses: missing.houseCost * 3 * tiles.length
+          });
+        }
+      }
+      return myMissing;
+    },
+    /**
+     * Identifies sets where we own 1 card (out of 3) and an opponent owns another card,
+     * presenting a consolidation trade opportunity!
+     */
+    getMyAdvancingNeeds() {
+      const needs = [];
+      for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
+        if (tiles[0].type !== "property" || tiles.length !== 3) continue;
+        const myCount = tiles.filter((t) => GameMemory.isMe(GameMemory.ownership[t.id]?.owner)).length;
+        if (myCount === 1) {
+          const myTile = tiles.find((t) => GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
+          const otherTiles = tiles.filter((t) => !GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
+          for (const other of otherTiles) {
+            const holder = GameMemory.ownership[other.id]?.owner;
+            if (holder && !GameMemory.isMe(holder)) {
+              needs.push({
+                group: groupName,
+                myTile,
+                wantedTile: other,
+                heldBy: holder
+              });
+            }
+          }
+        }
+      }
+      return needs;
+    },
+    /**
+     * Assets we own that are SAFE to trade away as sweeteners.
+     * Singletons that do NOT complete any opponent's monopoly.
+     */
+    getSafeTradeSacrifices() {
+      const blockers = new Set(this.getCriticalBlockers().map((b) => b.tile.id));
+      const sacrifices = [];
+      for (const tile of BOARD_TILES2) {
+        if (!tile.group) continue;
+        const info = GameMemory.ownership[tile.id];
+        if (info && GameMemory.isMe(info.owner) && info.houses === 0 && !blockers.has(tile.id)) {
+          const { owned, total } = GameMemory.getGroupCount(tile.group, "__ME__");
+          if (owned < total - 1) {
+            sacrifices.push(tile);
+          }
+        }
+      }
+      return sacrifices;
+    },
+    isBlockerAgainstAnyOpponent(tile) {
+      if (!tile || !tile.group) return false;
+      const opps = this.analyzeOpponents();
+      for (const opp of Object.values(opps)) {
+        if (opp.hungrySets.some((h) => h.group === tile.group)) {
+          return true;
+        }
+      }
+      return false;
+    }
+  };
+
   // src/engine/markovRisk.js
   var MarkovRisk = {
     analyzeDangerAhead(currentPos) {
@@ -1526,170 +1745,6 @@
     }
   };
 
-  // src/memory/opponentTracker.js
-  var OpponentTracker2 = {
-    /**
-     * Comprehensive scan of all opponents
-     */
-    analyzeOpponents() {
-      const myName = GameMemory.myName || "__ME__";
-      const analysis = {};
-      const playerNames = new Set(Object.keys(GameMemory.players));
-      for (const info of Object.values(GameMemory.ownership)) {
-        if (info?.owner && !GameMemory.isMe(info.owner)) {
-          playerNames.add(info.owner);
-        }
-      }
-      for (const pName of playerNames) {
-        if (GameMemory.isMe(pName)) continue;
-        const pData = GameMemory.players[pName] || { cash: 500, pos: 0, bankrupt: false };
-        if (pData.bankrupt) continue;
-        const ownedTiles = [];
-        const hungrySets = [];
-        let totalPropertyNetWorth = 0;
-        for (const tile of BOARD_TILES2) {
-          if (!tile.group) continue;
-          const info = GameMemory.ownership[tile.id];
-          if (info && info.owner === pName) {
-            ownedTiles.push(tile);
-            totalPropertyNetWorth += tile.price;
-          }
-        }
-        for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
-          if (tiles[0].type !== "property") continue;
-          const ownedCount = tiles.filter((t) => GameMemory.ownership[t.id]?.owner === pName).length;
-          if (ownedCount === tiles.length - 1) {
-            const missingTile = tiles.find((t) => GameMemory.ownership[t.id]?.owner !== pName);
-            const holder = GameMemory.ownership[missingTile?.id]?.owner || "Unowned";
-            hungrySets.push({
-              group: groupName,
-              ownedCount,
-              total: tiles.length,
-              missingTile,
-              heldBy: holder,
-              weHoldIt: GameMemory.isMe(holder),
-              houseCost: missingTile?.houseCost || 100,
-              affordableHouses: Math.floor((pData.cash || 0) / (missingTile?.houseCost || 100))
-            });
-          }
-        }
-        analysis[pName] = {
-          name: pName,
-          cash: pData.cash || 0,
-          pos: pData.pos || 0,
-          inJail: pData.inJail || false,
-          ownedTiles,
-          hungrySets,
-          totalPropertyNetWorth,
-          threatLevel: hungrySets.length > 0 ? pData.cash > 400 ? "LETHAL" : "HIGH" : "MODERATE"
-        };
-      }
-      return analysis;
-    },
-    /**
-     * Returns a list of properties we own that are actively blocking
-     * an opponent from completing a monopoly.
-     * RULE: NEVER SELL/TRADE THESE unless we receive an immediate winning monopoly!
-     */
-    getCriticalBlockers() {
-      const blockers = [];
-      const opponents = this.analyzeOpponents();
-      for (const opp of Object.values(opponents)) {
-        for (const hungry of opp.hungrySets) {
-          if (hungry.weHoldIt && hungry.missingTile) {
-            blockers.push({
-              tile: hungry.missingTile,
-              blockingOpponent: opp.name,
-              targetGroup: hungry.group,
-              oppCash: opp.cash,
-              threat: hungry.affordableHouses >= 3 ? "IMMEDIATE_DEATH" : "HIGH"
-            });
-          }
-        }
-      }
-      return blockers;
-    },
-    /**
-     * Identifies the missing card(s) WE need to complete our own monopolies.
-     */
-    getMyMissingCards() {
-      const myMissing = [];
-      for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
-        if (tiles[0].type !== "property" && tiles[0].type !== "airport") continue;
-        const myCount = tiles.filter((t) => GameMemory.isMe(GameMemory.ownership[t.id]?.owner)).length;
-        if (myCount === tiles.length - 1) {
-          const missing = tiles.find((t) => !GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
-          const holder = GameMemory.ownership[missing.id]?.owner || null;
-          myMissing.push({
-            group: groupName,
-            missingTile: missing,
-            heldBy: holder,
-            isUnowned: !holder,
-            houseCost: missing.houseCost,
-            buildCostTo3Houses: missing.houseCost * 3 * tiles.length
-          });
-        }
-      }
-      return myMissing;
-    },
-    /**
-     * Identifies sets where we own 1 card (out of 3) and an opponent owns another card,
-     * presenting a consolidation trade opportunity!
-     */
-    getMyAdvancingNeeds() {
-      const needs = [];
-      for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
-        if (tiles[0].type !== "property" || tiles.length !== 3) continue;
-        const myCount = tiles.filter((t) => GameMemory.isMe(GameMemory.ownership[t.id]?.owner)).length;
-        if (myCount === 1) {
-          const myTile = tiles.find((t) => GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
-          const otherTiles = tiles.filter((t) => !GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
-          for (const other of otherTiles) {
-            const holder = GameMemory.ownership[other.id]?.owner;
-            if (holder && !GameMemory.isMe(holder)) {
-              needs.push({
-                group: groupName,
-                myTile,
-                wantedTile: other,
-                heldBy: holder
-              });
-            }
-          }
-        }
-      }
-      return needs;
-    },
-    /**
-     * Assets we own that are SAFE to trade away as sweeteners.
-     * Singletons that do NOT complete any opponent's monopoly.
-     */
-    getSafeTradeSacrifices() {
-      const blockers = new Set(this.getCriticalBlockers().map((b) => b.tile.id));
-      const sacrifices = [];
-      for (const tile of BOARD_TILES2) {
-        if (!tile.group) continue;
-        const info = GameMemory.ownership[tile.id];
-        if (info && GameMemory.isMe(info.owner) && info.houses === 0 && !blockers.has(tile.id)) {
-          const { owned, total } = GameMemory.getGroupCount(tile.group, "__ME__");
-          if (owned < total - 1) {
-            sacrifices.push(tile);
-          }
-        }
-      }
-      return sacrifices;
-    },
-    isBlockerAgainstAnyOpponent(tile) {
-      if (!tile || !tile.group) return false;
-      const opps = this.analyzeOpponents();
-      for (const opp of Object.values(opps)) {
-        if (opp.hungrySets.some((h) => h.group === tile.group)) {
-          return true;
-        }
-      }
-      return false;
-    }
-  };
-
   // src/engine/auctionSniper.js
   var AuctionSniper = {
     /**
@@ -1703,7 +1758,7 @@
       if (tile.group && mySet.owned === mySet.total - 1) {
         multiplier = 2.5;
         reason = `MUST-HAVE: Completes our ${tile.group} Monopoly!`;
-      } else if (tile.group && OpponentTracker2.isBlockerAgainstAnyOpponent(tile)) {
+      } else if (tile.group && OpponentTracker.isBlockerAgainstAnyOpponent(tile)) {
         multiplier = 1.6;
         reason = `DEFENSIVE BLOCK: Prevents opponent from completing ${tile.group}`;
       } else if (tile.group && (HIGH_TRAFFIC_GROUPS.has(tile.group) || tile.group === "USA" || tile.group === "Brazil")) {
@@ -1838,9 +1893,9 @@
      */
     scanMutualMonopolySwaps() {
       const opportunities = [];
-      const myMissing = OpponentTracker2.getMyMissingCards();
-      const opponents = OpponentTracker2.analyzeOpponents();
-      const safeSacrifices = OpponentTracker2.getSafeTradeSacrifices();
+      const myMissing = OpponentTracker.getMyMissingCards();
+      const opponents = OpponentTracker.analyzeOpponents();
+      const safeSacrifices = OpponentTracker.getSafeTradeSacrifices();
       for (const myNeed of myMissing) {
         if (!myNeed.heldBy || myNeed.isUnowned) continue;
         const targetOppName = myNeed.heldBy;
@@ -1899,7 +1954,7 @@
           });
         }
       }
-      const advancingNeeds = OpponentTracker2.getMyAdvancingNeeds();
+      const advancingNeeds = OpponentTracker.getMyAdvancingNeeds();
       for (const need of advancingNeeds) {
         const targetOppName = need.heldBy;
         if (opportunities.some((o) => o.targetOwner === targetOppName && o.myReceivedTile.id === need.wantedTile.id)) continue;
@@ -2691,7 +2746,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
   var DebtRecovery = {
     rankLiquidationTargets() {
       const targets = [];
-      const blockers = new Set(OpponentTracker2.getCriticalBlockers().map((b) => b.tile.id));
+      const blockers = new Set(OpponentTracker.getCriticalBlockers().map((b) => b.tile.id));
       for (const tile of BOARD_TILES2) {
         if (!tile.group) continue;
         const info = GameMemory.ownership[tile.id];
@@ -3846,19 +3901,77 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     try {
       if (!state.status || getIsActing() || isEvaluating) return;
       isEvaluating = true;
-      syncBoardStateFromDOM();
-      HUDPanel.updateTelemetry();
-      await ChatEngine.scanAndRespondToOpponentChat();
-      const snapshot = createDOMSnapshot();
-      if (await ActionExecutor.handleTrade(snapshot)) return;
-      if (ActionExecutor.handleDebtRecovery(snapshot)) return;
-      if (ActionExecutor.handleJail(snapshot)) return;
-      if (ActionExecutor.handleRollDice(snapshot)) return;
-      if (ActionExecutor.handleBuyOrAuction(snapshot)) return;
-      if (ActionExecutor.handleAuction(snapshot)) return;
-      if (ActionExecutor.handleHouseBuilding(snapshot)) return;
-      if (ActionExecutor.handleProactiveTrade(snapshot)) return;
-      await ActionExecutor.deliberateBeforeEndTurn(snapshot);
+      try {
+        syncBoardStateFromDOM();
+      } catch (err) {
+        logToBot(`[DOM Sync Warning] ${err}`);
+      }
+      try {
+        HUDPanel.updateTelemetry();
+      } catch (err) {
+        logToBot(`[Telemetry Warning] ${err}`);
+      }
+      try {
+        await ChatEngine.scanAndRespondToOpponentChat();
+      } catch (err) {
+        logToBot(`[Chat Scan Warning] ${err}`);
+      }
+      let snapshot;
+      try {
+        snapshot = createDOMSnapshot();
+      } catch (err) {
+        logToBot(`[DOM Snapshot Error] ${err}`);
+        return;
+      }
+      try {
+        if (await ActionExecutor.handleTrade(snapshot)) return;
+      } catch (err) {
+        logToBot(`[Trade Step Warning] ${err}`);
+      }
+      try {
+        if (ActionExecutor.handleDebtRecovery(snapshot)) return;
+      } catch (err) {
+        logToBot(`[Debt Step Warning] ${err}`);
+      }
+      try {
+        if (ActionExecutor.handleJail(snapshot)) return;
+      } catch (err) {
+        logToBot(`[Jail Step Warning] ${err}`);
+      }
+      try {
+        if (ActionExecutor.handleRollDice(snapshot)) return;
+      } catch (err) {
+        logToBot(`[Roll Step Warning] ${err}`);
+      }
+      try {
+        if (ActionExecutor.handleBuyOrAuction(snapshot)) return;
+      } catch (err) {
+        logToBot(`[Buy/Auction Step Warning] ${err}`);
+      }
+      try {
+        if (ActionExecutor.handleAuction(snapshot)) return;
+      } catch (err) {
+        logToBot(`[Auction Bid Step Warning] ${err}`);
+      }
+      try {
+        if (ActionExecutor.handleHouseBuilding(snapshot)) return;
+      } catch (err) {
+        logToBot(`[Build Step Warning] ${err}`);
+      }
+      try {
+        if (ActionExecutor.handleProactiveTrade(snapshot)) return;
+      } catch (err) {
+        logToBot(`[Proactive Trade Step Warning] ${err}`);
+      }
+      try {
+        await ActionExecutor.deliberateBeforeEndTurn(snapshot);
+      } catch (err) {
+        logToBot(`[End Turn Step Warning] ${err}`);
+        try {
+          ActionExecutor.handleEndTurn(snapshot);
+        } catch (_) {
+        }
+      }
     } catch (err) {
       logToBot(`Eval loop error: ${err}`);
     } finally {
