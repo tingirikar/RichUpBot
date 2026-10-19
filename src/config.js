@@ -3,9 +3,9 @@
  */
 export const CONFIG = {
     // Action timing delays (in milliseconds) for human-like interaction
-    ACTION_DELAY_MIN: 160,
-    ACTION_DELAY_MAX: 320,
-    OBSERVER_DEBOUNCE_MS: 100,
+    ACTION_DELAY_MIN: 400,
+    ACTION_DELAY_MAX: 1800,
+    OBSERVER_DEBOUNCE_MS: 200,
     POLL_INTERVAL_MS: 1200,
     SELF_HEAL_INTERVAL_MS: 1000,
     STALL_TIMEOUT_SEC: 8,
@@ -38,7 +38,7 @@ export const CONFIG = {
     OLLAMA_ENABLED: localStorage.getItem('richup_ollama_enabled') === 'true',
     OLLAMA_HOST: localStorage.getItem('richup_ollama_host') || 'http://localhost:11434',
     OLLAMA_MODEL: localStorage.getItem('richup_ollama_model') || 'llama3.2-vision',
-    OLLAMA_TIMEOUT_MS: 2800          // Strict 2.8s cap to avoid stalling turns
+    OLLAMA_TIMEOUT_MS: 5500          // 5.5s cap to allow local LLMs to reason without early timeout
 };
 
 export const STATES = Object.freeze({

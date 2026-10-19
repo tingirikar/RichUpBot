@@ -106,8 +106,11 @@ export const OllamaClient = {
      * Evaluates incoming trade with local LLM or falls back to Minimax Markov
      */
     async evaluateTradeWithLLM(tradeData) {
+        // ALWAYS evaluate with the game-theoretic rule engine first to establish baseline constraints
+        const ruleVerdict = TradeEngine.evaluateIncomingTrade(tradeData);
+
         if (!CONFIG.OLLAMA_ENABLED) {
-            return TradeEngine.evaluateIncomingTrade(tradeData);
+            return ruleVerdict;
         }
 
         const prompt = this.buildPrompt(tradeData);
@@ -118,7 +121,7 @@ export const OllamaClient = {
                 messages: [
                     {
                         role: 'system',
-                        content: 'You are a Grandmaster Monopoly / RichUp AI player. Evaluate trade offers with sharp strategic vision. Output ONLY valid JSON in format: {"decision": "CONFIRM" | "DECLINE" | "NEGOTIATE", "reason": "concise rationale under 15 words", "chatReply": "short casual in-game message under 15 words"}'
+                        content: 'You are a Grandmaster Monopoly / RichUp AI player whose primary goal is to WIN. Never trade in the enemy\'s favor. If enemy completes a monopoly and we do not, you MUST DECLINE. Output ONLY valid JSON in format: {"decision": "CONFIRM" | "DECLINE" | "NEGOTIATE", "reason": "concise rationale under 15 words", "chatReply": "short casual in-game message under 15 words"}'
                     },
                     {
                         role: 'user',
@@ -136,26 +139,39 @@ export const OllamaClient = {
                 method: 'POST',
                 url: `${CONFIG.OLLAMA_HOST}/api/chat`,
                 data: payload,
-                timeout: CONFIG.OLLAMA_TIMEOUT_MS || 2800
+                timeout: CONFIG.OLLAMA_TIMEOUT_MS || 5500
             });
 
             const rawContent = data?.message?.content || '';
             const parsed = this.parseJsonSafely(rawContent);
 
             if (parsed && (parsed.decision === 'CONFIRM' || parsed.decision === 'DECLINE' || parsed.decision === 'NEGOTIATE')) {
+                // GRANDMASTER INTEGRITY GUARD:
+                // If rule engine found a fatal danger or unfair EV, the LLM is NEVER permitted to accept!
+                const isAccept = parsed.decision === 'CONFIRM' && ruleVerdict.accept;
+                const isNegotiate = parsed.decision === 'NEGOTIATE' || (!isAccept && ruleVerdict.counterSwap != null);
+
+                // Use the LLM's custom chat reply if it provided one; otherwise use the rule engine's exact demand message
+                const chatReply = (parsed.chatReply && parsed.chatReply.trim().length > 3) 
+                    ? parsed.chatReply.trim() 
+                    : ruleVerdict.chatReply;
+
                 return {
-                    accept: parsed.decision === 'CONFIRM',
-                    negotiate: parsed.decision === 'NEGOTIATE',
-                    reason: `[Ollama ${CONFIG.OLLAMA_MODEL}] ${parsed.reason}`,
-                    chatReply: parsed.chatReply || ''
+                    accept: isAccept,
+                    negotiate: !isAccept && isNegotiate,
+                    reason: isAccept 
+                        ? `[Ollama ${CONFIG.OLLAMA_MODEL}] ${parsed.reason}` 
+                        : (ruleVerdict.accept ? `[Ollama ${CONFIG.OLLAMA_MODEL}] ${parsed.reason}` : ruleVerdict.reason),
+                    chatReply: chatReply,
+                    counterSwap: ruleVerdict.counterSwap
                 };
             }
 
             // Fallback if response schema didn't match
-            return TradeEngine.evaluateIncomingTrade(tradeData);
+            return ruleVerdict;
         } catch (_) {
             // Automatic instant fallback to mathematical Minimax engine
-            return TradeEngine.evaluateIncomingTrade(tradeData);
+            return ruleVerdict;
         }
     },
 
@@ -340,17 +356,19 @@ Net Cash Transfer: ${tradeData.receivedCash - tradeData.givenCash >= 0 ? `+$${tr
    - If Trade REJECTED: 20-Round Survival: ${sim.rejSurvRate}%, Projected 20-Turn Cash: $${sim.avgRejCash}
    - Monte Carlo Projection: ${sim.isSimulationEVPlus ? 'PROFITABLE (+EV across 20 simulated rounds)' : 'HIGH RISK / NEGATIVE EV across 20 simulated rounds'}
 
-=== GRANDMASTER DIRECTIVE ===
-You are an elite Grandmaster Monopoly AI. Using the full context of everyone's money, existing houses, 20-round simulation data, and post-trade building power:
-1. Decision: CONFIRM (if highly advantageous or safe win-win), DECLINE (if kingmaking opponent or danger too high), or NEGOTIATE (if close but needs more cash or counter-property).
-2. Reason: Under 15 words explaining the strategic reasoning based on opponent money, houses, or monopolies.
-3. Chat Reply: Under 15 words, a psychological, clever in-game chat message directed at ${partner}.
+=== GRANDMASTER TRADING DIRECTIVE ===
+You are an elite Grandmaster Monopoly AI whose primary objective is to WIN.
+CRITICAL RULES:
+1. NEVER accept or propose a trade in the opponent's favor.
+2. If the trade completes a monopoly for ${partner} and does NOT complete a monopoly for us, it is a FATAL DANGER — you MUST output "DECLINE".
+3. If both players get a monopoly, verify if ${partner} has high cash to rush hotels immediately. If they have a massive cash advantage, DECLINE unless they pay huge cash to balance building power.
+4. When declining or negotiating, clearly state in "chatReply" why it failed and what counter-asset or cash we demand.
 
 Respond ONLY with valid JSON:
 {
   "decision": "CONFIRM" | "DECLINE" | "NEGOTIATE",
   "reason": "concise rationale under 15 words",
-  "chatReply": "short casual in-game message under 15 words"
+  "chatReply": "under 15 words stating reason and our counter-demands"
 }`;
     },
 

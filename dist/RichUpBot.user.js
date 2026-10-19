@@ -18,9 +18,9 @@
   // src/config.js
   var CONFIG = {
     // Action timing delays (in milliseconds) for human-like interaction
-    ACTION_DELAY_MIN: 160,
-    ACTION_DELAY_MAX: 320,
-    OBSERVER_DEBOUNCE_MS: 100,
+    ACTION_DELAY_MIN: 300,
+    ACTION_DELAY_MAX: 3e3,
+    OBSERVER_DEBOUNCE_MS: 1e3,
     POLL_INTERVAL_MS: 1200,
     SELF_HEAL_INTERVAL_MS: 1e3,
     STALL_TIMEOUT_SEC: 8,
@@ -66,8 +66,8 @@
     OLLAMA_ENABLED: localStorage.getItem("richup_ollama_enabled") === "true",
     OLLAMA_HOST: localStorage.getItem("richup_ollama_host") || "http://localhost:11434",
     OLLAMA_MODEL: localStorage.getItem("richup_ollama_model") || "llama3.2-vision",
-    OLLAMA_TIMEOUT_MS: 2800
-    // Strict 2.8s cap to avoid stalling turns
+    OLLAMA_TIMEOUT_MS: 5500
+    // 5.5s cap to allow local LLMs to reason without early timeout
   };
   var STATES = Object.freeze({
     IDLE: "idle",
@@ -1965,6 +1965,36 @@
         isSimulationEVPlus: accAvgCash >= avgRejCash && accSurvRate >= rejSurvRate - 10
       };
     },
+    findCounterTrade(tradeData) {
+      const { partnerName, givenTiles = [], receivedTiles = [] } = tradeData;
+      if (!partnerName || partnerName === "Opponent") return null;
+      const myMissing = OpponentTracker.getMyMissingCards();
+      const partnerMissingCard = myMissing.find((m) => m.heldBy && m.heldBy.toLowerCase() === partnerName.toLowerCase());
+      if (partnerMissingCard && partnerMissingCard.missingTile) {
+        const requestedTile = givenTiles[0] || OpponentTracker.getSafeTradeSacrifices()[0]?.tile;
+        if (requestedTile) {
+          const oppSet = requestedTile.group ? GameMemory.getGroupCount(requestedTile.group, partnerName) : null;
+          const givesThemMonopoly = oppSet && oppSet.owned === oppSet.total - 1;
+          const oppCash = GameMemory.players[partnerName]?.cash ?? 500;
+          let cashDemand = 0;
+          if (givesThemMonopoly) {
+            cashDemand = Math.max(80, Math.min(Math.max(0, oppCash - 50), 150));
+          }
+          const cashDemandStr = cashDemand > 0 ? ` + $${cashDemand}` : "";
+          return {
+            targetOwner: partnerName,
+            myGivenTile: requestedTile,
+            myReceivedTile: partnerMissingCard.missingTile,
+            cashOffer: 0,
+            cashDemand,
+            summary: `COUNTER: Give ${requestedTile.name} -> Get ${partnerMissingCard.missingTile.name}${cashDemandStr}`,
+            pitch: `@${partnerName} That offer is no deal. Give me ${partnerMissingCard.missingTile.name}${cashDemandStr ? `${cashDemandStr} cash` : ""} for ${requestedTile.name} instead. Both get sets!`,
+            reason: `Grandmaster Counter-Proposal: Securing ${partnerMissingCard.missingTile.name} to complete our ${partnerMissingCard.missingTile.group} Monopoly!`
+          };
+        }
+      }
+      return null;
+    },
     evaluateIncomingTrade(tradeData) {
       const {
         partnerName = "__OPP__",
@@ -1974,31 +2004,61 @@
         receivedCash = 0
       } = tradeData;
       let givesOppMonopoly = false;
+      let oppGroupName = "";
+      let givenBlockerTile = null;
       for (const tile of givenTiles) {
         if (tile.group && tile.type === "property") {
           const oppSet = GameMemory.getGroupCount(tile.group, partnerName);
           if (oppSet.owned === oppSet.total - 1) {
             givesOppMonopoly = true;
+            oppGroupName = tile.group;
+            givenBlockerTile = tile;
             break;
           }
         }
       }
       let completesMyMonopoly = false;
+      let myCompletedGroup = "";
       for (const tile of receivedTiles) {
         if (tile.group && tile.type === "property") {
           const mySet = GameMemory.getGroupCount(tile.group, "__ME__");
           if (mySet.owned === mySet.total - 1) {
             completesMyMonopoly = true;
+            myCompletedGroup = tile.group;
             break;
           }
         }
       }
       if (givesOppMonopoly && !completesMyMonopoly) {
+        const counter = this.findCounterTrade(tradeData);
+        if (counter) {
+          const cashExtra = counter.cashDemand > 0 ? ` + $${counter.cashDemand}` : "";
+          return {
+            accept: false,
+            counterSwap: counter,
+            reason: `FATAL DANGER VETO: Gives ${partnerName} a ${oppGroupName} monopoly while we get none!`,
+            chatReply: `Decline: That completes your ${oppGroupName} set. Give me ${counter.myReceivedTile.name}${cashExtra} if you want that.`
+          };
+        }
         return {
           accept: false,
-          reason: `MONOPOLY VETO: Trade would grant ${partnerName} a monopoly without giving us one!`,
-          chatReply: "Can't give you a monopoly for that offer, that's game over for me."
+          counterSwap: null,
+          reason: `FATAL DANGER VETO: Gives ${partnerName} a ${oppGroupName} monopoly while we get none!`,
+          chatReply: `Decline: That completes your ${oppGroupName} set and puts me in danger. No deal.`
         };
+      }
+      if (givesOppMonopoly && completesMyMonopoly) {
+        const oppCash = GameMemory.players[partnerName]?.cash ?? 500;
+        const myCash = GameMemory.myCash + receivedCash - givenCash;
+        if (oppCash >= 500 && myCash < 250) {
+          const neededCash = Math.round(300 - myCash);
+          return {
+            accept: false,
+            counterSwap: null,
+            reason: `HOTEL RUSH DANGER: ${partnerName} has $${oppCash} cash to rush hotels, while we have only $${myCash}!`,
+            chatReply: `Decline: You can build hotels immediately while I'm short on cash. Add +$${neededCash} cash or no deal.`
+          };
+        }
       }
       let myGain = receivedCash - givenCash;
       let oppGain = givenCash - receivedCash;
@@ -2010,22 +2070,33 @@
         oppGain += this.scoreTileForPlayer(tile, partnerName);
       }
       const sim = this.simulateFutureTradeRounds(tradeData, 20, 80);
-      if (sim.accSurvRate < sim.rejSurvRate - 15) {
+      if (sim.accSurvRate < sim.rejSurvRate - 10) {
         return {
           accept: false,
+          counterSwap: null,
           reason: `20-ROUND SIMULATION VETO: Accepting drops 20-round survival from ${sim.rejSurvRate}% to ${sim.accSurvRate}%!`,
-          chatReply: "Can't do that trade, 20-turn risk exposure is way too high."
+          chatReply: `Decline: 20-turn simulation shows this increases my bankruptcy risk. No deal.`
         };
       }
-      const acceptable = myGain > 0 && (myGain >= oppGain * CONFIG.TRADE_MIN_ADVANTAGE_RATIO || completesMyMonopoly) || sim.isSimulationEVPlus;
+      if (oppGain > myGain && !completesMyMonopoly) {
+        const cashDeficit = Math.round(oppGain - myGain) + 30;
+        return {
+          accept: false,
+          counterSwap: this.findCounterTrade(tradeData),
+          reason: `UNFAIR DEFICIT: Trade favors ${partnerName} by +$${Math.round(oppGain - myGain)}.`,
+          chatReply: `Decline: Net value is short by $${cashDeficit}. Add cash and re-offer.`
+        };
+      }
+      const acceptable = myGain > 0 && (myGain >= oppGain * CONFIG.TRADE_MIN_ADVANTAGE_RATIO || completesMyMonopoly) && sim.isSimulationEVPlus;
       GameMemory.lastTradeVerdict = acceptable ? "ACCEPTABLE" : "UNFAVORABLE";
       return {
         accept: acceptable,
         myGain: Math.round(myGain),
         oppGain: Math.round(oppGain),
         sim20Rounds: sim,
-        reason: acceptable ? `EV+ Trade (20-Rnd Sim: +$${sim.accAvgCash - sim.avgRejCash} Net Worth, ${sim.accSurvRate}% survival)` : `Unfavorable utility: Net gain $${Math.round(myGain)} < requirement`,
-        chatReply: acceptable ? "Pleasure doing business with you!" : "Numbers don't work out for me. Sweeten the cash offer and I'll consider it."
+        counterSwap: acceptable ? null : this.findCounterTrade(tradeData),
+        reason: acceptable ? `GRANDMASTER EV+ TRADE: Net gain +$${Math.round(myGain)} vs Opp +$${Math.round(oppGain)} (20-turn Sim: +EV)` : `Unfavorable utility: Net gain $${Math.round(myGain)} < requirement`,
+        chatReply: acceptable ? "Deal accepted! Win-win." : `Decline: Value doesn't work out for me. Re-offer with better terms.`
       };
     },
     /**
@@ -2229,8 +2300,9 @@
      * Evaluates incoming trade with local LLM or falls back to Minimax Markov
      */
     async evaluateTradeWithLLM(tradeData) {
+      const ruleVerdict = TradeEngine.evaluateIncomingTrade(tradeData);
       if (!CONFIG.OLLAMA_ENABLED) {
-        return TradeEngine.evaluateIncomingTrade(tradeData);
+        return ruleVerdict;
       }
       const prompt = this.buildPrompt(tradeData);
       try {
@@ -2239,7 +2311,7 @@
           messages: [
             {
               role: "system",
-              content: 'You are a Grandmaster Monopoly / RichUp AI player. Evaluate trade offers with sharp strategic vision. Output ONLY valid JSON in format: {"decision": "CONFIRM" | "DECLINE" | "NEGOTIATE", "reason": "concise rationale under 15 words", "chatReply": "short casual in-game message under 15 words"}'
+              content: `You are a Grandmaster Monopoly / RichUp AI player whose primary goal is to WIN. Never trade in the enemy's favor. If enemy completes a monopoly and we do not, you MUST DECLINE. Output ONLY valid JSON in format: {"decision": "CONFIRM" | "DECLINE" | "NEGOTIATE", "reason": "concise rationale under 15 words", "chatReply": "short casual in-game message under 15 words"}`
             },
             {
               role: "user",
@@ -2256,21 +2328,25 @@
           method: "POST",
           url: `${CONFIG.OLLAMA_HOST}/api/chat`,
           data: payload,
-          timeout: CONFIG.OLLAMA_TIMEOUT_MS || 2800
+          timeout: CONFIG.OLLAMA_TIMEOUT_MS || 5500
         });
         const rawContent = data?.message?.content || "";
         const parsed = this.parseJsonSafely(rawContent);
         if (parsed && (parsed.decision === "CONFIRM" || parsed.decision === "DECLINE" || parsed.decision === "NEGOTIATE")) {
+          const isAccept = parsed.decision === "CONFIRM" && ruleVerdict.accept;
+          const isNegotiate = parsed.decision === "NEGOTIATE" || !isAccept && ruleVerdict.counterSwap != null;
+          const chatReply = parsed.chatReply && parsed.chatReply.trim().length > 3 ? parsed.chatReply.trim() : ruleVerdict.chatReply;
           return {
-            accept: parsed.decision === "CONFIRM",
-            negotiate: parsed.decision === "NEGOTIATE",
-            reason: `[Ollama ${CONFIG.OLLAMA_MODEL}] ${parsed.reason}`,
-            chatReply: parsed.chatReply || ""
+            accept: isAccept,
+            negotiate: !isAccept && isNegotiate,
+            reason: isAccept ? `[Ollama ${CONFIG.OLLAMA_MODEL}] ${parsed.reason}` : ruleVerdict.accept ? `[Ollama ${CONFIG.OLLAMA_MODEL}] ${parsed.reason}` : ruleVerdict.reason,
+            chatReply,
+            counterSwap: ruleVerdict.counterSwap
           };
         }
-        return TradeEngine.evaluateIncomingTrade(tradeData);
+        return ruleVerdict;
       } catch (_) {
-        return TradeEngine.evaluateIncomingTrade(tradeData);
+        return ruleVerdict;
       }
     },
     buildPrompt(tradeData) {
@@ -2424,17 +2500,19 @@ Net Cash Transfer: ${tradeData.receivedCash - tradeData.givenCash >= 0 ? `+$${tr
    - If Trade REJECTED: 20-Round Survival: ${sim.rejSurvRate}%, Projected 20-Turn Cash: $${sim.avgRejCash}
    - Monte Carlo Projection: ${sim.isSimulationEVPlus ? "PROFITABLE (+EV across 20 simulated rounds)" : "HIGH RISK / NEGATIVE EV across 20 simulated rounds"}
 
-=== GRANDMASTER DIRECTIVE ===
-You are an elite Grandmaster Monopoly AI. Using the full context of everyone's money, existing houses, 20-round simulation data, and post-trade building power:
-1. Decision: CONFIRM (if highly advantageous or safe win-win), DECLINE (if kingmaking opponent or danger too high), or NEGOTIATE (if close but needs more cash or counter-property).
-2. Reason: Under 15 words explaining the strategic reasoning based on opponent money, houses, or monopolies.
-3. Chat Reply: Under 15 words, a psychological, clever in-game chat message directed at ${partner}.
+=== GRANDMASTER TRADING DIRECTIVE ===
+You are an elite Grandmaster Monopoly AI whose primary objective is to WIN.
+CRITICAL RULES:
+1. NEVER accept or propose a trade in the opponent's favor.
+2. If the trade completes a monopoly for ${partner} and does NOT complete a monopoly for us, it is a FATAL DANGER \u2014 you MUST output "DECLINE".
+3. If both players get a monopoly, verify if ${partner} has high cash to rush hotels immediately. If they have a massive cash advantage, DECLINE unless they pay huge cash to balance building power.
+4. When declining or negotiating, clearly state in "chatReply" why it failed and what counter-asset or cash we demand.
 
 Respond ONLY with valid JSON:
 {
   "decision": "CONFIRM" | "DECLINE" | "NEGOTIATE",
   "reason": "concise rationale under 15 words",
-  "chatReply": "short casual in-game message under 15 words"
+  "chatReply": "under 15 words stating reason and our counter-demands"
 }`;
     },
     parseJsonSafely(text) {
@@ -2554,6 +2632,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
   // src/ui/chatEngine.js
   var ChatEngine = {
     lastSentTime: 0,
+    lastSentText: "",
     lastRepliedTime: 0,
     processedChatIds: /* @__PURE__ */ new Set(),
     TEMPLATES: Object.freeze({
@@ -2611,16 +2690,21 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     sendChatMessage(category, customText = null) {
       if (!CONFIG.CHAT_ENABLED) return false;
       const now = Date.now();
-      if (now - this.lastSentTime < (CONFIG.CHAT_COOLDOWN_MS || 1e4) && !customText) return false;
-      let message = customText;
+      let message = (customText || "").trim();
       if (!message) {
         const list = this.TEMPLATES[category];
         if (!list || list.length === 0) return false;
         message = list[Math.floor(Math.random() * list.length)];
       }
+      const cooldown = CONFIG.CHAT_COOLDOWN_MS || 6e3;
+      if (now - this.lastSentTime < cooldown) return false;
+      if (this.lastSentText && message.toLowerCase() === this.lastSentText.toLowerCase() && now - this.lastSentTime < 25e3) {
+        return false;
+      }
       const input = document.querySelector('input[placeholder*="say" i], input[placeholder*="something" i], input[placeholder*="chat" i], input[placeholder*="message" i], textarea');
       if (!input) return false;
       this.lastSentTime = now;
+      this.lastSentText = message;
       logToBot(`[CHAT SEND] "${message}"`);
       setTimeout(() => {
         try {
@@ -3580,6 +3664,8 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
 
   // src/dom/actionExecutor.js
   var isActing = false;
+  var isEvaluatingTrade = false;
+  var processedTradeSignatures = /* @__PURE__ */ new Map();
   function getIsActing() {
     return isActing;
   }
@@ -3656,51 +3742,75 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         return true;
       }
       if (!declineBtn && !confirmBtn) return false;
+      if (isEvaluatingTrade) return true;
+      const tradeData = scrapeTradeModalDOM();
+      const sig = `${tradeData.partnerName || "Unknown"}_give:${(tradeData.givenTiles || []).map((t) => t.id).sort().join(",")}_$${tradeData.givenCash || 0}_recv:${(tradeData.receivedTiles || []).map((t) => t.id).sort().join(",")}_$${tradeData.receivedCash || 0}`;
+      const now = Date.now();
+      for (const [key, ts] of processedTradeSignatures.entries()) {
+        if (now - ts > 6e4) processedTradeSignatures.delete(key);
+      }
+      if (processedTradeSignatures.has(sig) && now - processedTradeSignatures.get(sig) < 15e3) {
+        return true;
+      }
       if (!CONFIG.AUTO_TRADE_ENABLED) {
         if (declineBtn) {
+          processedTradeSignatures.set(sig, now);
           delayClick(declineBtn, "Auto-declining trade (Auto-Trade disabled)");
           return true;
         }
         return false;
       }
-      const tradeData = scrapeTradeModalDOM();
-      logToBot("[TRADE] Evaluating incoming trade with Hybrid Brain...");
-      const verdict = await OllamaClient.evaluateTradeWithLLM(tradeData);
-      logToBot(`Trade Verdict: ${verdict.reason}`);
-      if (verdict.negotiate && negotiateBtn) {
-        return executeOrAdvise({
-          el: negotiateBtn,
-          title: "NEGOTIATE INCOMING TRADE",
-          reason: verdict.reason,
-          onExecute: () => {
-            if (verdict.chatReply) ChatEngine.sendChatMessage("tradeNegotiate", verdict.chatReply);
-            delayClick(negotiateBtn, `Negotiating trade (${verdict.reason})`);
-          }
-        });
+      isEvaluatingTrade = true;
+      processedTradeSignatures.set(sig, now);
+      try {
+        logToBot("[TRADE] Evaluating incoming trade with Hybrid Brain...");
+        const verdict = await OllamaClient.evaluateTradeWithLLM(tradeData);
+        logToBot(`Trade Verdict: ${verdict.reason}`);
+        if (verdict.negotiate && negotiateBtn) {
+          return executeOrAdvise({
+            el: negotiateBtn,
+            title: "NEGOTIATE INCOMING TRADE",
+            reason: verdict.reason,
+            onExecute: () => {
+              if (verdict.chatReply) ChatEngine.sendChatMessage("tradeNegotiate", verdict.chatReply);
+              delayClick(negotiateBtn, `Negotiating trade (${verdict.reason})`);
+            }
+          });
+        }
+        if (verdict.accept && confirmBtn) {
+          return executeOrAdvise({
+            el: confirmBtn,
+            title: "CONFIRM INCOMING TRADE",
+            reason: verdict.reason,
+            onExecute: () => {
+              if (verdict.chatReply) ChatEngine.sendChatMessage("tradeAccept", verdict.chatReply);
+              delayClick(confirmBtn, `Confirming trade (${verdict.reason})`);
+            }
+          });
+        }
+        if (declineBtn) {
+          return executeOrAdvise({
+            el: declineBtn,
+            title: "DECLINE INCOMING TRADE",
+            reason: verdict.reason,
+            onExecute: () => {
+              if (verdict.chatReply) ChatEngine.sendChatMessage("tradeReject", verdict.chatReply);
+              delayClick(declineBtn, `Declining trade (${verdict.reason})`);
+              if (verdict.counterSwap && CONFIG.AUTO_TRADE_ENABLED) {
+                logToBot(`[COUNTER TRADE] Scheduling counter-proposal for ${verdict.counterSwap.targetOwner}...`);
+                setTimeout(() => {
+                  if (!TradeProposalExecutor.isExecuting) {
+                    TradeProposalExecutor.executeProposal(verdict.counterSwap);
+                  }
+                }, 1800);
+              }
+            }
+          });
+        }
+        return false;
+      } finally {
+        isEvaluatingTrade = false;
       }
-      if (verdict.accept && confirmBtn) {
-        return executeOrAdvise({
-          el: confirmBtn,
-          title: "CONFIRM INCOMING TRADE",
-          reason: verdict.reason,
-          onExecute: () => {
-            if (verdict.chatReply) ChatEngine.sendChatMessage("tradeAccept", verdict.chatReply);
-            delayClick(confirmBtn, `Confirming trade (${verdict.reason})`);
-          }
-        });
-      }
-      if (declineBtn) {
-        return executeOrAdvise({
-          el: declineBtn,
-          title: "DECLINE INCOMING TRADE",
-          reason: verdict.reason,
-          onExecute: () => {
-            if (verdict.chatReply) ChatEngine.sendChatMessage("tradeReject", verdict.chatReply);
-            delayClick(declineBtn, `Declining trade (${verdict.reason})`);
-          }
-        });
-      }
-      return false;
     },
     /**
      * Proactively opens the Trade UI and submits win-win trade proposals!

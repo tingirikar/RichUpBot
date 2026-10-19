@@ -12,6 +12,7 @@ import { logToBot } from '../dom/actionExecutor.js';
  */
 export const ChatEngine = {
     lastSentTime: 0,
+    lastSentText: '',
     lastRepliedTime: 0,
     processedChatIds: new Set(),
 
@@ -86,19 +87,28 @@ export const ChatEngine = {
         if (!CONFIG.CHAT_ENABLED) return false;
 
         const now = Date.now();
-        if (now - this.lastSentTime < (CONFIG.CHAT_COOLDOWN_MS || 10000) && !customText) return false;
+        let message = (customText || '').trim();
 
-        let message = customText;
         if (!message) {
             const list = this.TEMPLATES[category];
             if (!list || list.length === 0) return false;
             message = list[Math.floor(Math.random() * list.length)];
         }
 
+        // Strict global cooldown: minimum 6 seconds between any outgoing chat messages
+        const cooldown = CONFIG.CHAT_COOLDOWN_MS || 6000;
+        if (now - this.lastSentTime < cooldown) return false;
+
+        // Message deduplication: never spam the same message within 25 seconds
+        if (this.lastSentText && message.toLowerCase() === this.lastSentText.toLowerCase() && (now - this.lastSentTime < 25000)) {
+            return false;
+        }
+
         const input = document.querySelector('input[placeholder*="say" i], input[placeholder*="something" i], input[placeholder*="chat" i], input[placeholder*="message" i], textarea');
         if (!input) return false;
 
         this.lastSentTime = now;
+        this.lastSentText = message;
         logToBot(`[CHAT SEND] "${message}"`);
 
         // Humanized typing delay

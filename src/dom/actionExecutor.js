@@ -15,6 +15,8 @@ import { ChatEngine } from '../ui/chatEngine.js';
 import { HUDPanel } from '../ui/hudPanel.js';
 
 let isActing = false;
+let isEvaluatingTrade = false;
+const processedTradeSignatures = new Map();
 
 export function getIsActing() {
     return isActing;
@@ -109,55 +111,89 @@ export const ActionExecutor = {
 
         if (!declineBtn && !confirmBtn) return false;
 
+        // Trade Locking: If an evaluation is already running, prevent overlapping evaluation ticks
+        if (isEvaluatingTrade) return true;
+
+        const tradeData = scrapeTradeModalDOM();
+        const sig = `${tradeData.partnerName || 'Unknown'}_give:${(tradeData.givenTiles || []).map(t => t.id).sort().join(',')}_$${tradeData.givenCash || 0}_recv:${(tradeData.receivedTiles || []).map(t => t.id).sort().join(',')}_$${tradeData.receivedCash || 0}`;
+
+        const now = Date.now();
+        // Prune stale signatures older than 60s
+        for (const [key, ts] of processedTradeSignatures.entries()) {
+            if (now - ts > 60000) processedTradeSignatures.delete(key);
+        }
+
+        // Deduplication Lock: If this trade was already processed in the last 15s, ignore duplicate ticks
+        if (processedTradeSignatures.has(sig) && (now - processedTradeSignatures.get(sig) < 15000)) {
+            return true;
+        }
+
         if (!CONFIG.AUTO_TRADE_ENABLED) {
             if (declineBtn) {
+                processedTradeSignatures.set(sig, now);
                 delayClick(declineBtn, 'Auto-declining trade (Auto-Trade disabled)');
                 return true;
             }
             return false;
         }
 
-        const tradeData = scrapeTradeModalDOM();
-        logToBot('[TRADE] Evaluating incoming trade with Hybrid Brain...');
-        const verdict = await OllamaClient.evaluateTradeWithLLM(tradeData);
-        logToBot(`Trade Verdict: ${verdict.reason}`);
+        isEvaluatingTrade = true;
+        processedTradeSignatures.set(sig, now);
 
-        if (verdict.negotiate && negotiateBtn) {
-            return executeOrAdvise({
-                el: negotiateBtn,
-                title: 'NEGOTIATE INCOMING TRADE',
-                reason: verdict.reason,
-                onExecute: () => {
-                    if (verdict.chatReply) ChatEngine.sendChatMessage('tradeNegotiate', verdict.chatReply);
-                    delayClick(negotiateBtn, `Negotiating trade (${verdict.reason})`);
-                }
-            });
-        }
+        try {
+            logToBot('[TRADE] Evaluating incoming trade with Hybrid Brain...');
+            const verdict = await OllamaClient.evaluateTradeWithLLM(tradeData);
+            logToBot(`Trade Verdict: ${verdict.reason}`);
 
-        if (verdict.accept && confirmBtn) {
-            return executeOrAdvise({
-                el: confirmBtn,
-                title: 'CONFIRM INCOMING TRADE',
-                reason: verdict.reason,
-                onExecute: () => {
-                    if (verdict.chatReply) ChatEngine.sendChatMessage('tradeAccept', verdict.chatReply);
-                    delayClick(confirmBtn, `Confirming trade (${verdict.reason})`);
-                }
-            });
-        }
+            if (verdict.negotiate && negotiateBtn) {
+                return executeOrAdvise({
+                    el: negotiateBtn,
+                    title: 'NEGOTIATE INCOMING TRADE',
+                    reason: verdict.reason,
+                    onExecute: () => {
+                        if (verdict.chatReply) ChatEngine.sendChatMessage('tradeNegotiate', verdict.chatReply);
+                        delayClick(negotiateBtn, `Negotiating trade (${verdict.reason})`);
+                    }
+                });
+            }
 
-        if (declineBtn) {
-            return executeOrAdvise({
-                el: declineBtn,
-                title: 'DECLINE INCOMING TRADE',
-                reason: verdict.reason,
-                onExecute: () => {
-                    if (verdict.chatReply) ChatEngine.sendChatMessage('tradeReject', verdict.chatReply);
-                    delayClick(declineBtn, `Declining trade (${verdict.reason})`);
-                }
-            });
+            if (verdict.accept && confirmBtn) {
+                return executeOrAdvise({
+                    el: confirmBtn,
+                    title: 'CONFIRM INCOMING TRADE',
+                    reason: verdict.reason,
+                    onExecute: () => {
+                        if (verdict.chatReply) ChatEngine.sendChatMessage('tradeAccept', verdict.chatReply);
+                        delayClick(confirmBtn, `Confirming trade (${verdict.reason})`);
+                    }
+                });
+            }
+
+            if (declineBtn) {
+                return executeOrAdvise({
+                    el: declineBtn,
+                    title: 'DECLINE INCOMING TRADE',
+                    reason: verdict.reason,
+                    onExecute: () => {
+                        if (verdict.chatReply) ChatEngine.sendChatMessage('tradeReject', verdict.chatReply);
+                        delayClick(declineBtn, `Declining trade (${verdict.reason})`);
+
+                        // Auto-Counter Trade: After declining an unfair offer, launch our own counter proposal!
+                        if (verdict.counterSwap && CONFIG.AUTO_TRADE_ENABLED) {
+                            logToBot(`[COUNTER TRADE] Scheduling counter-proposal for ${verdict.counterSwap.targetOwner}...`);
+                            setTimeout(() => {
+                                if (!TradeProposalExecutor.isExecuting) {
+                                    TradeProposalExecutor.executeProposal(verdict.counterSwap);
+                                }
+                            }, 1800);
+                        }
+                    }
+                });
+            }
+            return false;
+        } finally {
+            isEvaluatingTrade = false;
         }
-        return false;
     },
 
     /**

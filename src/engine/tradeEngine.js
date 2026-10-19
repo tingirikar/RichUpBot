@@ -155,6 +155,42 @@ export const TradeEngine = {
         };
     },
 
+    findCounterTrade(tradeData) {
+        const { partnerName, givenTiles = [], receivedTiles = [] } = tradeData;
+        if (!partnerName || partnerName === 'Opponent') return null;
+
+        const myMissing = OpponentTracker.getMyMissingCards();
+        const partnerMissingCard = myMissing.find(m => m.heldBy && m.heldBy.toLowerCase() === partnerName.toLowerCase());
+
+        if (partnerMissingCard && partnerMissingCard.missingTile) {
+            // Find a tile to offer: prefer the tile they asked for, or an unmortgaged safe sacrifice
+            const requestedTile = givenTiles[0] || OpponentTracker.getSafeTradeSacrifices()[0]?.tile;
+            if (requestedTile) {
+                const oppSet = requestedTile.group ? GameMemory.getGroupCount(requestedTile.group, partnerName) : null;
+                const givesThemMonopoly = oppSet && oppSet.owned === oppSet.total - 1;
+
+                const oppCash = GameMemory.players[partnerName]?.cash ?? 500;
+                let cashDemand = 0;
+                if (givesThemMonopoly) {
+                    cashDemand = Math.max(80, Math.min(Math.max(0, oppCash - 50), 150));
+                }
+
+                const cashDemandStr = cashDemand > 0 ? ` + $${cashDemand}` : '';
+                return {
+                    targetOwner: partnerName,
+                    myGivenTile: requestedTile,
+                    myReceivedTile: partnerMissingCard.missingTile,
+                    cashOffer: 0,
+                    cashDemand,
+                    summary: `COUNTER: Give ${requestedTile.name} -> Get ${partnerMissingCard.missingTile.name}${cashDemandStr}`,
+                    pitch: `@${partnerName} That offer is no deal. Give me ${partnerMissingCard.missingTile.name}${cashDemandStr ? `${cashDemandStr} cash` : ''} for ${requestedTile.name} instead. Both get sets!`,
+                    reason: `Grandmaster Counter-Proposal: Securing ${partnerMissingCard.missingTile.name} to complete our ${partnerMissingCard.missingTile.group} Monopoly!`
+                };
+            }
+        }
+        return null;
+    },
+
     evaluateIncomingTrade(tradeData) {
         const {
             partnerName = '__OPP__',
@@ -166,33 +202,67 @@ export const TradeEngine = {
 
         // VETO CHECK 1: Never hand an opponent a monopoly unless we also receive a monopoly
         let givesOppMonopoly = false;
+        let oppGroupName = '';
+        let givenBlockerTile = null;
+
         for (const tile of givenTiles) {
             if (tile.group && tile.type === 'property') {
                 const oppSet = GameMemory.getGroupCount(tile.group, partnerName);
                 if (oppSet.owned === oppSet.total - 1) {
                     givesOppMonopoly = true;
+                    oppGroupName = tile.group;
+                    givenBlockerTile = tile;
                     break;
                 }
             }
         }
 
         let completesMyMonopoly = false;
+        let myCompletedGroup = '';
         for (const tile of receivedTiles) {
             if (tile.group && tile.type === 'property') {
                 const mySet = GameMemory.getGroupCount(tile.group, '__ME__');
                 if (mySet.owned === mySet.total - 1) {
                     completesMyMonopoly = true;
+                    myCompletedGroup = tile.group;
                     break;
                 }
             }
         }
 
+        // FATAL DANGER CHECK: Opponent gets a set, we do NOT!
         if (givesOppMonopoly && !completesMyMonopoly) {
+            const counter = this.findCounterTrade(tradeData);
+            if (counter) {
+                const cashExtra = counter.cashDemand > 0 ? ` + $${counter.cashDemand}` : '';
+                return {
+                    accept: false,
+                    counterSwap: counter,
+                    reason: `FATAL DANGER VETO: Gives ${partnerName} a ${oppGroupName} monopoly while we get none!`,
+                    chatReply: `Decline: That completes your ${oppGroupName} set. Give me ${counter.myReceivedTile.name}${cashExtra} if you want that.`
+                };
+            }
             return {
                 accept: false,
-                reason: `MONOPOLY VETO: Trade would grant ${partnerName} a monopoly without giving us one!`,
-                chatReply: "Can't give you a monopoly for that offer, that's game over for me."
+                counterSwap: null,
+                reason: `FATAL DANGER VETO: Gives ${partnerName} a ${oppGroupName} monopoly while we get none!`,
+                chatReply: `Decline: That completes your ${oppGroupName} set and puts me in danger. No deal.`
             };
+        }
+
+        // MUTUAL MONOPOLY CHECK: Both get a monopoly, but can opponent rush hotels while we cannot?
+        if (givesOppMonopoly && completesMyMonopoly) {
+            const oppCash = GameMemory.players[partnerName]?.cash ?? 500;
+            const myCash = GameMemory.myCash + receivedCash - givenCash;
+            if (oppCash >= 500 && myCash < 250) {
+                const neededCash = Math.round(300 - myCash);
+                return {
+                    accept: false,
+                    counterSwap: null,
+                    reason: `HOTEL RUSH DANGER: ${partnerName} has $${oppCash} cash to rush hotels, while we have only $${myCash}!`,
+                    chatReply: `Decline: You can build hotels immediately while I'm short on cash. Add +$${neededCash} cash or no deal.`
+                };
+            }
         }
 
         // Calculate utility gains
@@ -210,16 +280,28 @@ export const TradeEngine = {
         // 20-Round Forward Rollout Simulation Check
         const sim = this.simulateFutureTradeRounds(tradeData, 20, 80);
 
-        // Simulation Veto: If accepting the trade crashes our 20-round survival rate by more than 15%
-        if (sim.accSurvRate < sim.rejSurvRate - 15) {
+        // Simulation Veto: If accepting the trade crashes our 20-round survival rate
+        if (sim.accSurvRate < sim.rejSurvRate - 10) {
             return {
                 accept: false,
+                counterSwap: null,
                 reason: `20-ROUND SIMULATION VETO: Accepting drops 20-round survival from ${sim.rejSurvRate}% to ${sim.accSurvRate}%!`,
-                chatReply: "Can't do that trade, 20-turn risk exposure is way too high."
+                chatReply: `Decline: 20-turn simulation shows this increases my bankruptcy risk. No deal.`
             };
         }
 
-        const acceptable = (myGain > 0 && (myGain >= oppGain * CONFIG.TRADE_MIN_ADVANTAGE_RATIO || completesMyMonopoly)) || sim.isSimulationEVPlus;
+        // UNFAIR DEFICIT CHECK: Never accept a trade in the opponent's favor!
+        if (oppGain > myGain && !completesMyMonopoly) {
+            const cashDeficit = Math.round(oppGain - myGain) + 30;
+            return {
+                accept: false,
+                counterSwap: this.findCounterTrade(tradeData),
+                reason: `UNFAIR DEFICIT: Trade favors ${partnerName} by +$${Math.round(oppGain - myGain)}.`,
+                chatReply: `Decline: Net value is short by $${cashDeficit}. Add cash and re-offer.`
+            };
+        }
+
+        const acceptable = myGain > 0 && (myGain >= oppGain * CONFIG.TRADE_MIN_ADVANTAGE_RATIO || completesMyMonopoly) && sim.isSimulationEVPlus;
 
         GameMemory.lastTradeVerdict = acceptable ? 'ACCEPTABLE' : 'UNFAVORABLE';
 
@@ -228,12 +310,13 @@ export const TradeEngine = {
             myGain: Math.round(myGain),
             oppGain: Math.round(oppGain),
             sim20Rounds: sim,
+            counterSwap: acceptable ? null : this.findCounterTrade(tradeData),
             reason: acceptable
-                ? `EV+ Trade (20-Rnd Sim: +$${sim.accAvgCash - sim.avgRejCash} Net Worth, ${sim.accSurvRate}% survival)`
+                ? `GRANDMASTER EV+ TRADE: Net gain +$${Math.round(myGain)} vs Opp +$${Math.round(oppGain)} (20-turn Sim: +EV)`
                 : `Unfavorable utility: Net gain $${Math.round(myGain)} < requirement`,
             chatReply: acceptable
-                ? "Pleasure doing business with you!"
-                : "Numbers don't work out for me. Sweeten the cash offer and I'll consider it."
+                ? "Deal accepted! Win-win."
+                : `Decline: Value doesn't work out for me. Re-offer with better terms.`
         };
     },
 
