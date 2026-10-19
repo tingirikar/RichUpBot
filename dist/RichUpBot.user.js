@@ -82,7 +82,7 @@
   });
 
   // src/data/boardTiles.js
-  var BOARD_TILES2 = [
+  var BOARD_TILES = [
     { id: 0, name: "Start", type: "special", group: null, price: 0, houseCost: 0, rent: [0], markov: 0.0309 },
     { id: 1, name: "Salvador", type: "property", group: "Brazil", price: 60, houseCost: 50, rent: [2, 10, 30, 90, 150, 240], markov: 0.0213 },
     { id: 2, name: "Treasure", type: "card", group: null, price: 0, houseCost: 0, rent: [0], markov: 0.0188 },
@@ -125,7 +125,7 @@
     { id: 39, name: "New York", type: "property", group: "USA", price: 400, houseCost: 200, rent: [50, 200, 600, 1400, 1700, 2e3], markov: 0.0263 }
   ];
   var GROUP_TILES = Object.freeze(
-    BOARD_TILES2.reduce((acc, tile) => {
+    BOARD_TILES.reduce((acc, tile) => {
       if (tile.group) {
         if (!acc[tile.group]) acc[tile.group] = [];
         acc[tile.group].push(tile);
@@ -134,29 +134,29 @@
     }, {})
   );
   var TILE_BY_NAME = Object.freeze(
-    BOARD_TILES2.reduce((acc, tile) => {
+    BOARD_TILES.reduce((acc, tile) => {
       acc[tile.name.toLowerCase()] = tile;
       return acc;
     }, {
       // Aliases for RichUp alternate names
-      "electric company": BOARD_TILES2[12],
-      "power": BOARD_TILES2[12],
-      "muc airport": BOARD_TILES2[15],
-      "nuc airport": BOARD_TILES2[15],
-      "income tax": BOARD_TILES2[4],
-      "luxury tax": BOARD_TILES2[38],
-      "premium tax": BOARD_TILES2[38]
+      "electric company": BOARD_TILES[12],
+      "power": BOARD_TILES[12],
+      "muc airport": BOARD_TILES[15],
+      "nuc airport": BOARD_TILES[15],
+      "income tax": BOARD_TILES[4],
+      "luxury tax": BOARD_TILES[38],
+      "premium tax": BOARD_TILES[38]
     })
   );
   var TILE_BY_ID = Object.freeze(
-    BOARD_TILES2.reduce((acc, tile) => {
+    BOARD_TILES.reduce((acc, tile) => {
       acc[tile.id] = tile;
       return acc;
     }, {})
   );
   var HIGH_TRAFFIC_GROUPS = /* @__PURE__ */ new Set(["Germany", "China", "France", "Italy"]);
   var BOARD_LABELS_BLACKLIST = /* @__PURE__ */ new Set([
-    ...BOARD_TILES2.map((t) => t.name.toLowerCase()),
+    ...BOARD_TILES.map((t) => t.name.toLowerCase()),
     "start",
     "passing by",
     "in prison",
@@ -323,7 +323,7 @@
       this.isMyTurn = false;
       this.players = {};
       this.ownership = {};
-      BOARD_TILES2.forEach((t) => {
+      BOARD_TILES.forEach((t) => {
         if (t.group) {
           this.ownership[t.id] = { owner: null, houses: 0, mortgaged: false };
         }
@@ -344,7 +344,7 @@
     },
     getUnownedPropertyCount() {
       let unowned = 0;
-      for (const t of BOARD_TILES2) {
+      for (const t of BOARD_TILES) {
         if (t.group && (!this.ownership[t.id] || !this.ownership[t.id].owner)) {
           unowned++;
         }
@@ -352,7 +352,7 @@
       return unowned;
     },
     getTileCurrentRent(tileId, visitorName = null) {
-      const tile = BOARD_TILES2[tileId];
+      const tile = BOARD_TILES[tileId];
       if (!tile) return 0;
       if (tile.type === "tax") return tile.rent[0] || 0;
       if (!tile.group) return 0;
@@ -1044,7 +1044,7 @@
       if (hud && hud.contains(el)) continue;
       const text = el.innerText || "";
       if (!text.includes("$") || text.length > 80) continue;
-      for (const tile of BOARD_TILES2) {
+      for (const tile of BOARD_TILES) {
         if (!tile.group) continue;
         if (new RegExp(`\\b${tile.name}\\b`, "i").test(text)) {
           const m = /(\d{2,4})\s*\$|\$\s*(\d{2,4})/.exec(text);
@@ -1094,7 +1094,7 @@
       const line = lines[i];
       const lower = line.toLowerCase();
       let matchedTile = null;
-      for (const tile of BOARD_TILES2) {
+      for (const tile of BOARD_TILES) {
         if (tile.group && (lower === tile.name.toLowerCase() || new RegExp(`^${tile.name}\\b`, "i").test(line))) {
           matchedTile = tile;
           break;
@@ -1224,7 +1224,7 @@
       return;
     }
     if (line.includes("landed on")) {
-      for (const tile of BOARD_TILES2) {
+      for (const tile of BOARD_TILES) {
         if (new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
           const playerPart = line.split(/landed on/i)[0].trim();
           const cleanPlayer = playerPart.replace(/[^\w\s-]/g, "").trim();
@@ -1239,7 +1239,7 @@
       }
     }
     if (line.includes("bought a house in")) {
-      for (const tile of BOARD_TILES2) {
+      for (const tile of BOARD_TILES) {
         if (tile.group && new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
           const buyerPart = line.split(/bought a house in/i)[0].trim();
           const cleanBuyer = buyerPart.replace(/[^\w\s-]/g, "").trim();
@@ -1256,7 +1256,7 @@
       }
     }
     if (line.includes("bought a hotel in")) {
-      for (const tile of BOARD_TILES2) {
+      for (const tile of BOARD_TILES) {
         if (tile.group && new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
           const buyerPart = line.split(/bought a hotel in/i)[0].trim();
           const cleanBuyer = buyerPart.replace(/[^\w\s-]/g, "").trim();
@@ -1273,7 +1273,7 @@
       }
     }
     if (line.includes("bought") && !line.includes("house") && !line.includes("hotel")) {
-      for (const tile of BOARD_TILES2) {
+      for (const tile of BOARD_TILES) {
         if (tile.group && new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
           const buyerPart = line.split(/bought/i)[0].trim();
           const cleanBuyer = buyerPart.replace(/[^\w\s-]/g, "").trim();
@@ -1302,7 +1302,7 @@
       return;
     }
     if (line.includes("mortgaged")) {
-      for (const tile of BOARD_TILES2) {
+      for (const tile of BOARD_TILES) {
         if (tile.group && new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
           if (GameMemory.ownership[tile.id]) {
             GameMemory.ownership[tile.id].mortgaged = !line.includes("unmortgaged");
@@ -1313,7 +1313,7 @@
       }
     }
     if (line.includes("traded")) {
-      for (const tile of BOARD_TILES2) {
+      for (const tile of BOARD_TILES) {
         if (tile.group && new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
           const matchTo = /to\s+([A-Za-z0-9_-]+)/i.exec(line);
           if (matchTo && GameMemory.ownership[tile.id]) {
@@ -1328,7 +1328,7 @@
   function scrapeTradeModalDOM() {
     const modal = document.querySelector('[role="dialog"], [class*="modal"], [class*="trade-modal"]');
     const modalText = modal ? modal.innerText : "";
-    const mentionedTiles = BOARD_TILES2.filter((t) => t.group && new RegExp(`\\b${t.name}\\b`, "i").test(modalText));
+    const mentionedTiles = BOARD_TILES.filter((t) => t.group && new RegExp(`\\b${t.name}\\b`, "i").test(modalText));
     const givenTiles = [];
     const receivedTiles = [];
     for (const t of mentionedTiles) {
@@ -1414,7 +1414,7 @@
         const ownedTiles = [];
         const hungrySets = [];
         let totalPropertyNetWorth = 0;
-        for (const tile of BOARD_TILES2) {
+        for (const tile of BOARD_TILES) {
           if (!tile.group) continue;
           const info = GameMemory.ownership[tile.id];
           if (info && info.owner === pName) {
@@ -1533,7 +1533,7 @@
     getSafeTradeSacrifices() {
       const blockers = new Set(this.getCriticalBlockers().map((b) => b.tile.id));
       const sacrifices = [];
-      for (const tile of BOARD_TILES2) {
+      for (const tile of BOARD_TILES) {
         if (!tile.group) continue;
         const info = GameMemory.ownership[tile.id];
         if (info && GameMemory.isMe(info.owner) && info.houses === 0 && !blockers.has(tile.id)) {
@@ -1578,7 +1578,7 @@
       let expectedLoss3Turns = expectedLoss1Turn;
       for (let step = 13; step <= 21; step++) {
         const targetTile = (currentPos + step) % 40;
-        const tileData = BOARD_TILES2[targetTile];
+        const tileData = BOARD_TILES[targetTile];
         const rent = GameMemory.getTileCurrentRent(targetTile);
         const markovWeight = tileData.markov * 0.45;
         expectedLoss3Turns += markovWeight * rent;
@@ -1711,7 +1711,7 @@
      */
     areOpponentsApproachingOurProperties() {
       const myHotels = [];
-      for (const tile of BOARD_TILES2) {
+      for (const tile of BOARD_TILES) {
         const info = GameMemory.ownership[tile.id];
         if (info && GameMemory.isMe(info.owner) && info.houses >= 1) {
           myHotels.push(tile.id);
@@ -1735,7 +1735,7 @@
      */
     countOpponentHouses() {
       let count = 0;
-      for (const tile of BOARD_TILES2) {
+      for (const tile of BOARD_TILES) {
         const info = GameMemory.ownership[tile.id];
         if (info && info.owner && !GameMemory.isMe(info.owner)) {
           count += info.houses || 0;
@@ -2167,7 +2167,7 @@
       }
       for (const [tileId, ownInfo] of Object.entries(GameMemory.ownership)) {
         if (!ownInfo || !ownInfo.owner) continue;
-        const tile = BOARD_TILES2[tileId];
+        const tile = BOARD_TILES[tileId];
         if (!tile) continue;
         const ownerKey = Object.keys(playerStats).find(
           (k) => GameMemory.isMe(ownInfo.owner) ? k === myName || GameMemory.isMe(k) : k.toLowerCase() === ownInfo.owner.toLowerCase()
@@ -2658,7 +2658,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       const myPos = GameMemory.myPos || 0;
       for (let roll = 2; roll <= 12; roll++) {
         const targetTileId = (myPos + roll) % 40;
-        const tile = BOARD_TILES2[targetTileId];
+        const tile = BOARD_TILES[targetTileId];
         if (!tile || !tile.group) continue;
         const info = GameMemory.ownership[targetTileId];
         if (info && !GameMemory.isMe(info.owner) && info.houses >= 3 && !info.mortgaged) {
@@ -2747,7 +2747,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     rankLiquidationTargets() {
       const targets = [];
       const blockers = new Set(OpponentTracker.getCriticalBlockers().map((b) => b.tile.id));
-      for (const tile of BOARD_TILES2) {
+      for (const tile of BOARD_TILES) {
         if (!tile.group) continue;
         const info = GameMemory.ownership[tile.id];
         if (!info || !GameMemory.isMe(info.owner) || info.mortgaged) continue;
@@ -3628,11 +3628,11 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       const buyBtn = snapshot.findBuyPropertyButton();
       const auctionBtn = snapshot.findExactOrIncludes(["auction", "pass", "don't buy"]);
       if (!buyBtn && !auctionBtn) return false;
-      let tile = BOARD_TILES2[GameMemory.myPos] || null;
+      let tile = BOARD_TILES[GameMemory.myPos] || null;
       const modal = document.querySelector('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="property" i]');
       if (modal) {
         const modalText = modal.innerText || "";
-        for (const t of BOARD_TILES2) {
+        for (const t of BOARD_TILES) {
           if (t.group && new RegExp(`\\b${t.name}\\b`, "i").test(modalText)) {
             tile = t;
             GameMemory.myPos = t.id;
@@ -3689,14 +3689,14 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       const modal = document.querySelector('[role="dialog"], [class*="modal"], [class*="auction"]');
       const modalText = modal ? modal.innerText : document.body ? document.body.innerText : "";
       let auctionedTile = null;
-      for (const t of BOARD_TILES2) {
+      for (const t of BOARD_TILES) {
         if (t.group && new RegExp(`\\b${t.name}\\b`, "i").test(modalText)) {
           auctionedTile = t;
           break;
         }
       }
       if (!auctionedTile) {
-        auctionedTile = BOARD_TILES2[GameMemory.myPos] || null;
+        auctionedTile = BOARD_TILES[GameMemory.myPos] || null;
       }
       const bidMatch = /highest bid:?\s*\$?(\d+)|current bid:?\s*\$?(\d+)/i.exec(modalText);
       const currentBid = bidMatch ? parseInt(bidMatch[1] || bidMatch[2], 10) : 50;

@@ -1,4 +1,4 @@
-import { GROUP_TILES } from '../data/boardTiles.js';
+import { GROUP_TILES, BOARD_TILES } from '../data/boardTiles.js';
 import { GameMemory } from '../memory/gameMemory.js';
 import { OpponentTracker } from '../memory/opponentTracker.js';
 import { CONFIG } from '../config.js';
