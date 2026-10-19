@@ -298,7 +298,11 @@ export const OllamaClient = {
         const partnerCanBuild = partnerCompletedGroups.length > 0 && typeof partnerCash === 'number' && partnerCash >= 300;
         const myPostCash = GameMemory.myCash + (tradeData.receivedCash || 0) - (tradeData.givenCash || 0);
 
+        // Run 20-round forward rollout simulation to pass real mathematical projections to Ollama
+        const sim = TradeEngine.simulateFutureTradeRounds(tradeData, 20, 60);
+
         return `=== RICHUP FULL GAME-STATE BRIEFING ===
+MY IDENTITY: ${myName}
 LIVE FINANCIALS:
 - My Live Cash: $${GameMemory.myCash}
 - My Dynamic Survival Reserve: $${GameMemory.lastDynamicReserve} (Required cash floor to survive incoming rent hits)
@@ -331,8 +335,13 @@ Net Cash Transfer: ${tradeData.receivedCash - tradeData.givenCash >= 0 ? `+$${tr
        ? `MASSIVE WIN: Completes [${myCompletedGroups.join(', ')}] monopoly for us! Post-trade cash: $${myPostCash}.`
        : `No monopoly completed for us.`}
 
+3. 20-Round Forward Rollout Simulation:
+   - If Trade ACCEPTED: 20-Round Survival: ${sim.accSurvRate}%, Projected 20-Turn Cash: $${sim.accAvgCash}
+   - If Trade REJECTED: 20-Round Survival: ${sim.rejSurvRate}%, Projected 20-Turn Cash: $${sim.avgRejCash}
+   - Monte Carlo Projection: ${sim.isSimulationEVPlus ? 'PROFITABLE (+EV across 20 simulated rounds)' : 'HIGH RISK / NEGATIVE EV across 20 simulated rounds'}
+
 === GRANDMASTER DIRECTIVE ===
-You are an elite Grandmaster Monopoly AI. Using the full context of everyone's money, existing houses, and post-trade building power:
+You are an elite Grandmaster Monopoly AI. Using the full context of everyone's money, existing houses, 20-round simulation data, and post-trade building power:
 1. Decision: CONFIRM (if highly advantageous or safe win-win), DECLINE (if kingmaking opponent or danger too high), or NEGOTIATE (if close but needs more cash or counter-property).
 2. Reason: Under 15 words explaining the strategic reasoning based on opponent money, houses, or monopolies.
 3. Chat Reply: Under 15 words, a psychological, clever in-game chat message directed at ${partner}.

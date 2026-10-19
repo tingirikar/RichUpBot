@@ -1644,10 +1644,26 @@
           reason: `Cannot afford ${tile ? tile.name : "property"} ($${price} > $${myCash})`
         };
       }
-      if (CONFIG.ALWAYS_BUY_AFFORDABLE || CONFIG.BUY_LAND_ENABLED) {
+      if (tile && OpponentTracker.isBlockerAgainstAnyOpponent(tile)) {
         return {
           buy: true,
-          reason: `Acquiring ${tile ? tile.name : "property"} ($${price}) [Always-Buy mode]`
+          reason: `DEFENSIVE BLOCK: Prevents opponent from completing ${tile.group}!`
+        };
+      }
+      const mySet = tile?.group ? GameMemory.getGroupCount(tile.group, "__ME__") : null;
+      if (mySet && (mySet.owned === mySet.total - 1 || tile.group === "USA" || tile.group === "Brazil")) {
+        return {
+          buy: true,
+          reason: `CRITICAL: Completes ${tile.group} Monopoly!`
+        };
+      }
+      const danger = this.analyzeDangerAhead(GameMemory.myPos);
+      const dynamicReserve = this.computeDynamicReserve(GameMemory.myPos);
+      const postCash = myCash - price;
+      if (danger.maxDangerWindowLoss >= 250 && postCash < dynamicReserve) {
+        return {
+          buy: false,
+          reason: `INTELLIGENT SKIP: Facing dangerous opponent territory ($${danger.maxDangerWindowLoss} rent) ahead. Preserving $${myCash} cash to survive roll.`
         };
       }
       if (tile && (tile.group === "Airport" || tile.group === "Airports")) {
@@ -1656,32 +1672,12 @@
       if (tile && (tile.group === "Utility" || tile.group === "Utilities")) {
         return { buy: true, reason: `Cashflow Asset: ${tile.name} (Utility)` };
       }
-      const danger = this.analyzeDangerAhead(GameMemory.myPos);
-      if (danger.maxDangerWindowLoss >= 400 && danger.expectedLoss1Turn >= 150) {
-        const postCash = myCash - price;
-        if (postCash < 50) {
-          return {
-            buy: false,
-            reason: `Hotel Danger Veto: Enemy hotel ($${danger.maxDangerWindowLoss} rent) ahead! Preserving $${myCash} cash.`
-          };
-        }
-      }
-      if (!tile || !tile.group) {
-        return { buy: true, reason: `Acquiring standard property ($${price})` };
-      }
-      const mySet = GameMemory.getGroupCount(tile.group, "__ME__");
-      if (mySet.owned === mySet.total - 1 || tile.group === "USA" || tile.group === "Brazil") {
-        return { buy: true, reason: `CRITICAL: Completes ${tile.group} Monopoly!` };
-      }
-      if (OpponentTracker.isBlockerAgainstAnyOpponent(tile)) {
-        return { buy: true, reason: `DEFENSIVE BLOCK: Prevents opponent from completing ${tile.group}` };
-      }
-      if (HIGH_TRAFFIC_GROUPS.has(tile.group)) {
+      if (tile && HIGH_TRAFFIC_GROUPS.has(tile.group)) {
         return { buy: true, reason: `High-Traffic Strategic Asset: ${tile.name} (${tile.group})` };
       }
       return {
         buy: true,
-        reason: `EV+ Buy: ${tile.name} ($${price})`
+        reason: `EV+ Buy: ${tile ? tile.name : "property"} ($${price})`
       };
     }
   };
@@ -1865,6 +1861,110 @@
       }
       return Math.round(baseEV * synergy);
     },
+    /**
+     * 20-ROUND MONTE CARLO FORWARD TRADE SIMULATION
+     * Simulates up to 20 rounds of future dice rolls, rent payments, salary collection,
+     * and bankruptcy risk comparing trade ACCEPTED vs REJECTED.
+     */
+    simulateFutureTradeRounds(tradeData, numRounds = 20, iterations = 80) {
+      const {
+        partnerName = "__OPP__",
+        givenTiles = [],
+        receivedTiles = [],
+        givenCash = 0,
+        receivedCash = 0
+      } = tradeData;
+      const givenIds = new Set(givenTiles.map((t) => t.id));
+      const receivedIds = new Set(receivedTiles.map((t) => t.id));
+      const runTrajectory = (isAccepted) => {
+        const simOwnership = {};
+        for (const [id, info] of Object.entries(GameMemory.ownership)) {
+          let owner = info.owner;
+          if (isAccepted) {
+            if (givenIds.has(Number(id))) owner = partnerName;
+            if (receivedIds.has(Number(id))) owner = GameMemory.myName || "__ME__";
+          }
+          simOwnership[id] = { owner, houses: info.houses || 0, mortgaged: info.mortgaged || false };
+        }
+        let myCash = isAccepted ? GameMemory.myCash - givenCash + receivedCash : GameMemory.myCash;
+        let oppBase = GameMemory.players[partnerName]?.cash ?? 500;
+        let oppCash = isAccepted ? oppBase - receivedCash + givenCash : oppBase;
+        let myPos = GameMemory.myPos || 0;
+        let oppPos = GameMemory.players[partnerName]?.pos || 0;
+        let myBankrupt = myCash < 0;
+        let oppBankrupt = oppCash < 0;
+        for (let r = 1; r <= numRounds; r++) {
+          if (!myBankrupt) {
+            const roll = Math.floor(Math.random() * 6 + 1) + Math.floor(Math.random() * 6 + 1);
+            const newPos = (myPos + roll) % 40;
+            if (newPos < myPos) myCash += 200;
+            myPos = newPos;
+            const tile = BOARD_TILES[myPos];
+            if (tile?.group) {
+              const info = simOwnership[tile.id];
+              if (info?.owner === partnerName && !info.mortgaged) {
+                let rent = tile.price ? Math.round(tile.price * 0.1) : 20;
+                if (tile.type === "property" && tile.rent) {
+                  rent = tile.rent[info.houses || 0] || tile.rent[0];
+                } else if (tile.type === "airport") {
+                  const count = Object.values(simOwnership).filter((x) => x.owner === partnerName && BOARD_TILES[x.id]?.type === "airport").length;
+                  rent = 25 * Math.pow(2, Math.max(0, count - 1));
+                }
+                myCash -= rent;
+                oppCash += rent;
+                if (myCash < 0) myBankrupt = true;
+              }
+            }
+          }
+          if (!oppBankrupt) {
+            const roll = Math.floor(Math.random() * 6 + 1) + Math.floor(Math.random() * 6 + 1);
+            const newPos = (oppPos + roll) % 40;
+            if (newPos < oppPos) oppCash += 200;
+            oppPos = newPos;
+            const tile = BOARD_TILES[oppPos];
+            if (tile?.group) {
+              const info = simOwnership[tile.id];
+              if (info && GameMemory.isMe(info.owner) && !info.mortgaged) {
+                let rent = tile.price ? Math.round(tile.price * 0.1) : 20;
+                if (tile.type === "property" && tile.rent) {
+                  rent = tile.rent[info.houses || 0] || tile.rent[0];
+                } else if (tile.type === "airport") {
+                  const count = Object.values(simOwnership).filter((x) => GameMemory.isMe(x.owner) && BOARD_TILES[x.id]?.type === "airport").length;
+                  rent = 25 * Math.pow(2, Math.max(0, count - 1));
+                }
+                oppCash -= rent;
+                myCash += rent;
+                if (oppCash < 0) oppBankrupt = true;
+              }
+            }
+          }
+        }
+        return { myCash, oppCash, mySurvive: !myBankrupt, oppSurvive: !oppBankrupt };
+      };
+      let accSurvivals = 0, accCashSum = 0;
+      let rejSurvivals = 0, rejCashSum = 0;
+      for (let i = 0; i < iterations; i++) {
+        const acc = runTrajectory(true);
+        if (acc.mySurvive) accSurvivals++;
+        accCashSum += acc.myCash;
+        const rej = runTrajectory(false);
+        if (rej.mySurvive) rejSurvivals++;
+        rejCashSum += rej.myCash;
+      }
+      const accSurvRate = Math.round(accSurvivals / iterations * 100);
+      const rejSurvRate = Math.round(rejSurvivals / iterations * 100);
+      const accAvgCash = Math.round(accCashSum / iterations);
+      const avgRejCash = Math.round(rejCashSum / iterations);
+      return {
+        simulatedRounds: numRounds,
+        iterations,
+        accSurvRate,
+        rejSurvRate,
+        accAvgCash,
+        avgRejCash,
+        isSimulationEVPlus: accAvgCash >= avgRejCash && accSurvRate >= rejSurvRate - 10
+      };
+    },
     evaluateIncomingTrade(tradeData) {
       const {
         partnerName = "__OPP__",
@@ -1909,13 +2009,22 @@
         myGain -= this.scoreTileForPlayer(tile, "__ME__");
         oppGain += this.scoreTileForPlayer(tile, partnerName);
       }
-      const acceptable = myGain > 0 && (myGain >= oppGain * CONFIG.TRADE_MIN_ADVANTAGE_RATIO || completesMyMonopoly);
+      const sim = this.simulateFutureTradeRounds(tradeData, 20, 80);
+      if (sim.accSurvRate < sim.rejSurvRate - 15) {
+        return {
+          accept: false,
+          reason: `20-ROUND SIMULATION VETO: Accepting drops 20-round survival from ${sim.rejSurvRate}% to ${sim.accSurvRate}%!`,
+          chatReply: "Can't do that trade, 20-turn risk exposure is way too high."
+        };
+      }
+      const acceptable = myGain > 0 && (myGain >= oppGain * CONFIG.TRADE_MIN_ADVANTAGE_RATIO || completesMyMonopoly) || sim.isSimulationEVPlus;
       GameMemory.lastTradeVerdict = acceptable ? "ACCEPTABLE" : "UNFAVORABLE";
       return {
         accept: acceptable,
         myGain: Math.round(myGain),
         oppGain: Math.round(oppGain),
-        reason: acceptable ? `EV+ Trade: Net gain +$${Math.round(myGain)} vs Opp +$${Math.round(oppGain)}` : `Unfavorable utility: Net gain $${Math.round(myGain)} < requirement`,
+        sim20Rounds: sim,
+        reason: acceptable ? `EV+ Trade (20-Rnd Sim: +$${sim.accAvgCash - sim.avgRejCash} Net Worth, ${sim.accSurvRate}% survival)` : `Unfavorable utility: Net gain $${Math.round(myGain)} < requirement`,
         chatReply: acceptable ? "Pleasure doing business with you!" : "Numbers don't work out for me. Sweeten the cash offer and I'll consider it."
       };
     },
@@ -2280,7 +2389,9 @@
       }
       const partnerCanBuild = partnerCompletedGroups.length > 0 && typeof partnerCash === "number" && partnerCash >= 300;
       const myPostCash = GameMemory.myCash + (tradeData.receivedCash || 0) - (tradeData.givenCash || 0);
+      const sim = TradeEngine.simulateFutureTradeRounds(tradeData, 20, 60);
       return `=== RICHUP FULL GAME-STATE BRIEFING ===
+MY IDENTITY: ${myName}
 LIVE FINANCIALS:
 - My Live Cash: $${GameMemory.myCash}
 - My Dynamic Survival Reserve: $${GameMemory.lastDynamicReserve} (Required cash floor to survive incoming rent hits)
@@ -2308,8 +2419,13 @@ Net Cash Transfer: ${tradeData.receivedCash - tradeData.givenCash >= 0 ? `+$${tr
 2. Monopoly Impact on Us:
    ${myCompletedGroups.length > 0 ? `MASSIVE WIN: Completes [${myCompletedGroups.join(", ")}] monopoly for us! Post-trade cash: $${myPostCash}.` : `No monopoly completed for us.`}
 
+3. 20-Round Forward Rollout Simulation:
+   - If Trade ACCEPTED: 20-Round Survival: ${sim.accSurvRate}%, Projected 20-Turn Cash: $${sim.accAvgCash}
+   - If Trade REJECTED: 20-Round Survival: ${sim.rejSurvRate}%, Projected 20-Turn Cash: $${sim.avgRejCash}
+   - Monte Carlo Projection: ${sim.isSimulationEVPlus ? "PROFITABLE (+EV across 20 simulated rounds)" : "HIGH RISK / NEGATIVE EV across 20 simulated rounds"}
+
 === GRANDMASTER DIRECTIVE ===
-You are an elite Grandmaster Monopoly AI. Using the full context of everyone's money, existing houses, and post-trade building power:
+You are an elite Grandmaster Monopoly AI. Using the full context of everyone's money, existing houses, 20-round simulation data, and post-trade building power:
 1. Decision: CONFIRM (if highly advantageous or safe win-win), DECLINE (if kingmaking opponent or danger too high), or NEGOTIATE (if close but needs more cash or counter-property).
 2. Reason: Under 15 words explaining the strategic reasoning based on opponent money, houses, or monopolies.
 3. Chat Reply: Under 15 words, a psychological, clever in-game chat message directed at ${partner}.

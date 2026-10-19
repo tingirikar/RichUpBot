@@ -76,16 +76,38 @@ export const MarkovRisk = {
             };
         }
 
-        // 2. ALWAYS_BUY takes absolute priority
-        if (CONFIG.ALWAYS_BUY_AFFORDABLE || CONFIG.BUY_LAND_ENABLED) {
+        // 2. CRITICAL BLOCKER CHECK: Always buy if it stops an opponent monopoly!
+        if (tile && OpponentTracker.isBlockerAgainstAnyOpponent(tile)) {
             return {
                 buy: true,
-                reason: `Acquiring ${tile ? tile.name : 'property'} ($${price}) [Always-Buy mode]`
+                reason: `DEFENSIVE BLOCK: Prevents opponent from completing ${tile.group}!`
             };
         }
 
-        // 3. AIRPORTS & UTILITIES: Absolute must-buys!
-        // Airports scale to $200 rent with ZERO building investment.
+        // 3. MONOPOLY COMPLETER CHECK: Always buy if it completes our set!
+        const mySet = tile?.group ? GameMemory.getGroupCount(tile.group, '__ME__') : null;
+        if (mySet && (mySet.owned === mySet.total - 1 || tile.group === 'USA' || tile.group === 'Brazil')) {
+            return {
+                buy: true,
+                reason: `CRITICAL: Completes ${tile.group} Monopoly!`
+            };
+        }
+
+        // 4. INTELLIGENT SKIP / HOTEL DANGER VETO:
+        // If we are facing enemy houses/hotels ahead and buying leaves us with less than our danger reserve,
+        // SKIP buying this non-critical property to avoid bankruptcy!
+        const danger = this.analyzeDangerAhead(GameMemory.myPos);
+        const dynamicReserve = this.computeDynamicReserve(GameMemory.myPos);
+        const postCash = myCash - price;
+
+        if (danger.maxDangerWindowLoss >= 250 && postCash < dynamicReserve) {
+            return {
+                buy: false,
+                reason: `INTELLIGENT SKIP: Facing dangerous opponent territory ($${danger.maxDangerWindowLoss} rent) ahead. Preserving $${myCash} cash to survive roll.`
+            };
+        }
+
+        // 5. AIRPORTS & UTILITIES: High-yield cashflow assets
         if (tile && (tile.group === 'Airport' || tile.group === 'Airports')) {
             return { buy: true, reason: `Essential High-Yield Asset: ${tile.name} (Airport)` };
         }
@@ -93,43 +115,14 @@ export const MarkovRisk = {
             return { buy: true, reason: `Cashflow Asset: ${tile.name} (Utility)` };
         }
 
-        // 4. SMART RESERVE VETO: ONLY veto if an enemy hotel ($400+) is within 1 turn
-        // and buying would leave us with under $50 emergency cash.
-        const danger = this.analyzeDangerAhead(GameMemory.myPos);
-        if (danger.maxDangerWindowLoss >= 400 && danger.expectedLoss1Turn >= 150) {
-            const postCash = myCash - price;
-            if (postCash < 50) {
-                return {
-                    buy: false,
-                    reason: `Hotel Danger Veto: Enemy hotel ($${danger.maxDangerWindowLoss} rent) ahead! Preserving $${myCash} cash.`
-                };
-            }
-        }
-
-        if (!tile || !tile.group) {
-            return { buy: true, reason: `Acquiring standard property ($${price})` };
-        }
-
-        const mySet = GameMemory.getGroupCount(tile.group, '__ME__');
-
-        // Always buy 2-tile groups (USA, Brazil) or monopoly completers
-        if (mySet.owned === mySet.total - 1 || tile.group === 'USA' || tile.group === 'Brazil') {
-            return { buy: true, reason: `CRITICAL: Completes ${tile.group} Monopoly!` };
-        }
-
-        // Opponent blocker
-        if (OpponentTracker.isBlockerAgainstAnyOpponent(tile)) {
-            return { buy: true, reason: `DEFENSIVE BLOCK: Prevents opponent from completing ${tile.group}` };
-        }
-
-        // High traffic groups (Germany, China, France, Italy)
-        if (HIGH_TRAFFIC_GROUPS.has(tile.group)) {
+        // 6. High-traffic groups & standard lands
+        if (tile && HIGH_TRAFFIC_GROUPS.has(tile.group)) {
             return { buy: true, reason: `High-Traffic Strategic Asset: ${tile.name} (${tile.group})` };
         }
 
         return {
             buy: true,
-            reason: `EV+ Buy: ${tile.name} ($${price})`
+            reason: `EV+ Buy: ${tile ? tile.name : 'property'} ($${price})`
         };
     }
 };
