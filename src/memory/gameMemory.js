@@ -6,8 +6,15 @@ import { CONFIG } from '../config.js';
  */
 export const GameMemory = {
     // Identity
-    myName: localStorage.getItem('richup_bot_my_name') || null,
-    myCash: 1500,
+    myName: (() => {
+        const saved = localStorage.getItem('richup_bot_my_name');
+        if (saved && BOARD_LABELS_BLACKLIST.has(saved.toLowerCase())) {
+            localStorage.removeItem('richup_bot_my_name');
+            return null;
+        }
+        return saved || null;
+    })(),
+    myCash: 1000,
     cashVerified: false,
     myPos: 0,
     inJail: false,
@@ -17,6 +24,7 @@ export const GameMemory = {
 
     // Room Settings (Sniffed from match start or DOM)
     roomSettings: {
+        startingCash: 1000,         // Default starting cash (e.g. $1000 or $1500)
         collectRentInJail: true,    // RichUp default: players can collect rent in jail
         doubleOnStart: false,       // Landing on Start gives $400?
         passStartBonus: 200,        // Standard pass start bonus

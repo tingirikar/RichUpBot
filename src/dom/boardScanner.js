@@ -12,14 +12,64 @@ import { GameMemory } from '../memory/gameMemory.js';
 export function syncBoardStateFromDOM() {
     if (!document.body) return;
 
-    // 1. Detect Local Player & Exact Cash Balance from Player List
+    // 1. Detect Lobby Settings (Starting cash) and Player Identity from "Change appearance"
+    detectLobbySettingsAndIdentity();
+
+    // 2. Detect Local Player & Exact Cash Balance from Scoreboard List
     detectLocalPlayerFromPlayerList();
 
-    // 2. Sync Properties & House Counts from "My properties" Sidebar
+    // 3. Dynamically read exact property prices from the board DOM
+    syncBoardTilePricesFromDOM();
+
+    // 4. Sync Properties & House Counts from "My properties" Sidebar
     syncMyPropertiesFromSidebar();
 
-    // 3. Fallback: Parse Text Nodes for Other Players & Activity Logs
+    // 5. Fallback: Parse Text Nodes for Other Players & Activity Logs
     scanTextNodesAndActivityLogs();
+}
+
+/**
+ * Detects starting cash and local username in the pre-game lobby
+ */
+function detectLobbySettingsAndIdentity() {
+    const hud = document.getElementById('rubot-hud-panel');
+    const pageText = document.body.innerText || '';
+
+    // 1. Starting Cash Setting (e.g. "Starting cash: ... $1000")
+    const cashMatch = /Starting cash[\s\S]*?\$(\d{2,5})/i.exec(pageText);
+    if (cashMatch) {
+        const startCash = parseInt(cashMatch[1], 10);
+        if (!isNaN(startCash) && startCash >= 100 && startCash <= 10000) {
+            GameMemory.roomSettings.startingCash = startCash;
+            if (!GameMemory.cashVerified) {
+                GameMemory.myCash = startCash;
+            }
+        }
+    }
+
+    // 2. Lobby Player Identity: Only the local player has the "Change appearance" button!
+    const allButtons = Array.from(document.querySelectorAll('button, a, div'));
+    const changeApp = allButtons.find(b => {
+        if (hud && hud.contains(b)) return false;
+        return (b.innerText || '').toLowerCase().includes('change appearance');
+    });
+
+    if (changeApp) {
+        const row = changeApp.closest('div, li, [class*="player"], [class*="user"], [class*="item"]') || changeApp.parentElement;
+        if (row) {
+            const lines = (row.innerText || '').split('\n').map(l => l.trim()).filter(Boolean);
+            const candidate = lines.find(l => 
+                l.length >= 2 && l.length <= 24 &&
+                !BOARD_LABELS_BLACKLIST.has(l.toLowerCase()) &&
+                !l.toLowerCase().includes('change appearance') &&
+                !l.toLowerCase().includes('host') &&
+                !l.includes('$')
+            );
+            if (candidate && (!GameMemory.myName || GameMemory.myName.toLowerCase() !== candidate.toLowerCase())) {
+                GameMemory.setMyName(candidate);
+            }
+        }
+    }
 }
 
 /**
@@ -28,8 +78,6 @@ export function syncBoardStateFromDOM() {
  */
 function detectLocalPlayerFromPlayerList() {
     const hud = document.getElementById('rubot-hud-panel');
-
-    // If local player name is already known, try to find and sync their row directly first
     const currentName = GameMemory.myName;
 
     // Search for player row containers in the scoreboard
@@ -62,22 +110,22 @@ function detectLocalPlayerFromPlayerList() {
         if (nameCandidates.length === 0) continue;
         const candidateName = nameCandidates[0];
 
-        // Is this the local player's container?
-        const hasLeaveIcon = el.querySelector('[class*="leave" i], [class*="exit" i], [title*="leave" i], [aria-label*="leave" i]')
-            || el.innerHTML.includes('M17 16l4-4m0 0l-4-4m4 4H7')
-            || (el.innerHTML.includes('->') && !text.includes('passed through'));
+        // In RichUp, only the local player's row has the interactive leave [->] button in the scoreboard
+        const hasLeaveIcon = Boolean(
+            el.querySelector('[class*="leave" i], [class*="exit" i], [title*="leave" i], [aria-label*="leave" i]') ||
+            el.querySelector('button') ||
+            (el.innerHTML.includes('->') && !text.includes('passed through'))
+        );
 
         const isKnownMe = currentName && candidateName.toLowerCase() === currentName.toLowerCase();
 
-        // Update player record
+        // Update player record in memory
         GameMemory.players[candidateName] = GameMemory.players[candidateName] || { cash: parsedCash, pos: 0, isMe: false };
         GameMemory.players[candidateName].cash = parsedCash;
 
         if (hasLeaveIcon || isKnownMe) {
             GameMemory.players[candidateName].isMe = true;
-            if (!currentName || !BOARD_LABELS_BLACKLIST.has(candidateName.toLowerCase())) {
-                GameMemory.setMyName(candidateName);
-            }
+            GameMemory.setMyName(candidateName);
             GameMemory.myCash = parsedCash;
             GameMemory.cashVerified = true;
             return;
@@ -88,6 +136,35 @@ function detectLocalPlayerFromPlayerList() {
     if (GameMemory.myName && GameMemory.players[GameMemory.myName]) {
         GameMemory.myCash = GameMemory.players[GameMemory.myName].cash;
         GameMemory.cashVerified = true;
+    }
+}
+
+/**
+ * Dynamically reads property purchase prices directly off the board tiles
+ */
+export function syncBoardTilePricesFromDOM() {
+    const hud = document.getElementById('rubot-hud-panel');
+    const allEls = document.querySelectorAll('div, [class*="tile"], [class*="cell"]');
+
+    for (let i = 0; i < allEls.length; i++) {
+        const el = allEls[i];
+        if (hud && hud.contains(el)) continue;
+
+        const text = el.innerText || '';
+        if (!text.includes('$') || text.length > 80) continue;
+
+        for (const tile of BOARD_TILES) {
+            if (!tile.group) continue;
+            if (new RegExp(`\\b${tile.name}\\b`, 'i').test(text)) {
+                const m = /(\d{2,4})\s*\$|\$\s*(\d{2,4})/.exec(text);
+                if (m) {
+                    const price = parseInt(m[1] || m[2], 10);
+                    if (!isNaN(price) && price >= 50 && price <= 500) {
+                        tile.price = price;
+                    }
+                }
+            }
+        }
     }
 }
 

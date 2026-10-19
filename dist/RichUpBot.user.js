@@ -75,48 +75,48 @@
   });
 
   // src/data/boardTiles.js
-  var BOARD_TILES = Object.freeze([
+  var BOARD_TILES = [
     { id: 0, name: "Start", type: "special", group: null, price: 0, houseCost: 0, rent: [0], markov: 0.0309 },
     { id: 1, name: "Salvador", type: "property", group: "Brazil", price: 60, houseCost: 50, rent: [2, 10, 30, 90, 160, 250], markov: 0.0213 },
     { id: 2, name: "Treasure", type: "card", group: null, price: 0, houseCost: 0, rent: [0], markov: 0.0188 },
     { id: 3, name: "Rio", type: "property", group: "Brazil", price: 60, houseCost: 50, rent: [4, 20, 60, 180, 320, 450], markov: 0.0216 },
-    { id: 4, name: "Income Tax", type: "tax", group: null, price: 200, houseCost: 0, rent: [200], markov: 0.0233 },
+    { id: 4, name: "Earnings Tax", type: "tax", group: null, price: 200, houseCost: 0, rent: [200], markov: 0.0233 },
     { id: 5, name: "TLV Airport", type: "airport", group: "Airport", price: 200, houseCost: 0, rent: [25, 50, 100, 200], markov: 0.0296 },
     { id: 6, name: "Tel Aviv", type: "property", group: "Israel", price: 100, houseCost: 50, rent: [6, 30, 90, 270, 400, 550], markov: 0.0226 },
-    { id: 7, name: "Surprise", type: "card", group: null, price: 0, houseCost: 0, rent: [0], markov: 86e-4 },
-    { id: 8, name: "Haifa", type: "property", group: "Israel", price: 100, houseCost: 50, rent: [6, 30, 90, 270, 400, 550], markov: 0.0232 },
+    { id: 7, name: "Haifa", type: "property", group: "Israel", price: 110, houseCost: 50, rent: [7, 35, 100, 300, 450, 600], markov: 0.0232 },
+    { id: 8, name: "Surprise", type: "card", group: null, price: 0, houseCost: 0, rent: [0], markov: 86e-4 },
     { id: 9, name: "Jerusalem", type: "property", group: "Israel", price: 120, houseCost: 50, rent: [8, 40, 100, 300, 450, 600], markov: 0.023 },
     { id: 10, name: "In Prison", type: "jail", group: null, price: 0, houseCost: 0, rent: [0], markov: 0.0589 },
-    { id: 11, name: "Venice", type: "property", group: "Italy", price: 140, houseCost: 100, rent: [10, 50, 150, 450, 625, 750], markov: 0.027 },
-    { id: 12, name: "Electric Company", type: "utility", group: "Utility", price: 150, houseCost: 0, rent: [28, 70], markov: 0.026 },
+    { id: 11, name: "Venice", type: "property", group: "Italy", price: 130, houseCost: 100, rent: [10, 50, 150, 450, 625, 750], markov: 0.027 },
+    { id: 12, name: "Power Company", type: "utility", group: "Utility", price: 150, houseCost: 0, rent: [28, 70], markov: 0.026 },
     { id: 13, name: "Milan", type: "property", group: "Italy", price: 140, houseCost: 100, rent: [10, 50, 150, 450, 625, 750], markov: 0.0237 },
     { id: 14, name: "Rome", type: "property", group: "Italy", price: 160, houseCost: 100, rent: [12, 60, 180, 500, 700, 900], markov: 0.0246 },
-    { id: 15, name: "MUC Airport", type: "airport", group: "Airport", price: 200, houseCost: 0, rent: [25, 50, 100, 200], markov: 0.0292 },
+    { id: 15, name: "NUC Airport", type: "airport", group: "Airport", price: 200, houseCost: 0, rent: [25, 50, 100, 200], markov: 0.0292 },
     { id: 16, name: "Frankfurt", type: "property", group: "Germany", price: 180, houseCost: 100, rent: [14, 70, 200, 550, 750, 950], markov: 0.0279 },
     { id: 17, name: "Treasure", type: "card", group: null, price: 0, houseCost: 0, rent: [0], markov: 0.0259 },
-    { id: 18, name: "Munich", type: "property", group: "Germany", price: 180, houseCost: 100, rent: [14, 70, 200, 550, 750, 950], markov: 0.0293 },
+    { id: 18, name: "Munich", type: "property", group: "Germany", price: 190, houseCost: 100, rent: [15, 75, 200, 550, 750, 950], markov: 0.0293 },
     { id: 19, name: "Berlin", type: "property", group: "Germany", price: 200, houseCost: 100, rent: [16, 80, 220, 600, 800, 1e3], markov: 0.0308 },
     { id: 20, name: "Vacation", type: "special", group: null, price: 0, houseCost: 0, rent: [0], markov: 0.0288 },
-    { id: 21, name: "Shenzhen", type: "property", group: "China", price: 220, houseCost: 150, rent: [18, 90, 250, 700, 875, 1050], markov: 0.0283 },
+    { id: 21, name: "Shenzhen", type: "property", group: "China", price: 210, houseCost: 150, rent: [17, 85, 240, 670, 840, 1025], markov: 0.0283 },
     { id: 22, name: "Surprise", type: "card", group: null, price: 0, houseCost: 0, rent: [0], markov: 0.0104 },
     { id: 23, name: "Beijing", type: "property", group: "China", price: 220, houseCost: 150, rent: [18, 90, 250, 700, 875, 1050], markov: 0.0273 },
     { id: 24, name: "Shanghai", type: "property", group: "China", price: 240, houseCost: 150, rent: [20, 100, 300, 750, 925, 1100], markov: 0.0318 },
     { id: 25, name: "CDG Airport", type: "airport", group: "Airport", price: 200, houseCost: 0, rent: [25, 50, 100, 200], markov: 0.0306 },
     { id: 26, name: "Lyon", type: "property", group: "France", price: 260, houseCost: 150, rent: [22, 110, 330, 800, 975, 1150], markov: 0.027 },
-    { id: 27, name: "Toulouse", type: "property", group: "France", price: 260, houseCost: 150, rent: [22, 110, 330, 800, 975, 1150], markov: 0.0268 },
-    { id: 28, name: "Water Company", type: "utility", group: "Utility", price: 150, houseCost: 0, rent: [28, 70], markov: 0.0281 },
+    { id: 27, name: "Water Company", type: "utility", group: "Utility", price: 150, houseCost: 0, rent: [28, 70], markov: 0.0281 },
+    { id: 28, name: "Toulouse", type: "property", group: "France", price: 270, houseCost: 150, rent: [23, 115, 345, 825, 1e3, 1175], markov: 0.0268 },
     { id: 29, name: "Paris", type: "property", group: "France", price: 280, houseCost: 150, rent: [24, 120, 360, 850, 1025, 1200], markov: 0.0258 },
     { id: 30, name: "Go to prison", type: "gotojail", group: null, price: 0, houseCost: 0, rent: [0], markov: 0 },
     { id: 31, name: "Liverpool", type: "property", group: "UK", price: 300, houseCost: 200, rent: [26, 130, 390, 900, 1100, 1275], markov: 0.0267 },
     { id: 32, name: "Manchester", type: "property", group: "UK", price: 300, houseCost: 200, rent: [26, 130, 390, 900, 1100, 1275], markov: 0.0262 },
-    { id: 33, name: "Treasure", type: "card", group: null, price: 0, houseCost: 0, rent: [0], markov: 0.0236 },
-    { id: 34, name: "London", type: "property", group: "UK", price: 320, houseCost: 200, rent: [28, 150, 450, 1e3, 1200, 1400], markov: 0.025 },
-    { id: 35, name: "JFK Airport", type: "airport", group: "Airport", price: 200, houseCost: 0, rent: [25, 50, 100, 200], markov: 0.0243 },
-    { id: 36, name: "Surprise", type: "card", group: null, price: 0, houseCost: 0, rent: [0], markov: 86e-4 },
-    { id: 37, name: "San Francisco", type: "property", group: "USA", price: 350, houseCost: 200, rent: [35, 175, 500, 1100, 1300, 1500], markov: 0.0218 },
+    { id: 33, name: "London", type: "property", group: "UK", price: 320, houseCost: 200, rent: [28, 150, 450, 1e3, 1200, 1400], markov: 0.025 },
+    { id: 34, name: "JFK Airport", type: "airport", group: "Airport", price: 200, houseCost: 0, rent: [25, 50, 100, 200], markov: 0.0243 },
+    { id: 35, name: "Surprise", type: "card", group: null, price: 0, houseCost: 0, rent: [0], markov: 86e-4 },
+    { id: 36, name: "San Francisco", type: "property", group: "USA", price: 350, houseCost: 200, rent: [35, 175, 500, 1100, 1300, 1500], markov: 0.0218 },
+    { id: 37, name: "Treasure", type: "card", group: null, price: 0, houseCost: 0, rent: [0], markov: 0.0236 },
     { id: 38, name: "Luxury Tax", type: "tax", group: null, price: 75, houseCost: 0, rent: [75], markov: 0.0217 },
     { id: 39, name: "New York", type: "property", group: "USA", price: 400, houseCost: 200, rent: [50, 200, 600, 1400, 1700, 2e3], markov: 0.0263 }
-  ]);
+  ];
   var GROUP_TILES = Object.freeze(
     BOARD_TILES.reduce((acc, tile) => {
       if (tile.group) {
@@ -130,7 +130,12 @@
     BOARD_TILES.reduce((acc, tile) => {
       acc[tile.name.toLowerCase()] = tile;
       return acc;
-    }, {})
+    }, {
+      // Aliases for RichUp alternate names
+      "electric company": BOARD_TILES[12],
+      "muc airport": BOARD_TILES[15],
+      "income tax": BOARD_TILES[4]
+    })
   );
   var TILE_BY_ID = Object.freeze(
     BOARD_TILES.reduce((acc, tile) => {
@@ -149,6 +154,7 @@
     "treasure",
     "surprise",
     "income tax",
+    "earnings tax",
     "luxury tax",
     "electric",
     "water",
@@ -172,14 +178,40 @@
     "survival reserve",
     "position",
     "my name",
-    "cash"
+    "cash",
+    "store",
+    "shop",
+    "inventory",
+    "profile",
+    "settings",
+    "rules",
+    "lobby",
+    "room",
+    "host",
+    "change appearance",
+    "waiting for",
+    "joined the game",
+    "start the game",
+    "is playing",
+    "good luck",
+    "even build",
+    "starting cash",
+    "randomize player order",
+    "create"
   ]);
 
   // src/memory/gameMemory.js
   var GameMemory = {
     // Identity
-    myName: localStorage.getItem("richup_bot_my_name") || null,
-    myCash: 1500,
+    myName: (() => {
+      const saved = localStorage.getItem("richup_bot_my_name");
+      if (saved && BOARD_LABELS_BLACKLIST.has(saved.toLowerCase())) {
+        localStorage.removeItem("richup_bot_my_name");
+        return null;
+      }
+      return saved || null;
+    })(),
+    myCash: 1e3,
     cashVerified: false,
     myPos: 0,
     inJail: false,
@@ -188,6 +220,8 @@
     isMyTurn: false,
     // Room Settings (Sniffed from match start or DOM)
     roomSettings: {
+      startingCash: 1e3,
+      // Default starting cash (e.g. $1000 or $1500)
       collectRentInJail: true,
       // RichUp default: players can collect rent in jail
       doubleOnStart: false,
@@ -639,9 +673,42 @@
   // src/dom/boardScanner.js
   function syncBoardStateFromDOM() {
     if (!document.body) return;
+    detectLobbySettingsAndIdentity();
     detectLocalPlayerFromPlayerList();
+    syncBoardTilePricesFromDOM();
     syncMyPropertiesFromSidebar();
     scanTextNodesAndActivityLogs();
+  }
+  function detectLobbySettingsAndIdentity() {
+    const hud = document.getElementById("rubot-hud-panel");
+    const pageText = document.body.innerText || "";
+    const cashMatch = /Starting cash[\s\S]*?\$(\d{2,5})/i.exec(pageText);
+    if (cashMatch) {
+      const startCash = parseInt(cashMatch[1], 10);
+      if (!isNaN(startCash) && startCash >= 100 && startCash <= 1e4) {
+        GameMemory.roomSettings.startingCash = startCash;
+        if (!GameMemory.cashVerified) {
+          GameMemory.myCash = startCash;
+        }
+      }
+    }
+    const allButtons = Array.from(document.querySelectorAll("button, a, div"));
+    const changeApp = allButtons.find((b) => {
+      if (hud && hud.contains(b)) return false;
+      return (b.innerText || "").toLowerCase().includes("change appearance");
+    });
+    if (changeApp) {
+      const row = changeApp.closest('div, li, [class*="player"], [class*="user"], [class*="item"]') || changeApp.parentElement;
+      if (row) {
+        const lines = (row.innerText || "").split("\n").map((l) => l.trim()).filter(Boolean);
+        const candidate = lines.find(
+          (l) => l.length >= 2 && l.length <= 24 && !BOARD_LABELS_BLACKLIST.has(l.toLowerCase()) && !l.toLowerCase().includes("change appearance") && !l.toLowerCase().includes("host") && !l.includes("$")
+        );
+        if (candidate && (!GameMemory.myName || GameMemory.myName.toLowerCase() !== candidate.toLowerCase())) {
+          GameMemory.setMyName(candidate);
+        }
+      }
+    }
   }
   function detectLocalPlayerFromPlayerList() {
     const hud = document.getElementById("rubot-hud-panel");
@@ -663,15 +730,15 @@
       );
       if (nameCandidates.length === 0) continue;
       const candidateName = nameCandidates[0];
-      const hasLeaveIcon = el.querySelector('[class*="leave" i], [class*="exit" i], [title*="leave" i], [aria-label*="leave" i]') || el.innerHTML.includes("M17 16l4-4m0 0l-4-4m4 4H7") || el.innerHTML.includes("->") && !text.includes("passed through");
+      const hasLeaveIcon = Boolean(
+        el.querySelector('[class*="leave" i], [class*="exit" i], [title*="leave" i], [aria-label*="leave" i]') || el.querySelector("button") || el.innerHTML.includes("->") && !text.includes("passed through")
+      );
       const isKnownMe = currentName && candidateName.toLowerCase() === currentName.toLowerCase();
       GameMemory.players[candidateName] = GameMemory.players[candidateName] || { cash: parsedCash, pos: 0, isMe: false };
       GameMemory.players[candidateName].cash = parsedCash;
       if (hasLeaveIcon || isKnownMe) {
         GameMemory.players[candidateName].isMe = true;
-        if (!currentName || !BOARD_LABELS_BLACKLIST.has(candidateName.toLowerCase())) {
-          GameMemory.setMyName(candidateName);
-        }
+        GameMemory.setMyName(candidateName);
         GameMemory.myCash = parsedCash;
         GameMemory.cashVerified = true;
         return;
@@ -680,6 +747,28 @@
     if (GameMemory.myName && GameMemory.players[GameMemory.myName]) {
       GameMemory.myCash = GameMemory.players[GameMemory.myName].cash;
       GameMemory.cashVerified = true;
+    }
+  }
+  function syncBoardTilePricesFromDOM() {
+    const hud = document.getElementById("rubot-hud-panel");
+    const allEls = document.querySelectorAll('div, [class*="tile"], [class*="cell"]');
+    for (let i = 0; i < allEls.length; i++) {
+      const el = allEls[i];
+      if (hud && hud.contains(el)) continue;
+      const text = el.innerText || "";
+      if (!text.includes("$") || text.length > 80) continue;
+      for (const tile of BOARD_TILES) {
+        if (!tile.group) continue;
+        if (new RegExp(`\\b${tile.name}\\b`, "i").test(text)) {
+          const m = /(\d{2,4})\s*\$|\$\s*(\d{2,4})/.exec(text);
+          if (m) {
+            const price = parseInt(m[1] || m[2], 10);
+            if (!isNaN(price) && price >= 50 && price <= 500) {
+              tile.price = price;
+            }
+          }
+        }
+      }
     }
   }
   function syncMyPropertiesFromSidebar() {
@@ -2559,8 +2648,10 @@ Respond ONLY with valid JSON:
       this.elements.valPos.textContent = `Tile #${GameMemory.myPos}`;
       this.elements.valEV.textContent = `$${GameMemory.lastDangerEV}`;
       this.elements.valRsv.textContent = `$${GameMemory.lastDynamicReserve}`;
-      if (!this.elements.nameInput.value && GameMemory.myName) {
-        this.elements.nameInput.value = GameMemory.myName;
+      if (this.elements.nameInput && document.activeElement !== this.elements.nameInput && GameMemory.myName) {
+        if (this.elements.nameInput.value !== GameMemory.myName) {
+          this.elements.nameInput.value = GameMemory.myName;
+        }
       }
     },
     logTerminal(msg) {

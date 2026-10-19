@@ -580,8 +580,10 @@ export const HUDPanel = {
         this.elements.valPos.textContent = `Tile #${GameMemory.myPos}`;
         this.elements.valEV.textContent = `$${GameMemory.lastDangerEV}`;
         this.elements.valRsv.textContent = `$${GameMemory.lastDynamicReserve}`;
-        if (!this.elements.nameInput.value && GameMemory.myName) {
-            this.elements.nameInput.value = GameMemory.myName;
+        if (this.elements.nameInput && document.activeElement !== this.elements.nameInput && GameMemory.myName) {
+            if (this.elements.nameInput.value !== GameMemory.myName) {
+                this.elements.nameInput.value = GameMemory.myName;
+            }
         }
     },
 
