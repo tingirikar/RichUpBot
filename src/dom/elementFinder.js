@@ -28,11 +28,13 @@ export function normalizeText(el) {
 }
 
 export function createDOMSnapshot() {
-    const rawButtons = document.getElementsByTagName('button');
+    const hud = document.getElementById('rubot-hud-panel');
+    const rawElements = document.querySelectorAll('button, [role="button"], [class*="button" i], [class*="btn" i]');
     const allButtons = [];
 
-    for (let i = 0; i < rawButtons.length; i++) {
-        const btn = rawButtons[i];
+    for (let i = 0; i < rawElements.length; i++) {
+        const btn = rawElements[i];
+        if (hud && hud.contains(btn)) continue;
         if (!isVisibleAndEnabled(btn)) continue;
         allButtons.push({
             el: btn,
@@ -54,6 +56,25 @@ export function createDOMSnapshot() {
         },
 
         findBuyPropertyButton() {
+            // Check modal first if open
+            const modal = document.querySelector('[role="dialog"], [class*="modal" i]');
+            if (modal && (!hud || !hud.contains(modal))) {
+                const modalBtns = modal.querySelectorAll('button, [role="button"], [class*="btn" i]');
+                for (let i = 0; i < modalBtns.length; i++) {
+                    const btn = modalBtns[i];
+                    if (!isVisibleAndEnabled(btn)) continue;
+                    const txt = normalizeText(btn);
+                    if (
+                        txt.includes('buy') &&
+                        !txt.includes('house') &&
+                        !txt.includes('hotel') &&
+                        !txt.includes('back')
+                    ) {
+                        return btn;
+                    }
+                }
+            }
+
             for (const b of allButtons) {
                 if (
                     b.text.includes('buy') &&
@@ -284,7 +305,12 @@ export function createDOMSnapshot() {
                 const el = candidates[i];
                 if (!isVisibleAndEnabled(el)) continue;
                 const text = normalizeText(el);
-                if (text === lowerName || text.startsWith(lowerName) || text.endsWith(lowerName)) {
+                if (
+                    text === lowerName || 
+                    text.startsWith(lowerName) || 
+                    text.endsWith(lowerName) ||
+                    (text.includes(lowerName) && text.length < lowerName.length + 35)
+                ) {
                     return el;
                 }
             }

@@ -102,15 +102,17 @@ export const TradeEngine = {
     },
 
     /**
-     * Scans for Mutual Monopoly Swaps:
-     * We have 2/3 of Group A, Opponent has 1/3 of Group A.
-     * Opponent has 2/3 of Group B, We have 1/3 of Group B.
+     * Proactively scans board state for win-win trade opportunities:
+     * 1. Mutual Monopoly Swaps (both players complete sets)
+     * 2. Monopoly Completing Acquisitions (we offer cash + surplus properties to get our 3rd card!)
      */
     scanMutualMonopolySwaps() {
         const opportunities = [];
         const myMissing = OpponentTracker.getMyMissingCards();
         const opponents = OpponentTracker.analyzeOpponents();
+        const safeSacrifices = OpponentTracker.getSafeTradeSacrifices();
 
+        // 1. MUTUAL MONOPOLY SWAPS (Both get sets)
         for (const myNeed of myMissing) {
             if (!myNeed.heldBy || myNeed.isUnowned) continue;
 
@@ -118,11 +120,8 @@ export const TradeEngine = {
             const targetOpp = opponents[targetOppName];
             if (!targetOpp) continue;
 
-            // Does targetOpp have a missing card that WE hold?
             for (const oppNeed of targetOpp.hungrySets) {
                 if (oppNeed.weHoldIt && oppNeed.missingTile) {
-                    // We found a Mutual Monopoly Swap!
-                    // Calculate cash sweetener needed to balance the trade
                     const myCardValue = this.scoreTileForPlayer(oppNeed.missingTile, targetOppName);
                     const theirCardValue = this.scoreTileForPlayer(myNeed.missingTile, '__ME__');
                     const cashDiff = myCardValue - theirCardValue;
@@ -132,7 +131,7 @@ export const TradeEngine = {
                     if (cashDiff > 0) {
                         cashDemand = Math.min(targetOpp.cash, Math.round(cashDiff * 0.4));
                     } else if (cashDiff < 0) {
-                        cashOffer = Math.min(GameMemory.myCash - 100, Math.round(Math.abs(cashDiff) * 0.4));
+                        cashOffer = Math.min(Math.max(0, GameMemory.myCash - 100), Math.round(Math.abs(cashDiff) * 0.4));
                     }
 
                     opportunities.push({
@@ -142,11 +141,50 @@ export const TradeEngine = {
                         cashOffer: Math.max(0, cashOffer),
                         cashDemand: Math.max(0, cashDemand),
                         summary: `SWAP: Give ${oppNeed.missingTile.name} -> Get ${myNeed.missingTile.name}`,
-                        pitch: `@${targetOppName} Let's swap ${oppNeed.missingTile.name} for ${myNeed.missingTile.name}. Both of us get a set to fight the lobby!`
+                        pitch: `@${targetOppName} Let's swap ${oppNeed.missingTile.name} for ${myNeed.missingTile.name}. Both of us get a set!`
                     });
                 }
             }
         }
+
+        // 2. MONOPOLY COMPLETER OFFERS (We need 1 card to complete our set!)
+        for (const myNeed of myMissing) {
+            if (!myNeed.heldBy || myNeed.isUnowned) continue;
+
+            const targetOppName = myNeed.heldBy;
+            // Avoid duplicate proposals for the same missing card
+            if (opportunities.some(o => o.targetOwner === targetOppName && o.myReceivedTile.id === myNeed.missingTile.id)) continue;
+
+            // Pick our best safe sacrifice property (e.g. Liverpool, New York)
+            const sacrificeTile = safeSacrifices.length > 0 ? safeSacrifices[0] : null;
+
+            if (sacrificeTile) {
+                // Offer surplus property + cash sweetener
+                const cashOffer = Math.min(Math.max(0, GameMemory.myCash - 200), Math.max(50, Math.round(myNeed.missingTile.price * 0.6)));
+                opportunities.push({
+                    targetOwner: targetOppName,
+                    myGivenTile: sacrificeTile,
+                    myReceivedTile: myNeed.missingTile,
+                    cashOffer: Math.max(0, cashOffer),
+                    cashDemand: 0,
+                    summary: `MONOPOLY ACQUISITION: Give ${sacrificeTile.name} + $${cashOffer} -> Get ${myNeed.missingTile.name}`,
+                    pitch: `@${targetOppName} I will trade ${sacrificeTile.name} + $${cashOffer} for your ${myNeed.missingTile.name}!`
+                });
+            } else if (GameMemory.myCash >= myNeed.missingTile.price + 150) {
+                // Pure cash offer: 1.5x - 2.2x tile face value
+                const cashOffer = Math.min(GameMemory.myCash - 100, Math.round(myNeed.missingTile.price * 1.8));
+                opportunities.push({
+                    targetOwner: targetOppName,
+                    myGivenTile: null,
+                    myReceivedTile: myNeed.missingTile,
+                    cashOffer: Math.max(80, cashOffer),
+                    cashDemand: 0,
+                    summary: `CASH ACQUISITION: Offer $${cashOffer} -> Get ${myNeed.missingTile.name}`,
+                    pitch: `@${targetOppName} Offering $${cashOffer} cash for your ${myNeed.missingTile.name}!`
+                });
+            }
+        }
+
         return opportunities;
     }
 };

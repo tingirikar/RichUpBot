@@ -70,9 +70,16 @@ export const MarkovRisk = {
         const reserve = this.computeDynamicReserve(GameMemory.myPos);
         const danger = this.analyzeDangerAhead(GameMemory.myPos);
 
-        // ENDGAME HOTEL SAFETY OVERRIDE:
-        // If dangerous enemy hotels are directly in front of us (in 2-12 tiles),
-        // and buying this property leaves us below our emergency reserve -> DO NOT BUY!
+        // ALWAYS_BUY takes absolute priority: if the checkbox is ON, buy immediately
+        // without any hotel-danger veto or reserve checks
+        if (CONFIG.ALWAYS_BUY_AFFORDABLE) {
+            return {
+                buy: true,
+                reason: `Acquiring ${tile ? tile.name : 'property'} ($${price}) [Always-Buy mode]`
+            };
+        }
+
+        // SMART RESERVE MODE: Veto if enemy hotels are deadly close AND we'd be wiped out
         if (danger.maxDangerWindowLoss >= 300 || danger.expectedLoss1Turn >= 120) {
             const postCash = myCash - price;
             if (postCash < reserve * 0.75) {
@@ -81,13 +88,6 @@ export const MarkovRisk = {
                     reason: `Hotel Danger Veto: Enemy hotels ($${danger.maxDangerWindowLoss} rent) ahead! Preserving $${myCash} cash to survive.`
                 };
             }
-        }
-
-        if (CONFIG.ALWAYS_BUY_AFFORDABLE) {
-            return {
-                buy: true,
-                reason: `Acquiring ${tile ? tile.name : 'property'} ($${price})`
-            };
         }
 
         if (!tile || !tile.group) {

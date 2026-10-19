@@ -40,7 +40,10 @@ export function delayClick(el, reason = '') {
                 el.scrollIntoView({ behavior: 'smooth', block: 'center' });
             }
             try {
+                if (typeof el.focus === 'function') el.focus();
+                el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
                 el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                el.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
                 el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
             } catch (_) {}
             el.click();

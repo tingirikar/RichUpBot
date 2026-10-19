@@ -3,39 +3,51 @@ import { GameMemory } from '../memory/gameMemory.js';
 /**
  * SOCKET.IO & WEBSOCKET TELEMETRY INTERCEPTOR
  * 
- * Intercepts window.WebSocket at document-start to decode
+ * Intercepts unsafeWindow.WebSocket at document-start to decode
  * RichUp's native Socket.IO wire protocol (42/api/game,[...])
  */
 export function installWebSocketHook() {
-    if (window.__richupWsHooked) return;
-    window.__richupWsHooked = true;
+    const targetWin = (typeof unsafeWindow !== 'undefined' && unsafeWindow) ? unsafeWindow : window;
+    if (targetWin.__richupWsHooked) return;
+    targetWin.__richupWsHooked = true;
 
-    const NativeWS = window.WebSocket;
+    const NativeWS = targetWin.WebSocket;
     if (!NativeWS) return;
 
-    window.WebSocket = function (...args) {
+    targetWin.WebSocket = function (...args) {
         const ws = new NativeWS(...args);
+
+        // Store active WS instance
+        GameMemory.activeSocket = ws;
+        console.log('[RichUpBot WS Hook] Native WebSocket intercepted:', args[0]);
+
         ws.addEventListener('message', (event) => {
             try {
                 const raw = typeof event.data === 'string' ? event.data : '';
-                if (!raw || raw === '2' || raw === '3') return; // Ignore heartbeat frames
+                if (!raw || raw === '2' || raw === '3') return; // Heartbeat frames
 
-                if (GameMemory.wsMessages.length >= 25) GameMemory.wsMessages.shift();
+                if (GameMemory.wsMessages.length >= 35) GameMemory.wsMessages.shift();
                 GameMemory.wsMessages.push({
                     ts: Date.now(),
                     preview: raw.slice(0, 300)
                 });
 
                 parseSocketIOFrame(raw);
-            } catch (_) {
-                // Ignore binary/unparseable frames
+            } catch (err) {
+                console.warn('[RichUpBot WS Hook] Error parsing message:', err);
             }
         });
         return ws;
     };
 
-    window.WebSocket.prototype = NativeWS.prototype;
-    Object.assign(window.WebSocket, NativeWS);
+    targetWin.WebSocket.prototype = NativeWS.prototype;
+    Object.assign(targetWin.WebSocket, NativeWS);
+
+    // Also wrap sandbox window if different
+    if (typeof window !== 'undefined' && window !== targetWin) {
+        window.__richupWsHooked = true;
+        window.WebSocket = targetWin.WebSocket;
+    }
 }
 
 function parseSocketIOFrame(raw) {
@@ -46,11 +58,16 @@ function parseSocketIOFrame(raw) {
         const arr = JSON.parse(raw.slice(bracketIdx));
         if (!Array.isArray(arr) || arr.length === 0) return;
 
-        const eventName = arr[0];
+        const eventName = String(arr[0] || '').toLowerCase();
         const payload = arr[1] || {};
 
         // 1. Sniff Room Settings & Player Identity at Match Init
-        if (eventName === 'game-started' || eventName === 'init-game' || eventName === 'game-state') {
+        if (
+            eventName.includes('game') ||
+            eventName.includes('init') ||
+            eventName.includes('state') ||
+            eventName.includes('room')
+        ) {
             if (payload.settings) {
                 if (typeof payload.settings.can_collect_rent_in_jail === 'boolean') {
                     GameMemory.roomSettings.collectRentInJail = payload.settings.can_collect_rent_in_jail;
@@ -61,51 +78,63 @@ function parseSocketIOFrame(raw) {
                 if (typeof payload.settings.pass_start_bonus === 'number') {
                     GameMemory.roomSettings.passStartBonus = payload.settings.pass_start_bonus;
                 }
+                if (typeof payload.settings.starting_cash === 'number') {
+                    GameMemory.roomSettings.startingCash = payload.settings.starting_cash;
+                    if (!GameMemory.cashVerified) {
+                        GameMemory.myCash = payload.settings.starting_cash;
+                    }
+                }
             }
 
             // Detect my player name if provided in initialization packet
             if (payload.myId && Array.isArray(payload.players)) {
-                const me = payload.players.find(p => p.id === payload.myId || p.isMe);
-                if (me && me.name) {
-                    GameMemory.setMyName(me.name);
+                const me = payload.players.find(p => p.id === payload.myId || p.isMe || p.is_me);
+                if (me && (me.name || me.username)) {
+                    GameMemory.setMyName(me.name || me.username);
                 }
             }
         }
 
         // 2. Dice Rolled: Only advance myPos if it was MY roll!
-        if (eventName === 'dice-rolled' && Array.isArray(payload.dice)) {
-            const sum = (payload.dice[0] || 0) + (payload.dice[1] || 0);
-            const isMeRolling = payload.playerName ? GameMemory.isMe(payload.playerName) : GameMemory.isMyTurn;
+        if (eventName.includes('roll') || eventName.includes('dice')) {
+            const dice = Array.isArray(payload.dice) ? payload.dice : (Array.isArray(payload) ? payload : []);
+            const sum = (dice[0] || 0) + (dice[1] || 0);
+            const pName = payload.playerName || payload.username || payload.name || payload.player;
+            const isMeRolling = pName ? GameMemory.isMe(pName) : GameMemory.isMyTurn;
 
             if (isMeRolling && sum > 0) {
                 GameMemory.myPos = (GameMemory.myPos + sum) % 40;
-            } else if (payload.playerName && GameMemory.players[payload.playerName]) {
-                const currentOppPos = GameMemory.players[payload.playerName].pos || 0;
-                GameMemory.players[payload.playerName].pos = (currentOppPos + sum) % 40;
+            } else if (pName && GameMemory.players[pName]) {
+                const currentOppPos = GameMemory.players[pName].pos || 0;
+                GameMemory.players[pName].pos = (currentOppPos + sum) % 40;
             }
         }
 
         // 3. Property Purchases
-        if (eventName === 'purchase-success' && typeof payload.blockIndex === 'number') {
-            const tileId = payload.blockIndex;
-            GameMemory.lastPurchasedBlock = tileId;
-            const buyer = payload.playerName || (GameMemory.isMyTurn ? (GameMemory.myName || '__ME__') : null);
-            if (buyer && GameMemory.ownership[tileId]) {
-                GameMemory.ownership[tileId].owner = buyer;
+        if (eventName.includes('purchase') || eventName.includes('buy')) {
+            const tileId = typeof payload.blockIndex === 'number' ? payload.blockIndex : 
+                           (typeof payload.tileId === 'number' ? payload.tileId : payload.tileIndex);
+            if (typeof tileId === 'number') {
+                GameMemory.lastPurchasedBlock = tileId;
+                const buyer = payload.playerName || payload.username || (GameMemory.isMyTurn ? (GameMemory.myName || '__ME__') : null);
+                if (buyer && GameMemory.ownership[tileId]) {
+                    GameMemory.ownership[tileId].owner = buyer;
+                }
             }
         }
 
-        // 4. Turn Ended
-        if (eventName === 'turn-ended' || eventName === 'turn-start') {
-            if (payload.activePlayer) {
-                GameMemory.isMyTurn = GameMemory.isMe(payload.activePlayer);
+        // 4. Turn Ended / Started
+        if (eventName.includes('turn')) {
+            const active = payload.activePlayer || payload.player || payload.username || payload.name;
+            if (active) {
+                GameMemory.isMyTurn = GameMemory.isMe(active);
             }
         }
 
-        // Deep sync player stats (cash & positions)
+        // Deep sync player stats (cash & positions) across all payloads
         deepSyncFromObject(payload);
     } catch (_) {
-        // Ignore JSON parse errors
+        // Ignore JSON parse errors on malformed payloads
     }
 }
 
@@ -116,21 +145,34 @@ function deepSyncFromObject(obj) {
         return;
     }
 
-    if (typeof obj.name === 'string' && typeof obj.money === 'number') {
-        const isThisPlayerMe = GameMemory.isMe(obj.name);
+    const name = obj.name || obj.username || obj.playerName || obj.player_name;
+    const rawMoney = typeof obj.money === 'number' ? obj.money : 
+                     (typeof obj.cash === 'number' ? obj.cash : 
+                     (typeof obj.balance === 'number' ? obj.balance : null));
 
-        GameMemory.players[obj.name] = {
-            cash: obj.money,
-            pos: typeof obj.position === 'number' ? obj.position : (GameMemory.players[obj.name]?.pos || 0),
-            inJail: Boolean(obj.inJail || obj.jailTurns),
+    if (typeof name === 'string' && rawMoney !== null) {
+        const isThisPlayerMe = GameMemory.isMe(name) || Boolean(obj.isMe || obj.is_me);
+
+        // If server explicitly says isMe, latch our name
+        if (obj.isMe || obj.is_me) {
+            GameMemory.setMyName(name);
+        }
+
+        const playerPos = typeof obj.position === 'number' ? obj.position : 
+                          (typeof obj.pos === 'number' ? obj.pos : (GameMemory.players[name]?.pos || 0));
+
+        GameMemory.players[name] = {
+            cash: rawMoney,
+            pos: playerPos,
+            inJail: Boolean(obj.inJail || obj.jailTurns || obj.in_jail),
             isMe: isThisPlayerMe,
             bankrupt: Boolean(obj.bankrupt)
         };
 
         if (isThisPlayerMe) {
-            GameMemory.myCash = obj.money;
+            GameMemory.myCash = rawMoney;
             GameMemory.cashVerified = true;
-            if (typeof obj.position === 'number') GameMemory.myPos = obj.position;
+            GameMemory.myPos = playerPos;
             if (typeof obj.inJail === 'boolean') GameMemory.inJail = obj.inJail;
         }
     }

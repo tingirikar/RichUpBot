@@ -103,5 +103,10 @@ export const BOARD_LABELS_BLACKLIST = new Set([
     'store', 'shop', 'inventory', 'profile', 'settings', 'rules', 'lobby', 'room', 'host',
     'change appearance', 'waiting for', 'joined the game', 'start the game', 'is playing',
     'good luck', 'even build', 'starting cash', 'randomize player order', 'create',
-    'share this game', 'share', 'share this', 'chat if not bot'
+    'share this game', 'share', 'share this', 'chat if not bot',
+    // UI button labels that must never be mistaken for usernames:
+    'copy', 'leave', 'kick', 'mute', 'report', 'trade', 'mortgage', 'upgrade', 'downgrade',
+    'end turn', 'roll the dice', 'roll again', 'auction', 'pass', 'bid', 'ok', 'done',
+    'continue', 'confirm', 'decline', 'negotiate', 'skip', 'execute', 'cancel', 'close',
+    'test', 'my properties', 'properties', 'back', 'next', 'send', 'submit'
 ]);

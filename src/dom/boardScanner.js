@@ -43,9 +43,8 @@ function detectLobbySettingsAndIdentity() {
         pageText.includes('Game started') ||
         document.querySelector('[class*="bankrupt" i]')
     );
-    if (isInGame) return;
 
-    // 1. Starting Cash Setting (e.g. "Starting cash: ... $1000")
+    // 1. Starting Cash Setting (e.g. "Starting cash ... $2000")
     const cashMatch = /Starting cash[\s\S]*?\$(\d{2,5})/i.exec(pageText);
     if (cashMatch) {
         const startCash = parseInt(cashMatch[1], 10);
@@ -57,28 +56,56 @@ function detectLobbySettingsAndIdentity() {
         }
     }
 
-    // 2. Lobby Player Identity: Only the local player has the "Change appearance" button!
-    const allButtons = Array.from(document.querySelectorAll('button, a, div'));
-    const changeApp = allButtons.find(b => {
+    if (isInGame) return;
+
+    // 2. Lobby Player Identity: In RichUp lobby, only the local player has the "Change appearance" button!
+    const allEls = Array.from(document.querySelectorAll('button, a, div, span'));
+    const changeApp = allEls.find(b => {
         if (hud && hud.contains(b)) return false;
-        return (b.innerText || '').toLowerCase().includes('change appearance');
+        return (b.innerText || '').trim().toLowerCase() === 'change appearance';
     });
 
     if (changeApp) {
-        const row = changeApp.closest('div, li, [class*="player"], [class*="user"], [class*="item"]') || changeApp.parentElement;
-        if (row) {
-            const raw = (row.innerText || '').replace(/change appearance/gi, '').replace(/host/gi, '').trim();
-            const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
-            const candidate = lines.find(l => 
-                l.length >= 2 && l.length <= 20 &&
-                !BOARD_LABELS_BLACKLIST.has(l.toLowerCase()) &&
-                !l.toLowerCase().includes('share') &&
-                !l.includes('$')
-            );
-            if (candidate && (!GameMemory.myName || GameMemory.myName.toLowerCase() !== candidate.toLowerCase())) {
-                GameMemory.setMyName(candidate);
+        // Walk up parents (up to 5 levels) to find the player container, avoiding changeApp itself
+        let parent = changeApp.parentElement;
+        let foundName = null;
+
+        for (let depth = 0; depth < 5 && parent && parent !== document.body; depth++) {
+            const childElements = Array.from(parent.querySelectorAll('div, span, p, h1, h2, h3, h4, strong, b'));
+            for (const child of childElements) {
+                if (hud && hud.contains(child) || child.contains(changeApp)) continue;
+                const txt = (child.innerText || '').trim();
+                if (
+                    txt.length >= 2 && txt.length <= 24 &&
+                    !txt.toLowerCase().includes('change appearance') &&
+                    !txt.toLowerCase().includes('host') &&
+                    !txt.toLowerCase().includes('rules') &&
+                    !txt.includes('$') &&
+                    !txt.includes('->') &&
+                    !txt.includes('\n') &&
+                    !BOARD_LABELS_BLACKLIST.has(txt.toLowerCase())
+                ) {
+                    foundName = txt;
+                    break;
+                }
             }
+            if (foundName) break;
+            parent = parent.parentElement;
         }
+
+        if (foundName && (!GameMemory.myName || GameMemory.myName.toLowerCase() !== foundName.toLowerCase())) {
+            GameMemory.setMyName(foundName);
+        }
+    }
+
+    // Fallback: Restore from localStorage if still not set
+    if (!GameMemory.myName) {
+        try {
+            const saved = localStorage.getItem('richup_bot_my_name');
+            if (saved && !BOARD_LABELS_BLACKLIST.has(saved.toLowerCase())) {
+                GameMemory.setMyName(saved);
+            }
+        } catch (_) {}
     }
 }
 
@@ -89,8 +116,12 @@ function detectLobbySettingsAndIdentity() {
 function detectLocalPlayerFromPlayerList() {
     const hud = document.getElementById('rubot-hud-panel');
 
-    // Purge any accidental bad name like "Share this game"
-    if (GameMemory.myName && (GameMemory.myName.toLowerCase().includes('share') || BOARD_LABELS_BLACKLIST.has(GameMemory.myName.toLowerCase()))) {
+    // Purge any accidental bad name
+    if (GameMemory.myName && (
+        GameMemory.myName.toLowerCase().includes('share') ||
+        GameMemory.myName.toLowerCase().includes('copy') ||
+        BOARD_LABELS_BLACKLIST.has(GameMemory.myName.toLowerCase())
+    )) {
         GameMemory.myName = null;
         try { localStorage.removeItem('richup_bot_my_name'); } catch (_) {}
     }
@@ -98,34 +129,64 @@ function detectLocalPlayerFromPlayerList() {
     const currentName = GameMemory.myName;
 
     // Search for player row containers in the scoreboard
-    const candidates = document.querySelectorAll('[class*="player"], [class*="user"], [class*="item"], [class*="row"]');
+    const candidates = document.querySelectorAll('[class*="player"], [class*="user"], [class*="item"], [class*="row"], [class*="card"]');
 
+    // FAST-PATH: If our name is already known (e.g. "matrix"), directly match our card!
+    if (currentName) {
+        const currentLower = currentName.toLowerCase();
+        for (let i = 0; i < candidates.length; i++) {
+            const el = candidates[i];
+            if (hud && hud.contains(el)) continue;
+
+            const text = el.innerText || '';
+            if (text.toLowerCase().includes(currentLower) && text.includes('$') && text.length <= 150) {
+                const cashMatch = /\$\s*(-?\d{1,5})|(-?\d{1,5})\s*\$|(-\s*\$?\d{1,5})/.exec(text);
+                if (cashMatch) {
+                    const rawCash = (cashMatch[1] || cashMatch[2] || cashMatch[3] || '').replace(/[\$\s]/g, '');
+                    const parsedCash = parseInt(rawCash, 10);
+                    if (!isNaN(parsedCash)) {
+                        GameMemory.myCash = parsedCash;
+                        GameMemory.cashVerified = true;
+                        GameMemory.players[currentName] = GameMemory.players[currentName] || { cash: parsedCash, pos: 0, isMe: true };
+                        GameMemory.players[currentName].cash = parsedCash;
+                        GameMemory.players[currentName].isMe = true;
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    // GENERAL SCAN: Scan all candidate player rows for cash and [->] leave icon
     for (let i = 0; i < candidates.length; i++) {
         const el = candidates[i];
         if (hud && hud.contains(el)) continue;
 
         const text = el.innerText || '';
-        if (!text.includes('$') || text.length > 100) continue;
+        // Must contain $ and not be a massive DOM dump
+        if (!text.includes('$') || text.length > 120) continue;
 
-        // Extract cash: $X or -$X or $-X
-        const cashMatch = /(-?\$?\d{1,5}|\$-?\d{1,5})/.exec(text);
+        // Extract cash: handles $500, $-185, -$185, -185 adjacent to $
+        const cashMatch = /\$\s*(-?\d{1,5})|(-?\d{1,5})\s*\$|(-\s*\$?\d{1,5})/.exec(text);
         if (!cashMatch) continue;
 
-        const rawCash = cashMatch[1].replace(/\$/g, '');
+        const rawCash = (cashMatch[1] || cashMatch[2] || cashMatch[3] || '').replace(/[\$\s]/g, '');
         const parsedCash = parseInt(rawCash, 10);
         if (isNaN(parsedCash)) continue;
 
-        // Parse player username: extract all text before the $
+        // Parse player username: extract text before the $ sign
         const beforeDollar = text.split('$')[0].trim();
         const candidateLines = beforeDollar.split('\n').map(l => l.trim()).filter(Boolean);
 
         let candidateName = null;
         for (const line of candidateLines) {
-            const clean = line.replace(/[->\]]+/g, '').trim();
+            // Strip arrow/icon characters and trailing/leading noise
+            const clean = line.replace(/[->\]\[→←\|]/g, '').trim();
             if (
                 clean.length >= 2 && clean.length <= 24 &&
                 !BOARD_LABELS_BLACKLIST.has(clean.toLowerCase()) &&
                 !clean.toLowerCase().includes('share') &&
+                !clean.toLowerCase().includes('copy') &&
                 !/^\d+$/.test(clean)
             ) {
                 candidateName = clean;
@@ -340,40 +401,51 @@ function scanTextNodesAndActivityLogs() {
 }
 
 function parseActivityLogLine(line) {
-    let m = /^(.+?)\s+bought a house in\s+(.+?)\.?$/i.exec(line);
-    if (m) {
-        const tile = TILE_BY_NAME[m[2].trim().toLowerCase()];
-        if (tile && GameMemory.ownership[tile.id]) {
-            GameMemory.ownership[tile.id].owner = m[1].trim();
-            GameMemory.ownership[tile.id].houses = Math.min(5, (GameMemory.ownership[tile.id].houses || 0) + 1);
-            GameMemory.processedLogs.add(line);
+    if (line.includes('bought a house in')) {
+        for (const tile of BOARD_TILES) {
+            if (tile.group && new RegExp(`\\b${tile.name}\\b`, 'i').test(line)) {
+                const buyerPart = line.split(/bought a house in/i)[0].trim();
+                const cleanBuyer = buyerPart.replace(/[^\w\s-]/g, '').trim();
+                if (cleanBuyer && GameMemory.ownership[tile.id]) {
+                    GameMemory.ownership[tile.id].owner = cleanBuyer;
+                    GameMemory.ownership[tile.id].houses = Math.min(5, (GameMemory.ownership[tile.id].houses || 0) + 1);
+                    GameMemory.processedLogs.add(line);
+                    return;
+                }
+            }
         }
-        return;
     }
 
-    m = /^(.+?)\s+bought a hotel in\s+(.+?)\.?$/i.exec(line);
-    if (m) {
-        const tile = TILE_BY_NAME[m[2].trim().toLowerCase()];
-        if (tile && GameMemory.ownership[tile.id]) {
-            GameMemory.ownership[tile.id].owner = m[1].trim();
-            GameMemory.ownership[tile.id].houses = 5;
-            GameMemory.processedLogs.add(line);
+    if (line.includes('bought a hotel in')) {
+        for (const tile of BOARD_TILES) {
+            if (tile.group && new RegExp(`\\b${tile.name}\\b`, 'i').test(line)) {
+                const buyerPart = line.split(/bought a hotel in/i)[0].trim();
+                const cleanBuyer = buyerPart.replace(/[^\w\s-]/g, '').trim();
+                if (cleanBuyer && GameMemory.ownership[tile.id]) {
+                    GameMemory.ownership[tile.id].owner = cleanBuyer;
+                    GameMemory.ownership[tile.id].houses = 5;
+                    GameMemory.processedLogs.add(line);
+                    return;
+                }
+            }
         }
-        return;
     }
 
-    m = /^(.+?)\s+bought\s+([A-Za-z\s]+?)(?:\s+by auction.*|\.?)$/i.exec(line);
-    if (m) {
-        const rawTile = m[2].trim().toLowerCase();
-        const tile = TILE_BY_NAME[rawTile];
-        if (tile && GameMemory.ownership[tile.id]) {
-            GameMemory.ownership[tile.id].owner = m[1].trim();
-            GameMemory.processedLogs.add(line);
+    if (line.includes('bought') && !line.includes('house') && !line.includes('hotel')) {
+        for (const tile of BOARD_TILES) {
+            if (tile.group && new RegExp(`\\b${tile.name}\\b`, 'i').test(line)) {
+                const buyerPart = line.split(/bought/i)[0].trim();
+                const cleanBuyer = buyerPart.replace(/[^\w\s-]/g, '').trim();
+                if (cleanBuyer && GameMemory.ownership[tile.id]) {
+                    GameMemory.ownership[tile.id].owner = cleanBuyer;
+                    GameMemory.processedLogs.add(line);
+                    return;
+                }
+            }
         }
-        return;
     }
 
-    m = /^(.+?)\s+bankrupted/i.exec(line);
+    let m = /^(.+?)\s+bankrupted/i.exec(line);
     if (m) {
         const bankruptPlayer = m[1].trim();
         for (const id of Object.keys(GameMemory.ownership)) {

@@ -12,6 +12,7 @@ const banner = `// ==UserScript==
 // @match        https://richup.io/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM.xmlHttpRequest
+// @grant        unsafeWindow
 // @connect      localhost
 // @connect      127.0.0.1
 // @run-at       document-start

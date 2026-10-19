@@ -4,12 +4,15 @@ import { BOARD_LABELS_BLACKLIST } from '../data/boardTiles.js';
 import { OllamaClient } from '../engine/ollamaClient.js';
 
 /**
- * MODERN VIOLET RESIZABLE HUD PANEL
- * 
+ * PREMIUM GLASSMORPHISM HUD PANEL v4.0
+ *
  * Features:
- * 1. Sleek, minimal dark-violet color palette
- * 2. Fully resizable with position & dimension persistence in localStorage
- * 3. Advisor Mode: Asks for human confirmation with [EXECUTE] / [SKIP]
+ * 1. Deep violet dark glassmorphism with neon glow accents
+ * 2. Animated stat cards with gradient text
+ * 3. Pill-style toggle switches (replaces raw checkboxes)
+ * 4. Glowing terminal with HH:MM:SS timestamps
+ * 5. Fully resizable + draggable with localStorage persistence
+ * 6. Advisor Mode with animated proposal card
  */
 export const HUDPanel = {
     elements: {},
@@ -26,12 +29,21 @@ export const HUDPanel = {
     inject(onToggleMaster, onExecuteAdvisor, onSkipAdvisor) {
         if (document.getElementById('rubot-hud-panel')) return;
 
-        // Restore saved position & size from localStorage
-        let savedGeom = { left: 20, top: 20, width: 330, height: 460 };
+        // Restore saved position & size
+        let savedGeom = { left: 20, top: 20, width: 340, height: 560 };
         try {
             const raw = localStorage.getItem('richup_hud_geometry');
             if (raw) savedGeom = Object.assign(savedGeom, JSON.parse(raw));
         } catch (_) {}
+
+        // Load Google Fonts
+        if (!document.getElementById('rubot-font-link')) {
+            const link = document.createElement('link');
+            link.id = 'rubot-font-link';
+            link.rel = 'stylesheet';
+            link.href = 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap';
+            document.head.appendChild(link);
+        }
 
         const style = document.createElement('style');
         style.id = 'rubot-hud-style';
@@ -42,292 +54,258 @@ export const HUDPanel = {
                 left: ${savedGeom.left}px;
                 width: ${savedGeom.width}px;
                 height: ${savedGeom.height}px;
-                min-width: 290px;
-                min-height: 380px;
-                max-width: 550px;
-                max-height: 800px;
-                resize: both;
-                overflow: hidden;
-                background: rgba(16, 11, 28, 0.96);
-                backdrop-filter: blur(12px);
-                border: 1px solid #7c3aed;
-                border-radius: 10px;
-                box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6), 0 0 15px rgba(124, 58, 237, 0.25);
+                min-width: 300px; min-height: 420px;
+                max-width: 560px; max-height: 840px;
+                resize: both; overflow: hidden;
+                background: linear-gradient(160deg, rgba(10,7,22,0.97) 0%, rgba(18,10,38,0.97) 100%);
+                backdrop-filter: blur(20px) saturate(180%);
+                border: 1px solid rgba(139,92,246,0.35);
+                border-radius: 16px;
+                box-shadow: 0 0 0 1px rgba(139,92,246,0.08), 0 8px 32px rgba(0,0,0,0.7), 0 0 60px rgba(109,40,217,0.12), inset 0 1px 0 rgba(255,255,255,0.06);
                 color: #f3e8ff;
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-                font-size: 11.5px;
-                z-index: 9999999;
-                display: flex;
-                flex-direction: column;
-                user-select: none;
+                font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+                font-size: 11.5px; z-index: 9999999;
+                display: flex; flex-direction: column; user-select: none;
             }
             .rubot-header {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                padding: 9px 14px;
-                background: linear-gradient(90deg, #6d28d9, #4c1d95);
-                cursor: grab;
-                font-weight: 700;
-                letter-spacing: 0.5px;
+                display: flex; justify-content: space-between; align-items: center;
+                padding: 13px 16px 12px;
+                background: linear-gradient(90deg, rgba(109,40,217,0.6) 0%, rgba(76,29,149,0.5) 60%, rgba(139,92,246,0.3) 100%);
+                border-bottom: 1px solid rgba(139,92,246,0.25);
+                border-radius: 16px 16px 0 0; cursor: grab; flex-shrink: 0;
             }
-            .rubot-title {
-                display: flex;
-                align-items: center;
-                gap: 6px;
-                color: #fff;
+            .rubot-title-wrap { display: flex; align-items: center; gap: 9px; }
+            .rubot-logo {
+                width: 28px; height: 28px; border-radius: 8px;
+                background: linear-gradient(135deg, #8b5cf6, #6d28d9);
+                display: flex; align-items: center; justify-content: center;
+                font-size: 14px; flex-shrink: 0;
+                box-shadow: 0 2px 8px rgba(109,40,217,0.6), inset 0 1px 0 rgba(255,255,255,0.15);
             }
+            .rubot-title-text { display: flex; flex-direction: column; line-height: 1; }
+            .rubot-title-main { font-size: 12px; font-weight: 800; color: #fff; letter-spacing: 1.5px; text-shadow: 0 0 12px rgba(167,139,250,0.8); }
+            .rubot-title-sub { font-size: 8.5px; font-weight: 500; color: rgba(196,181,253,0.7); letter-spacing: 0.5px; margin-top: 2px; }
             .rubot-badge {
-                font-size: 9.5px;
-                font-weight: 700;
-                padding: 2px 7px;
-                border-radius: 4px;
-                background: rgba(255, 255, 255, 0.15);
-                color: #e9d5ff;
+                font-size: 8.5px; font-weight: 700; padding: 3px 9px;
+                border-radius: 20px; letter-spacing: 0.8px;
+                background: rgba(255,255,255,0.08); color: rgba(196,181,253,0.8);
+                border: 1px solid rgba(139,92,246,0.2); transition: all 0.3s ease;
             }
             .rubot-badge.active {
-                background: #10b981;
-                color: #fff;
+                background: linear-gradient(90deg, #10b981, #059669); color: #fff;
+                border-color: transparent; box-shadow: 0 0 10px rgba(16,185,129,0.5);
+                animation: rubot-badge-glow 2s ease-in-out infinite;
+            }
+            @keyframes rubot-badge-glow {
+                0%, 100% { box-shadow: 0 0 8px rgba(16,185,129,0.4); }
+                50% { box-shadow: 0 0 18px rgba(16,185,129,0.7); }
             }
             .rubot-body {
-                padding: 12px;
-                display: flex;
-                flex-direction: column;
-                gap: 9px;
-                flex: 1;
-                overflow-y: auto;
+                padding: 12px; display: flex; flex-direction: column;
+                gap: 10px; flex: 1; overflow-y: auto;
+                scrollbar-width: thin; scrollbar-color: rgba(139,92,246,0.4) transparent;
             }
-            .rubot-row {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
+            .rubot-body::-webkit-scrollbar { width: 4px; }
+            .rubot-body::-webkit-scrollbar-track { background: transparent; }
+            .rubot-body::-webkit-scrollbar-thumb { background: rgba(139,92,246,0.4); border-radius: 2px; }
+            .rubot-section-label {
+                font-size: 8px; font-weight: 700; letter-spacing: 1.5px;
+                color: rgba(139,92,246,0.7); text-transform: uppercase; margin-bottom: -4px;
             }
-            .rubot-stat-grid {
-                display: grid;
-                grid-template-columns: 1fr 1fr;
-                gap: 6px;
-                background: rgba(255, 255, 255, 0.04);
-                padding: 8px;
-                border-radius: 6px;
-                border: 1px solid rgba(139, 92, 246, 0.2);
+            .rubot-identity-row {
+                display: flex; align-items: center; gap: 8px;
+                background: rgba(255,255,255,0.03);
+                border: 1px solid rgba(139,92,246,0.18);
+                border-radius: 10px; padding: 8px 10px;
             }
-            .rubot-stat-label {
-                font-size: 9px;
-                font-weight: 600;
-                color: #a78bfa;
-                text-transform: uppercase;
-                letter-spacing: 0.5px;
-            }
-            .rubot-stat-val {
-                font-size: 13px;
-                font-weight: 700;
-                color: #fff;
-            }
-            .rubot-stat-val.violet { color: #c084fc; }
-            .rubot-stat-val.green { color: #34d399; }
-            .rubot-stat-val.amber { color: #fbbf24; }
+            .rubot-identity-icon { font-size: 14px; flex-shrink: 0; }
             .rubot-name-input {
-                background: rgba(0, 0, 0, 0.4);
-                border: 1px solid #7c3aed;
-                color: #fff;
-                font-family: inherit;
-                font-size: 11px;
-                padding: 4px 8px;
-                border-radius: 5px;
-                width: 120px;
-                outline: none;
+                flex: 1; background: transparent; border: none; color: #fff;
+                font-family: 'Inter', sans-serif; font-size: 11.5px; font-weight: 600;
+                outline: none; min-width: 0;
             }
-            .rubot-name-input:focus {
-                border-color: #a78bfa;
-                box-shadow: 0 0 8px rgba(167, 139, 250, 0.5);
+            .rubot-name-input::placeholder { color: rgba(167,139,250,0.4); }
+            .rubot-stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+            .rubot-stat-card {
+                background: rgba(255,255,255,0.03);
+                border: 1px solid rgba(139,92,246,0.15);
+                border-radius: 10px; padding: 9px 10px;
+                display: flex; flex-direction: column; gap: 4px;
+                transition: border-color 0.2s, box-shadow 0.2s;
             }
-            .rubot-mode-selector {
-                display: flex;
-                background: rgba(0, 0, 0, 0.4);
-                border-radius: 6px;
-                padding: 3px;
-                border: 1px solid rgba(139, 92, 246, 0.3);
+            .rubot-stat-card:hover { border-color: rgba(139,92,246,0.35); box-shadow: 0 0 12px rgba(109,40,217,0.1); }
+            .rubot-stat-label { font-size: 8.5px; font-weight: 600; color: rgba(167,139,250,0.6); text-transform: uppercase; letter-spacing: 0.8px; }
+            .rubot-stat-val {
+                font-size: 17px; font-weight: 800; line-height: 1;
+                background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            }
+            .rubot-stat-val.green { background-image: linear-gradient(135deg, #34d399, #10b981); }
+            .rubot-stat-val.violet { background-image: linear-gradient(135deg, #c084fc, #a78bfa); }
+            .rubot-stat-val.amber { background-image: linear-gradient(135deg, #fbbf24, #f59e0b); }
+            .rubot-stat-val.blue { background-image: linear-gradient(135deg, #60a5fa, #3b82f6); }
+            .rubot-stat-val.red { background-image: linear-gradient(135deg, #f87171, #ef4444); }
+            .rubot-mode-wrap {
+                display: flex; background: rgba(0,0,0,0.35);
+                border-radius: 10px; padding: 3px;
+                border: 1px solid rgba(139,92,246,0.2); gap: 3px;
             }
             .rubot-mode-btn {
-                flex: 1;
-                background: transparent;
-                border: none;
-                color: #c4b5fd;
-                font-weight: 600;
-                font-size: 10.5px;
-                padding: 5px;
-                border-radius: 4px;
-                cursor: pointer;
-                transition: all 0.2s;
+                flex: 1; background: transparent; border: none;
+                color: rgba(196,181,253,0.6); font-family: 'Inter', sans-serif;
+                font-weight: 700; font-size: 10px; letter-spacing: 0.5px;
+                padding: 6px 4px; border-radius: 7px; cursor: pointer; transition: all 0.2s ease;
             }
+            .rubot-mode-btn:hover { color: #c4b5fd; }
             .rubot-mode-btn.active {
-                background: #7c3aed;
-                color: #fff;
-                box-shadow: 0 2px 6px rgba(124, 58, 237, 0.4);
+                background: linear-gradient(135deg, #7c3aed, #6d28d9); color: #fff;
+                box-shadow: 0 2px 8px rgba(109,40,217,0.45), inset 0 1px 0 rgba(255,255,255,0.1);
             }
             .rubot-advisor-box {
-                background: linear-gradient(135deg, rgba(124, 58, 237, 0.25), rgba(76, 29, 149, 0.35));
-                border: 1px solid #a78bfa;
-                border-radius: 6px;
-                padding: 10px;
-                display: flex;
-                flex-direction: column;
-                gap: 8px;
-                animation: rubot-pulse 2s infinite ease-in-out;
+                background: linear-gradient(135deg, rgba(124,58,237,0.15) 0%, rgba(76,29,149,0.2) 100%);
+                border: 1px solid rgba(167,139,250,0.5);
+                border-radius: 10px; padding: 11px 12px;
+                display: flex; flex-direction: column; gap: 9px;
+                animation: rubot-adv-pulse 2.5s ease-in-out infinite;
+                position: relative; overflow: hidden;
             }
-            @keyframes rubot-pulse {
-                0%, 100% { border-color: #a78bfa; }
-                50% { border-color: #c084fc; box-shadow: 0 0 10px rgba(192, 132, 252, 0.3); }
+            .rubot-advisor-box::before {
+                content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px;
+                background: linear-gradient(90deg, transparent, rgba(167,139,250,0.7), transparent);
             }
-            .rubot-advisor-title {
-                font-weight: 700;
-                font-size: 11.5px;
-                color: #e9d5ff;
+            @keyframes rubot-adv-pulse {
+                0%, 100% { box-shadow: 0 0 10px rgba(124,58,237,0.2); }
+                50% { box-shadow: 0 0 22px rgba(167,139,250,0.35); }
             }
-            .rubot-advisor-desc {
-                font-size: 10.5px;
-                color: #ddd6fe;
-                line-height: 1.3;
+            .rubot-adv-header { display: flex; align-items: center; gap: 7px; }
+            .rubot-adv-dot {
+                width: 7px; height: 7px; border-radius: 50%; background: #a78bfa; flex-shrink: 0;
+                box-shadow: 0 0 6px rgba(167,139,250,0.8);
+                animation: rubot-dot-blink 1.2s ease-in-out infinite;
             }
-            .rubot-advisor-btns {
-                display: flex;
-                gap: 6px;
-            }
+            @keyframes rubot-dot-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+            .rubot-advisor-title { font-weight: 700; font-size: 10.5px; color: #e9d5ff; letter-spacing: 0.3px; }
+            .rubot-advisor-desc { font-size: 10.5px; color: #ddd6fe; line-height: 1.45; }
+            .rubot-advisor-btns { display: flex; gap: 7px; }
             .rubot-adv-btn {
-                flex: 1;
-                padding: 6px;
-                border: none;
-                border-radius: 5px;
-                font-weight: 700;
-                font-size: 11px;
-                cursor: pointer;
-                transition: all 0.15s;
+                flex: 1; padding: 7px; border: none; border-radius: 8px;
+                font-family: 'Inter', sans-serif; font-weight: 700; font-size: 10.5px;
+                letter-spacing: 0.3px; cursor: pointer; transition: all 0.15s ease;
             }
             .rubot-adv-btn.exec {
-                background: #10b981;
-                color: #fff;
+                background: linear-gradient(135deg, #10b981, #059669); color: #fff;
+                box-shadow: 0 3px 10px rgba(16,185,129,0.35);
             }
-            .rubot-adv-btn.exec:hover {
-                background: #059669;
-            }
+            .rubot-adv-btn.exec:hover { box-shadow: 0 4px 15px rgba(16,185,129,0.55); transform: translateY(-1px); }
             .rubot-adv-btn.skip {
-                background: rgba(255, 255, 255, 0.15);
-                color: #f3e8ff;
+                background: rgba(255,255,255,0.07); color: #c4b5fd;
+                border: 1px solid rgba(139,92,246,0.25);
             }
-            .rubot-adv-btn.skip:hover {
-                background: rgba(255, 255, 255, 0.25);
-            }
+            .rubot-adv-btn.skip:hover { background: rgba(255,255,255,0.12); }
             .rubot-master-btn {
-                background: linear-gradient(135deg, #7c3aed, #6d28d9);
-                border: none;
-                color: #fff;
-                padding: 8px 12px;
-                font-weight: 700;
-                font-size: 12px;
-                border-radius: 6px;
-                cursor: pointer;
-                box-shadow: 0 4px 12px rgba(124, 58, 237, 0.35);
-                transition: all 0.2s;
+                background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 50%, #5b21b6 100%);
+                border: none; color: #fff; padding: 11px 16px;
+                font-family: 'Inter', sans-serif; font-weight: 800; font-size: 12px;
+                letter-spacing: 1px; border-radius: 10px; cursor: pointer;
+                box-shadow: 0 4px 15px rgba(109,40,217,0.45), inset 0 1px 0 rgba(255,255,255,0.12);
+                transition: all 0.2s ease; position: relative; overflow: hidden;
             }
-            .rubot-master-btn:hover {
-                background: linear-gradient(135deg, #8b5cf6, #7c3aed);
-                box-shadow: 0 4px 16px rgba(139, 92, 246, 0.5);
+            .rubot-master-btn::after {
+                content: ''; position: absolute; top: 0; left: -100%; width: 50%; height: 100%;
+                background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent);
+                transition: left 0.5s ease;
             }
+            .rubot-master-btn:hover::after { left: 150%; }
+            .rubot-master-btn:hover { box-shadow: 0 6px 22px rgba(109,40,217,0.6); transform: translateY(-1px); }
+            .rubot-master-btn:active { transform: translateY(0); }
             .rubot-master-btn.active {
-                background: linear-gradient(135deg, #10b981, #059669);
-                box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
+                background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+                box-shadow: 0 4px 15px rgba(16,185,129,0.45), inset 0 1px 0 rgba(255,255,255,0.12);
             }
-            .rubot-toggles {
-                display: grid;
-                grid-template-columns: 1fr 1fr;
-                gap: 5px;
-                font-size: 10px;
-                color: #c4b5fd;
-            }
-            .rubot-toggles label {
-                display: flex;
-                align-items: center;
-                gap: 5px;
-                cursor: pointer;
-            }
+            .rubot-master-btn.active:hover { box-shadow: 0 6px 22px rgba(16,185,129,0.6); }
             .rubot-ollama-section {
-                background: rgba(124, 58, 237, 0.08);
-                border: 1px solid rgba(139, 92, 246, 0.25);
-                border-radius: 6px;
-                padding: 6px 8px;
-                display: flex;
-                flex-direction: column;
-                gap: 5px;
+                background: rgba(109,40,217,0.06);
+                border: 1px solid rgba(139,92,246,0.2);
+                border-radius: 10px; padding: 9px 11px;
+                display: flex; flex-direction: column; gap: 7px;
             }
+            .rubot-ollama-header { display: flex; align-items: center; gap: 8px; }
+            .rubot-toggle-pill { position: relative; width: 34px; height: 18px; flex-shrink: 0; }
+            .rubot-toggle-pill input { opacity: 0; width: 0; height: 0; position: absolute; }
+            .rubot-pill-track {
+                position: absolute; inset: 0; background: rgba(255,255,255,0.1);
+                border-radius: 20px; border: 1px solid rgba(139,92,246,0.3);
+                cursor: pointer; transition: all 0.25s ease;
+            }
+            .rubot-pill-track::after {
+                content: ''; position: absolute; left: 2px; top: 50%; transform: translateY(-50%);
+                width: 12px; height: 12px; border-radius: 50%;
+                background: rgba(196,181,253,0.5); transition: all 0.25s ease;
+            }
+            .rubot-toggle-pill input:checked + .rubot-pill-track {
+                background: linear-gradient(135deg, #7c3aed, #6d28d9);
+                border-color: #8b5cf6; box-shadow: 0 0 8px rgba(124,58,237,0.5);
+            }
+            .rubot-toggle-pill input:checked + .rubot-pill-track::after { left: calc(100% - 14px); background: #fff; }
+            .rubot-ollama-label { font-size: 11px; font-weight: 700; color: #c4b5fd; flex: 1; }
             .rubot-btn-ping {
-                background: rgba(139, 92, 246, 0.2);
-                border: 1px solid rgba(139, 92, 246, 0.4);
-                color: #e9d5ff;
-                padding: 2px 7px;
-                border-radius: 4px;
-                font-size: 9.5px;
-                font-weight: 600;
-                cursor: pointer;
+                background: rgba(139,92,246,0.15); border: 1px solid rgba(139,92,246,0.35);
+                color: #c4b5fd; padding: 3px 9px; border-radius: 6px;
+                font-family: 'Inter', sans-serif; font-size: 9.5px; font-weight: 600;
+                cursor: pointer; transition: all 0.15s; letter-spacing: 0.3px;
             }
-            .rubot-btn-ping:hover {
-                background: rgba(139, 92, 246, 0.4);
-            }
-            .rubot-ollama-fields {
-                display: flex;
-                flex-direction: column;
-                gap: 4px;
-                margin-top: 3px;
-            }
-            .rubot-field-row {
-                display: flex;
-                align-items: center;
-                gap: 6px;
-            }
-            .rubot-field-label {
-                font-size: 9.5px;
-                color: #a78bfa;
-                min-width: 36px;
-            }
+            .rubot-btn-ping:hover { background: rgba(139,92,246,0.3); color: #e9d5ff; border-color: rgba(139,92,246,0.55); }
+            .rubot-ollama-fields { display: flex; flex-direction: column; gap: 5px; }
+            .rubot-field-row { display: flex; align-items: center; gap: 7px; }
+            .rubot-field-label { font-size: 9.5px; font-weight: 600; color: rgba(167,139,250,0.6); min-width: 38px; }
             .rubot-mini-input {
-                flex: 1;
-                background: rgba(0, 0, 0, 0.35);
-                border: 1px solid rgba(139, 92, 246, 0.3);
-                border-radius: 4px;
-                color: #fff;
-                padding: 2px 6px;
-                font-size: 10px;
-                font-family: inherit;
+                flex: 1; background: rgba(0,0,0,0.3);
+                border: 1px solid rgba(139,92,246,0.2); border-radius: 6px;
+                color: #e9d5ff; padding: 3px 7px;
+                font-family: 'JetBrains Mono', monospace; font-size: 9.5px;
+                outline: none; transition: border-color 0.2s;
             }
-            .rubot-mini-input:focus {
-                outline: none;
-                border-color: #8b5cf6;
+            .rubot-mini-input:focus { border-color: rgba(139,92,246,0.6); }
+            .rubot-ollama-status { font-size: 9px; color: rgba(167,139,250,0.5); font-style: italic; letter-spacing: 0.2px; }
+            .rubot-toggles-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+            .rubot-toggle-row {
+                display: flex; align-items: center; gap: 7px;
+                background: rgba(255,255,255,0.02);
+                border: 1px solid rgba(139,92,246,0.1); border-radius: 8px;
+                padding: 6px 8px; cursor: pointer; transition: border-color 0.2s;
             }
-            .rubot-ollama-status {
-                font-size: 9px;
-                color: #a78bfa;
-                font-style: italic;
+            .rubot-toggle-row:hover { border-color: rgba(139,92,246,0.25); }
+            .rubot-toggle-row-label { font-size: 10px; font-weight: 600; color: rgba(196,181,253,0.75); flex: 1; line-height: 1.2; }
+            .rubot-terminal-wrap {
+                flex: 1; display: flex; flex-direction: column;
+                min-height: 80px; background: rgba(0,0,0,0.45);
+                border: 1px solid rgba(139,92,246,0.15); border-radius: 10px; overflow: hidden;
             }
+            .rubot-terminal-header {
+                display: flex; align-items: center; justify-content: space-between;
+                padding: 5px 9px; background: rgba(139,92,246,0.07);
+                border-bottom: 1px solid rgba(139,92,246,0.12);
+            }
+            .rubot-terminal-title { font-size: 8px; font-weight: 700; color: rgba(139,92,246,0.7); letter-spacing: 1.5px; text-transform: uppercase; }
+            .rubot-terminal-dots { display: flex; gap: 4px; }
+            .rubot-terminal-dots span { width: 6px; height: 6px; border-radius: 50%; }
+            .rubot-terminal-dots span:nth-child(1) { background: rgba(239,68,68,0.5); }
+            .rubot-terminal-dots span:nth-child(2) { background: rgba(251,191,36,0.5); }
+            .rubot-terminal-dots span:nth-child(3) { background: rgba(52,211,153,0.5); }
             .rubot-terminal {
-                flex: 1;
-                min-height: 80px;
-                background: rgba(0, 0, 0, 0.4);
-                border: 1px solid rgba(139, 92, 246, 0.2);
-                border-radius: 6px;
-                padding: 7px;
-                overflow-y: auto;
+                flex: 1; overflow-y: auto; padding: 7px 9px;
                 font-family: 'JetBrains Mono', Consolas, monospace;
-                font-size: 9.5px;
-                color: #c4b5fd;
-                display: flex;
-                flex-direction: column-reverse;
+                font-size: 9.5px; color: rgba(196,181,253,0.75);
+                display: flex; flex-direction: column-reverse; gap: 1px;
+                scrollbar-width: thin; scrollbar-color: rgba(139,92,246,0.3) transparent;
             }
-            .rubot-terminal .log-line {
-                margin-bottom: 2px;
-                word-break: break-all;
-            }
-            .rubot-terminal .log-line.green { color: #34d399; }
-            .rubot-terminal .log-line.violet { color: #c084fc; }
-            .rubot-terminal .log-line.amber { color: #fbbf24; }
+            .rubot-terminal::-webkit-scrollbar { width: 3px; }
+            .rubot-terminal::-webkit-scrollbar-thumb { background: rgba(139,92,246,0.3); border-radius: 2px; }
+            .rubot-terminal .log-line { padding: 1.5px 0; word-break: break-word; line-height: 1.4; display: flex; gap: 5px; }
+            .rubot-terminal .log-ts { color: rgba(109,40,217,0.5); flex-shrink: 0; font-size: 8.5px; }
+            .rubot-terminal .log-line.green .log-msg { color: #34d399; }
+            .rubot-terminal .log-line.violet .log-msg { color: #c084fc; }
+            .rubot-terminal .log-line.amber .log-msg { color: #fbbf24; }
+            .rubot-terminal .log-line.red .log-msg { color: #f87171; }
         `;
         document.head.appendChild(style);
 
@@ -335,85 +313,119 @@ export const HUDPanel = {
         panel.id = 'rubot-hud-panel';
         panel.innerHTML = `
             <div class="rubot-header" id="rubot-hud-drag">
-                <span class="rubot-title">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
-                    RICHUP BOT
-                </span>
+                <div class="rubot-title-wrap">
+                    <div class="rubot-logo">🎲</div>
+                    <div class="rubot-title-text">
+                        <span class="rubot-title-main">RICHUP BOT</span>
+                        <span class="rubot-title-sub">AI-POWERED MONOPOLY ENGINE</span>
+                    </div>
+                </div>
                 <span class="rubot-badge" id="rubot-phase-badge">STANDBY</span>
             </div>
-            <div class="rubot-body">
-                <div class="rubot-row">
-                    <span style="font-weight:600; color:#c4b5fd;">MY NAME:</span>
-                    <input type="text" id="rubot-input-myname" class="rubot-name-input" placeholder="Your username" value="${GameMemory.myName || ''}">
-                </div>
 
-                <div class="rubot-mode-selector">
-                    <button class="rubot-mode-btn active" id="rubot-btn-mode-auto">AUTO-PILOT</button>
-                    <button class="rubot-mode-btn" id="rubot-btn-mode-advisor">ADVISOR MODE</button>
+            <div class="rubot-body">
+
+                <div class="rubot-identity-row">
+                    <span class="rubot-identity-icon">👤</span>
+                    <input type="text" id="rubot-input-myname" class="rubot-name-input" placeholder="Your in-game username…" value="${GameMemory.myName || ''}">
                 </div>
 
                 <div class="rubot-stat-grid">
-                    <div>
-                        <div class="rubot-stat-label">CASH</div>
+                    <div class="rubot-stat-card">
+                        <div class="rubot-stat-label">💰 My Cash</div>
                         <div class="rubot-stat-val green" id="rubot-val-cash">$${GameMemory.myCash}</div>
                     </div>
-                    <div>
-                        <div class="rubot-stat-label">POSITION</div>
+                    <div class="rubot-stat-card">
+                        <div class="rubot-stat-label">📍 Position</div>
                         <div class="rubot-stat-val violet" id="rubot-val-pos">Tile #${GameMemory.myPos}</div>
                     </div>
-                    <div>
-                        <div class="rubot-stat-label">DANGER EV</div>
+                    <div class="rubot-stat-card">
+                        <div class="rubot-stat-label">⚠️ Danger EV</div>
                         <div class="rubot-stat-val amber" id="rubot-val-ev">$0</div>
                     </div>
-                    <div>
-                        <div class="rubot-stat-label">SURVIVAL RESERVE</div>
-                        <div class="rubot-stat-val violet" id="rubot-val-rsv">$${CONFIG.BASE_MIN_RESERVE}</div>
+                    <div class="rubot-stat-card">
+                        <div class="rubot-stat-label">🛡️ Reserve</div>
+                        <div class="rubot-stat-val blue" id="rubot-val-rsv">$${CONFIG.BASE_MIN_RESERVE}</div>
                     </div>
                 </div>
 
-                <!-- Advisor Decision Confirmation Box (Hidden until action proposed) -->
+                <div class="rubot-mode-wrap">
+                    <button class="rubot-mode-btn active" id="rubot-btn-mode-auto">🤖 AUTO-PILOT</button>
+                    <button class="rubot-mode-btn" id="rubot-btn-mode-advisor">🧠 ADVISOR</button>
+                </div>
+
                 <div id="rubot-advisor-box" class="rubot-advisor-box" style="display: none;">
-                    <div class="rubot-advisor-title" id="rubot-adv-title">ADVISOR RECOMMENDATION</div>
-                    <div class="rubot-advisor-desc" id="rubot-adv-desc">Waiting for next turn...</div>
+                    <div class="rubot-adv-header">
+                        <div class="rubot-adv-dot"></div>
+                        <div class="rubot-advisor-title" id="rubot-adv-title">ADVISOR RECOMMENDATION</div>
+                    </div>
+                    <div class="rubot-advisor-desc" id="rubot-adv-desc">Waiting for next turn…</div>
                     <div class="rubot-advisor-btns">
                         <button class="rubot-adv-btn exec" id="rubot-adv-exec">✓ EXECUTE</button>
                         <button class="rubot-adv-btn skip" id="rubot-adv-skip">✕ SKIP</button>
                     </div>
                 </div>
 
-                <button class="rubot-master-btn" id="rubot-master-btn">START BOT [=]</button>
+                <button class="rubot-master-btn" id="rubot-master-btn">▶ START BOT  [=]</button>
 
-                <!-- Hybrid Ollama Brain Card -->
                 <div class="rubot-ollama-section">
-                    <div class="rubot-row">
-                        <label style="font-weight:700; color:#c4b5fd; cursor:pointer;">
-                            <input type="checkbox" id="rubot-chk-ollama" ${CONFIG.OLLAMA_ENABLED ? 'checked' : ''}> Hybrid Ollama Brain
+                    <div class="rubot-ollama-header">
+                        <label class="rubot-toggle-pill">
+                            <input type="checkbox" id="rubot-chk-ollama" ${CONFIG.OLLAMA_ENABLED ? 'checked' : ''}>
+                            <span class="rubot-pill-track"></span>
                         </label>
-                        <button class="rubot-btn-ping" id="rubot-btn-ollama-ping">⚡ Test</button>
+                        <span class="rubot-ollama-label">⚡ Hybrid Ollama Brain</span>
+                        <button class="rubot-btn-ping" id="rubot-btn-ollama-ping">Test</button>
                     </div>
                     <div class="rubot-ollama-fields" id="rubot-ollama-fields" style="${CONFIG.OLLAMA_ENABLED ? '' : 'display:none;'}">
                         <div class="rubot-field-row">
-                            <span class="rubot-field-label">Host:</span>
+                            <span class="rubot-field-label">Host</span>
                             <input type="text" id="rubot-input-ollama-host" class="rubot-mini-input" value="${CONFIG.OLLAMA_HOST}">
                         </div>
                         <div class="rubot-field-row">
-                            <span class="rubot-field-label">Model:</span>
+                            <span class="rubot-field-label">Model</span>
                             <input type="text" id="rubot-input-ollama-model" class="rubot-mini-input" value="${CONFIG.OLLAMA_MODEL}">
                         </div>
-                        <div class="rubot-ollama-status" id="rubot-ollama-status">Status: Standby (Minimax Fallback)</div>
+                        <div class="rubot-ollama-status" id="rubot-ollama-status">● Standby — Minimax Math Fallback Active</div>
                     </div>
                 </div>
 
-                <div class="rubot-toggles">
-                    <label><input type="checkbox" id="rubot-chk-alwaysbuy" checked> Buy Land</label>
-                    <label><input type="checkbox" id="rubot-chk-ambush" checked> Hotel Ambush</label>
-                    <label><input type="checkbox" id="rubot-chk-auction" checked> Auto-Auction</label>
-                    <label><input type="checkbox" id="rubot-chk-trade" checked> Auto-Trade</label>
-                    <label><input type="checkbox" id="rubot-chk-build" checked> Auto-Build</label>
-                    <label><input type="checkbox" id="rubot-chk-reserve" checked> Smart Reserve</label>
+                <div class="rubot-section-label">Feature Toggles</div>
+                <div class="rubot-toggles-grid">
+                    <label class="rubot-toggle-row">
+                        <label class="rubot-toggle-pill"><input type="checkbox" id="rubot-chk-alwaysbuy" checked><span class="rubot-pill-track"></span></label>
+                        <span class="rubot-toggle-row-label">Buy Land</span>
+                    </label>
+                    <label class="rubot-toggle-row">
+                        <label class="rubot-toggle-pill"><input type="checkbox" id="rubot-chk-ambush" checked><span class="rubot-pill-track"></span></label>
+                        <span class="rubot-toggle-row-label">Hotel Ambush</span>
+                    </label>
+                    <label class="rubot-toggle-row">
+                        <label class="rubot-toggle-pill"><input type="checkbox" id="rubot-chk-auction" checked><span class="rubot-pill-track"></span></label>
+                        <span class="rubot-toggle-row-label">Auto-Auction</span>
+                    </label>
+                    <label class="rubot-toggle-row">
+                        <label class="rubot-toggle-pill"><input type="checkbox" id="rubot-chk-trade" checked><span class="rubot-pill-track"></span></label>
+                        <span class="rubot-toggle-row-label">Auto-Trade</span>
+                    </label>
+                    <label class="rubot-toggle-row">
+                        <label class="rubot-toggle-pill"><input type="checkbox" id="rubot-chk-build" checked><span class="rubot-pill-track"></span></label>
+                        <span class="rubot-toggle-row-label">Auto-Build</span>
+                    </label>
+                    <label class="rubot-toggle-row">
+                        <label class="rubot-toggle-pill"><input type="checkbox" id="rubot-chk-reserve" checked><span class="rubot-pill-track"></span></label>
+                        <span class="rubot-toggle-row-label">Smart Reserve</span>
+                    </label>
                 </div>
 
-                <div class="rubot-terminal" id="rubot-terminal"></div>
+                <div class="rubot-terminal-wrap">
+                    <div class="rubot-terminal-header">
+                        <span class="rubot-terminal-title">Activity Log</span>
+                        <div class="rubot-terminal-dots"><span></span><span></span><span></span></div>
+                    </div>
+                    <div class="rubot-terminal" id="rubot-terminal"></div>
+                </div>
+
             </div>
         `;
         document.body.appendChild(panel);
@@ -446,14 +458,14 @@ export const HUDPanel = {
             this.elements.btnModeAuto.classList.add('active');
             this.elements.btnModeAdv.classList.remove('active');
             this.hideAdvisorBox();
-            this.logTerminal('Switched to: AUTO-PILOT MODE');
+            this.logTerminal('Mode → AUTO-PILOT');
         });
 
         this.elements.btnModeAdv.addEventListener('click', () => {
             CONFIG.ADVISOR_MODE = true;
             this.elements.btnModeAdv.classList.add('active');
             this.elements.btnModeAuto.classList.remove('active');
-            this.logTerminal('Switched to: ADVISOR MODE (Asks you before acting!)');
+            this.logTerminal('Mode → ADVISOR (Awaiting your approval each turn)');
         });
 
         // Advisor actions
@@ -471,7 +483,8 @@ export const HUDPanel = {
             const trimmed = val.trim();
             if (BOARD_LABELS_BLACKLIST.has(trimmed.toLowerCase())) return;
             GameMemory.setMyName(trimmed);
-            this.logTerminal(`Identity saved: "${GameMemory.myName}"`);
+            GameMemory.cashVerified = false;
+            this.logTerminal(`Identity → "${GameMemory.myName}"`);
         };
 
         this.elements.nameInput.addEventListener('change', (e) => handleNameUpdate(e.target.value));
@@ -505,19 +518,19 @@ export const HUDPanel = {
         });
 
         btnPing.addEventListener('click', async () => {
-            statusOllama.textContent = 'Testing connection...';
+            statusOllama.textContent = '⏳ Testing connection…';
             statusOllama.style.color = '#fbbf24';
-            this.logTerminal(`Pinging Ollama at ${CONFIG.OLLAMA_HOST}...`);
+            this.logTerminal(`Pinging Ollama @ ${CONFIG.OLLAMA_HOST}…`);
             const res = await OllamaClient.checkHealth();
             if (res.ok) {
-                const modelFound = res.hasTargetModel ? `(${CONFIG.OLLAMA_MODEL} ready)` : `(models: ${res.models.slice(0, 2).join(', ') || 'none'})`;
+                const modelFound = res.hasTargetModel ? `(${CONFIG.OLLAMA_MODEL} ✓)` : `(available: ${res.models.slice(0, 2).join(', ') || 'none'})`;
                 statusOllama.textContent = `🟢 Connected ${modelFound}`;
                 statusOllama.style.color = '#34d399';
                 this.logTerminal(`Ollama online! Models: ${res.models.join(', ') || 'none'}`);
             } else {
-                statusOllama.textContent = `⚪ Offline (Minimax Math Fallback)`;
-                statusOllama.style.color = '#94a3b8';
-                this.logTerminal(`Ollama offline: ${res.error || 'Connection failed'}. Auto-fallback active.`);
+                statusOllama.textContent = `⚪ Offline — Minimax Math Fallback Active`;
+                statusOllama.style.color = 'rgba(167, 139, 250, 0.5)';
+                this.logTerminal(`Ollama offline: ${res.error || 'Connection failed'}. Fallback active.`);
             }
         });
 
@@ -532,7 +545,7 @@ export const HUDPanel = {
         this.initDragAndPersistence();
 
         window.__richupLogTerminal = (msg) => this.logTerminal(msg);
-        this.logTerminal('Violet HUD v3.0 loaded. Press = or START BOT.');
+        this.logTerminal('RichUp Bot v4.0 ready — press = or click START BOT.');
     },
 
     isProposalActive(title) {
@@ -563,12 +576,12 @@ export const HUDPanel = {
         if (!this.elements.masterBtn) return;
         if (isActive) {
             this.elements.masterBtn.classList.add('active');
-            this.elements.masterBtn.textContent = 'STOP BOT [=]';
+            this.elements.masterBtn.textContent = '■ STOP BOT  [=]';
             this.elements.phaseBadge.classList.add('active');
             this.elements.phaseBadge.textContent = CONFIG.ADVISOR_MODE ? 'ADVISOR' : 'ACTIVE';
         } else {
             this.elements.masterBtn.classList.remove('active');
-            this.elements.masterBtn.textContent = 'START BOT [=]';
+            this.elements.masterBtn.textContent = '▶ START BOT  [=]';
             this.elements.phaseBadge.classList.remove('active');
             this.elements.phaseBadge.textContent = 'STANDBY';
         }
@@ -577,6 +590,13 @@ export const HUDPanel = {
     updateTelemetry() {
         if (!this.elements.valCash) return;
         this.elements.valCash.textContent = `$${GameMemory.myCash}`;
+        if (GameMemory.myCash < 0) {
+            this.elements.valCash.classList.remove('green');
+            this.elements.valCash.classList.add('red');
+        } else {
+            this.elements.valCash.classList.remove('red');
+            this.elements.valCash.classList.add('green');
+        }
         this.elements.valPos.textContent = `Tile #${GameMemory.myPos}`;
         this.elements.valEV.textContent = `$${GameMemory.lastDangerEV}`;
         this.elements.valRsv.textContent = `$${GameMemory.lastDynamicReserve}`;
@@ -589,12 +609,22 @@ export const HUDPanel = {
 
     logTerminal(msg) {
         if (!this.elements.terminal) return;
+        const now = new Date();
+        const ts = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
         const line = document.createElement('div');
         line.className = 'log-line';
-        if (msg.includes('ACTION') || msg.includes('EV+') || msg.includes('AMBUSH')) line.classList.add('green');
-        if (msg.includes('SWAP') || msg.includes('Trade') || msg.includes('ADVISOR')) line.classList.add('violet');
-        if (msg.includes('Hotel Danger') || msg.includes('Veto') || msg.includes('Preserving')) line.classList.add('amber');
-        line.textContent = `• ${msg}`;
+        const tsPart = document.createElement('span');
+        tsPart.className = 'log-ts';
+        tsPart.textContent = ts;
+        const msgPart = document.createElement('span');
+        msgPart.className = 'log-msg';
+        msgPart.textContent = msg;
+        if (msg.includes('ACTION') || msg.includes('EV+') || msg.includes('AMBUSH') || msg.includes('ready') || msg.includes('online')) line.classList.add('green');
+        else if (msg.includes('SWAP') || msg.includes('Trade') || msg.includes('ADVISOR') || msg.includes('Mode') || msg.includes('Identity')) line.classList.add('violet');
+        else if (msg.includes('Hotel Danger') || msg.includes('Veto') || msg.includes('Preserving') || msg.includes('Pinging')) line.classList.add('amber');
+        else if (msg.includes('ERROR') || msg.includes('offline') || msg.includes('failed') || msg.includes('Offline')) line.classList.add('red');
+        line.appendChild(tsPart);
+        line.appendChild(msgPart);
         this.elements.terminal.insertBefore(line, this.elements.terminal.firstChild);
         if (this.elements.terminal.childNodes.length > this.maxLogs) {
             this.elements.terminal.removeChild(this.elements.terminal.lastChild);

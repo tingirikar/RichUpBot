@@ -72,22 +72,26 @@ export const TradeProposalExecutor = {
             setTimeout(() => {
                 const snap3 = createDOMSnapshot();
 
-                // Select our property to give
-                const myPropCard = snap3.findTradePropertyCard(swap.myGivenTile.name);
-                if (myPropCard) {
-                    delayClick(myPropCard, `Selecting offer property: ${swap.myGivenTile.name}`);
-                } else {
-                    logToBot(`[TRADE CREATOR] Could not find offer property: ${swap.myGivenTile.name}`);
+                // Select our property to give (if applicable)
+                if (swap.myGivenTile) {
+                    const myPropCard = snap3.findTradePropertyCard(swap.myGivenTile.name);
+                    if (myPropCard) {
+                        delayClick(myPropCard, `Selecting offer property: ${swap.myGivenTile.name}`);
+                    } else {
+                        logToBot(`[TRADE CREATOR] Could not find offer property: ${swap.myGivenTile.name}`);
+                    }
                 }
 
                 // Select their property to request
                 setTimeout(() => {
                     const snap4 = createDOMSnapshot();
-                    const theirPropCard = snap4.findTradePropertyCard(swap.myReceivedTile.name);
-                    if (theirPropCard) {
-                        delayClick(theirPropCard, `Selecting request property: ${swap.myReceivedTile.name}`);
-                    } else {
-                        logToBot(`[TRADE CREATOR] Could not find request property: ${swap.myReceivedTile.name}`);
+                    if (swap.myReceivedTile) {
+                        const theirPropCard = snap4.findTradePropertyCard(swap.myReceivedTile.name);
+                        if (theirPropCard) {
+                            delayClick(theirPropCard, `Selecting request property: ${swap.myReceivedTile.name}`);
+                        } else {
+                            logToBot(`[TRADE CREATOR] Could not find request property: ${swap.myReceivedTile.name}`);
+                        }
                     }
 
                     // STEP 4: Set cash if applicable

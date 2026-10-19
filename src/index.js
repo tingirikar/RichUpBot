@@ -156,10 +156,14 @@ function startObserver() {
         characterData: true
     });
 
-    // Heartbeat fallback polling
+    // Heartbeat polling (runs both in standby for telemetry & active for gameplay)
     scheduleInterval(() => {
         if (state.status && !getIsActing()) {
             evaluateAndAct();
+        } else {
+            // Keep HUD telemetry and identity in sync even in standby/lobby!
+            syncBoardStateFromDOM();
+            HUDPanel.updateTelemetry();
         }
     }, CONFIG.POLL_INTERVAL_MS);
 }
@@ -183,6 +187,11 @@ function initWhenReady() {
             }
         }
     );
+
+    // Initial DOM sync right after injection
+    syncBoardStateFromDOM();
+    HUDPanel.updateTelemetry();
+
     startObserver();
 
     // Hotkey '=' to toggle AI on/off
