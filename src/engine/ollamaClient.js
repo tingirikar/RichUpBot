@@ -354,5 +354,116 @@ Respond ONLY with valid JSON:
             }
         } catch (_) {}
         return null;
+    },
+
+    /**
+     * Generates a casual, human-like in-game chat reply to an opponent's message
+     */
+    async generateChatResponse(sender, messageText) {
+        if (!CONFIG.OLLAMA_ENABLED || this.status === 'offline') {
+            return this.getFallbackChatReply(sender, messageText);
+        }
+
+        const prompt = `You are playing RichUp (online Monopoly) under the nickname "${GameMemory.myName || 'matrix'}".
+Opponent "${sender}" just wrote in room chat: "${messageText}".
+
+Generate a brief, natural, authentic gamer reply.
+Guidelines:
+- Keep it under 8 words.
+- All lowercase or casual punctuation, relaxed gaming tone.
+- If they ask if you are a bot ("bot?", "chat if not bot", etc.): play along casually or deny naturally (e.g. "im here lol", "nah watching a video on 2nd screen", "just planning my turns", "nah im here").
+- If they say hi/hello: respond casually ("yo", "hey", "sup").
+- If they ask to trade: say "send an offer, ill look" or "what you offering?".
+- If they ask someone to start/ready: say "lets go" or "ready".
+- Output ONLY the message text. No quotes.`;
+
+        try {
+            const data = await this.httpRequest({
+                method: 'POST',
+                url: `${CONFIG.OLLAMA_HOST}/api/chat`,
+                data: {
+                    model: CONFIG.OLLAMA_MODEL,
+                    messages: [
+                        { role: 'system', content: 'You are an authentic online multiplayer gamer. Output ONLY a casual, friendly chat message under 8 words. No quotation marks.' },
+                        { role: 'user', content: prompt }
+                    ],
+                    stream: false,
+                    options: { temperature: 0.6, num_predict: 25 }
+                },
+                timeout: 1800
+            });
+
+            const content = (data?.message?.content || '').replace(/^["']|["']$/g, '').trim();
+            if (content && content.length <= 80) {
+                return content;
+            }
+        } catch (_) {}
+
+        return this.getFallbackChatReply(sender, messageText);
+    },
+
+    getFallbackChatReply(sender, messageText) {
+        const lower = (messageText || '').toLowerCase();
+        if (lower.includes('bot')) {
+            const replies = ['im here lol', 'nah watching a video on 2nd screen', 'im here just playing quiet', 'nah just planning turns'];
+            return replies[Math.floor(Math.random() * replies.length)];
+        }
+        if (lower.includes('trade')) {
+            return 'send an offer, ill check it out';
+        }
+        if (lower.includes('hi') || lower.includes('hello') || lower.includes('yo') || lower.includes('hey')) {
+            return 'yo';
+        }
+        if (lower.includes('start') || lower.includes('ready')) {
+            return 'ready';
+        }
+        if (lower.includes('gg') || lower.includes('wp')) {
+            return 'gg';
+        }
+        return 'watching the board';
+    },
+
+    /**
+     * Deliberate strategic check right before ending turn
+     */
+    async deliberateEndTurnStrategy() {
+        if (!CONFIG.OLLAMA_ENABLED || !CONFIG.DELIBERATE_BEFORE_END_TURN || this.status === 'offline') {
+            return { action: 'END_TURN', rationale: 'Minimax math checks satisfied' };
+        }
+
+        const monopolies = [];
+        for (const [groupName, groupTiles] of Object.entries(GROUP_TILES)) {
+            if (groupName === 'Airport' || groupName === 'Utility') continue;
+            const ownsAll = groupTiles.every(t => GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
+            if (ownsAll) monopolies.push(groupName);
+        }
+
+        const prompt = `Player ${GameMemory.myName}: Cash $${GameMemory.myCash}, Monopolies: [${monopolies.join(', ') || 'None'}]. Next turn danger: $${GameMemory.lastDangerEV}.
+Is it optimal to END_TURN now or UPGRADE_HOUSES?
+Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "under 10 words"}`;
+
+        try {
+            const data = await this.httpRequest({
+                method: 'POST',
+                url: `${CONFIG.OLLAMA_HOST}/api/chat`,
+                data: {
+                    model: CONFIG.OLLAMA_MODEL,
+                    messages: [
+                        { role: 'system', content: 'You are a Grandmaster Monopoly AI. Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "..."}' },
+                        { role: 'user', content: prompt }
+                    ],
+                    stream: false,
+                    options: { temperature: 0.1, num_predict: 40 }
+                },
+                timeout: 1800
+            });
+
+            const parsed = this.parseJsonSafely(data?.message?.content || '');
+            if (parsed && (parsed.action === 'END_TURN' || parsed.action === 'UPGRADE')) {
+                return parsed;
+            }
+        } catch (_) {}
+
+        return { action: 'END_TURN', rationale: 'Minimax reserve preserved' };
     }
 };

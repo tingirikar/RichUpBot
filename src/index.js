@@ -4,6 +4,7 @@ import { installWebSocketHook } from './dom/socketHook.js';
 import { createDOMSnapshot } from './dom/elementFinder.js';
 import { syncBoardStateFromDOM } from './dom/boardScanner.js';
 import { ActionExecutor, getIsActing, logToBot } from './dom/actionExecutor.js';
+import { ChatEngine } from './ui/chatEngine.js';
 import { HUDPanel } from './ui/hudPanel.js';
 
 // =========================================================================
@@ -66,6 +67,9 @@ async function evaluateAndAct() {
         syncBoardStateFromDOM();
         HUDPanel.updateTelemetry();
 
+        // Check for opponent chat messages and engage naturally
+        await ChatEngine.scanAndRespondToOpponentChat();
+
         const snapshot = createDOMSnapshot();
 
         // 1. Check for incoming trade modal (Hybrid Ollama / Minimax)
@@ -92,8 +96,8 @@ async function evaluateAndAct() {
         // 8. Check for Proactive Mutual Monopoly Swaps
         if (ActionExecutor.handleProactiveTrade(snapshot)) return;
 
-        // 9. Standard Turn Completion (End Turn)
-        ActionExecutor.handleEndTurn(snapshot);
+        // 9. Deliberate Strategic Review & Turn Completion (End Turn)
+        await ActionExecutor.deliberateBeforeEndTurn(snapshot);
 
     } catch (err) {
         logToBot(`Eval loop error: ${err}`);

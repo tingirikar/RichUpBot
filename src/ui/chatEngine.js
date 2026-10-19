@@ -1,14 +1,19 @@
 import { CONFIG } from '../config.js';
+import { GameMemory } from '../memory/gameMemory.js';
+import { OllamaClient } from '../engine/ollamaClient.js';
 import { logToBot } from '../dom/actionExecutor.js';
 
 /**
  * CONTEXT-AWARE REACT CHAT ENGINE
  * 
- * Injects natural trade negotiation messages into RichUp's chat bar
- * using React synthetic input events.
+ * 1. Injects natural trade negotiation messages into RichUp's chat bar
+ * 2. Scans incoming opponent chat ("chat if not bot", greetings, trade requests)
+ *    and responds naturally using Ollama (or clever human fallbacks)
  */
 export const ChatEngine = {
     lastSentTime: 0,
+    lastRepliedTime: 0,
+    processedChatIds: new Set(),
 
     TEMPLATES: Object.freeze({
         tradeReject: [
@@ -28,11 +33,60 @@ export const ChatEngine = {
         ]
     }),
 
+    /**
+     * Scans the room chat feed and generates conversational replies to opponents
+     */
+    async scanAndRespondToOpponentChat() {
+        if (!CONFIG.CHAT_ENABLED || !CONFIG.AUTO_REPLY_CHAT) return false;
+
+        const now = Date.now();
+        if (now - this.lastRepliedTime < (CONFIG.CHAT_REPLY_COOLDOWN_MS || 7000)) return false;
+
+        // Locate chat input in the bottom left
+        const input = document.querySelector('input[placeholder*="say" i], input[placeholder*="something" i], input[placeholder*="chat" i], input[placeholder*="message" i], textarea');
+        if (!input) return false;
+
+        // Find message bubbles in the chat container
+        const chatContainer = input.closest('form, [class*="chat"], div')?.parentElement || document.body;
+        const bubbles = chatContainer.querySelectorAll('[class*="message"], [class*="bubble"], div');
+
+        for (let i = bubbles.length - 1; i >= 0; i--) {
+            const el = bubbles[i];
+            const text = (el.innerText || '').trim();
+            if (!text || text.length < 2 || text.length > 140) continue;
+            if (text.includes('Say something') || text.includes('joined room') || text.includes('joined the game') || text.includes('Game started')) continue;
+
+            const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+            if (lines.length >= 2) {
+                const sender = lines[0];
+                const msgText = lines.slice(1).join(' ').trim();
+
+                // Skip if sent by ourselves
+                if (GameMemory.isMe(sender) || !sender || sender.length > 20) continue;
+
+                const msgId = `${sender}:${msgText}`;
+                if (this.processedChatIds.has(msgId)) continue;
+                this.processedChatIds.add(msgId);
+
+                // Found a new incoming opponent chat message!
+                this.lastRepliedTime = now;
+                logToBot(`[CHAT DETECTED] ${sender}: "${msgText}". Engaging with AI reply...`);
+
+                const reply = await OllamaClient.generateChatResponse(sender, msgText);
+                if (reply) {
+                    this.sendChatMessage(null, reply);
+                    return true;
+                }
+            }
+        }
+        return false;
+    },
+
     sendChatMessage(category, customText = null) {
         if (!CONFIG.CHAT_ENABLED) return false;
 
         const now = Date.now();
-        if (now - this.lastSentTime < CONFIG.CHAT_COOLDOWN_MS) return false;
+        if (now - this.lastSentTime < (CONFIG.CHAT_COOLDOWN_MS || 10000) && !customText) return false;
 
         let message = customText;
         if (!message) {
@@ -41,11 +95,11 @@ export const ChatEngine = {
             message = list[Math.floor(Math.random() * list.length)];
         }
 
-        const input = document.querySelector('input[placeholder*="chat" i], input[placeholder*="message" i], textarea[placeholder*="chat" i]');
+        const input = document.querySelector('input[placeholder*="say" i], input[placeholder*="something" i], input[placeholder*="chat" i], input[placeholder*="message" i], textarea');
         if (!input) return false;
 
         this.lastSentTime = now;
-        logToBot(`[CHAT] ${message}`);
+        logToBot(`[CHAT SEND] "${message}"`);
 
         // Humanized typing delay
         setTimeout(() => {
@@ -67,11 +121,17 @@ export const ChatEngine = {
                 setTimeout(() => {
                     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
                     input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-                }, 80);
+
+                    // Also click the paper plane button if present
+                    const sendBtn = input.parentElement?.querySelector('button');
+                    if (sendBtn) {
+                        try { sendBtn.click(); } catch (_) {}
+                    }
+                }, 90);
             } catch (err) {
                 logToBot(`Chat error: ${err}`);
             }
-        }, 300);
+        }, 320);
 
         return true;
     }

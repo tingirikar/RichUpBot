@@ -29,7 +29,10 @@ export const CONFIG = {
     WORST_CASE_WEIGHT: 0.30,         // Weight on worst-case single roll in 5-9 window
     TRADE_MIN_ADVANTAGE_RATIO: 1.10, // Require at least 10% utility edge in trades
     AUCTION_MAX_OVERBID_RATIO: 1.40, // Max bid for critical blocker/completer
-    CHAT_COOLDOWN_MS: 20000,         // Cooldown between chat negotiation messages
+    CHAT_COOLDOWN_MS: 20000,         // Cooldown between trade negotiation messages
+    AUTO_REPLY_CHAT: true,           // Natural AI replies to opponent in-game chat ("chat if not bot", etc.)
+    CHAT_REPLY_COOLDOWN_MS: 7000,    // Cooldown between chat conversational replies
+    DELIBERATE_BEFORE_END_TURN: true,// LLM strategic review right before ending turn
 
     // Hybrid Vision / LLM Brain Configuration (Local Ollama)
     OLLAMA_ENABLED: localStorage.getItem('richup_ollama_enabled') === 'true',

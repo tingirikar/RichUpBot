@@ -461,6 +461,29 @@ export const ActionExecutor = {
         return false;
     },
 
+    lastDeliberatedTurn: -1,
+
+    async deliberateBeforeEndTurn(snapshot) {
+        const endTurnBtn = snapshot.findExactOrIncludes(['end turn', 'done', 'continue', 'ok']);
+        if (!endTurnBtn) return false;
+
+        // Perform deliberate LLM strategic check once per turn before ending
+        if (CONFIG.DELIBERATE_BEFORE_END_TURN && CONFIG.OLLAMA_ENABLED && this.lastDeliberatedTurn !== GameMemory.turnCount) {
+            this.lastDeliberatedTurn = GameMemory.turnCount;
+            logToBot('[STRATEGY] Ollama turn review before ending...');
+            const verdict = await OllamaClient.deliberateEndTurnStrategy();
+            logToBot(`[STRATEGY] Deliberation: ${verdict.action} - ${verdict.rationale}`);
+
+            if (verdict.action === 'UPGRADE') {
+                if (this.handleHouseBuilding(snapshot)) {
+                    return true;
+                }
+            }
+        }
+
+        return this.handleEndTurn(snapshot);
+    },
+
     handleEndTurn(snapshot) {
         const endTurnBtn = snapshot.findExactOrIncludes(['end turn', 'done', 'continue', 'ok']);
         if (endTurnBtn) {

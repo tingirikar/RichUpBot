@@ -54,7 +54,13 @@
     AUCTION_MAX_OVERBID_RATIO: 1.4,
     // Max bid for critical blocker/completer
     CHAT_COOLDOWN_MS: 2e4,
-    // Cooldown between chat negotiation messages
+    // Cooldown between trade negotiation messages
+    AUTO_REPLY_CHAT: true,
+    // Natural AI replies to opponent in-game chat ("chat if not bot", etc.)
+    CHAT_REPLY_COOLDOWN_MS: 7e3,
+    // Cooldown between chat conversational replies
+    DELIBERATE_BEFORE_END_TURN: true,
+    // LLM strategic review right before ending turn
     // Hybrid Vision / LLM Brain Configuration (Local Ollama)
     OLLAMA_ENABLED: localStorage.getItem("richup_ollama_enabled") === "true",
     OLLAMA_HOST: localStorage.getItem("richup_ollama_host") || "http://localhost:11434",
@@ -1519,316 +1525,6 @@
     }
   };
 
-  // src/ui/chatEngine.js
-  var ChatEngine = {
-    lastSentTime: 0,
-    TEMPLATES: Object.freeze({
-      tradeReject: [
-        "Numbers don't add up for me on that offer, sweeten the cash.",
-        "Can't let that property go that cheap. Add some cash on top?",
-        "That leaves me short on board value, no deal."
-      ],
-      tradeAccept: [
-        "Deal accepted! Win-win.",
-        "Pleasure doing business with you.",
-        "Good trade, let's see how the dice roll."
-      ],
-      tradeNegotiate: [
-        "Close, but let's counter-offer. Sweeten the deal?",
-        "I'm interested, but let's adjust terms to make it fair.",
-        "Counter-proposal sent, check if this works."
-      ]
-    }),
-    sendChatMessage(category, customText = null) {
-      if (!CONFIG.CHAT_ENABLED) return false;
-      const now = Date.now();
-      if (now - this.lastSentTime < CONFIG.CHAT_COOLDOWN_MS) return false;
-      let message = customText;
-      if (!message) {
-        const list = this.TEMPLATES[category];
-        if (!list || list.length === 0) return false;
-        message = list[Math.floor(Math.random() * list.length)];
-      }
-      const input = document.querySelector('input[placeholder*="chat" i], input[placeholder*="message" i], textarea[placeholder*="chat" i]');
-      if (!input) return false;
-      this.lastSentTime = now;
-      logToBot(`[CHAT] ${message}`);
-      setTimeout(() => {
-        try {
-          input.focus();
-          const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
-          if (nativeSetter) {
-            nativeSetter.call(input, message);
-          } else {
-            input.value = message;
-          }
-          input.dispatchEvent(new Event("input", { bubbles: true }));
-          input.dispatchEvent(new Event("change", { bubbles: true }));
-          setTimeout(() => {
-            input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
-            input.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
-          }, 80);
-        } catch (err) {
-          logToBot(`Chat error: ${err}`);
-        }
-      }, 300);
-      return true;
-    }
-  };
-
-  // src/engine/tradeProposalExecutor.js
-  var TradeProposalExecutor = {
-    isExecuting: false,
-    lastProposedTimes: /* @__PURE__ */ new Map(),
-    // playerName -> timestamp
-    skippedSwaps: /* @__PURE__ */ new Map(),
-    // summary -> timestamp
-    canProposeToPlayer(playerName) {
-      if (!playerName) return false;
-      const lastTime = this.lastProposedTimes.get(playerName) || 0;
-      return Date.now() - lastTime > 4e4;
-    },
-    isSwapSkipped(summary) {
-      const lastSkipped = this.skippedSwaps.get(summary) || 0;
-      return Date.now() - lastSkipped < 6e4;
-    },
-    recordSkipped(summary) {
-      this.skippedSwaps.set(summary, Date.now());
-    },
-    executeProposal(swap, onComplete) {
-      if (this.isExecuting) return;
-      this.isExecuting = true;
-      logToBot(`[TRADE CREATOR] Starting automated proposal for ${swap.targetOwner}...`);
-      const snapshot = createDOMSnapshot();
-      const createBtn = snapshot.findCreateTradeButton();
-      if (!createBtn) {
-        logToBot("[TRADE CREATOR] Could not find [+ Create] trade button.");
-        this.isExecuting = false;
-        if (onComplete) onComplete(false);
-        return;
-      }
-      delayClick(createBtn, "Opening Create Trade dialog");
-      setTimeout(() => {
-        const snap2 = createDOMSnapshot();
-        const playerBtn = snap2.findPlayerSelectButton(swap.targetOwner);
-        if (!playerBtn) {
-          logToBot(`[TRADE CREATOR] Could not find player button for "${swap.targetOwner}".`);
-          this.closeTradeModal();
-          this.isExecuting = false;
-          if (onComplete) onComplete(false);
-          return;
-        }
-        delayClick(playerBtn, `Selecting trade partner: ${swap.targetOwner}`);
-        setTimeout(() => {
-          const snap3 = createDOMSnapshot();
-          const myPropCard = snap3.findTradePropertyCard(swap.myGivenTile.name);
-          if (myPropCard) {
-            delayClick(myPropCard, `Selecting offer property: ${swap.myGivenTile.name}`);
-          } else {
-            logToBot(`[TRADE CREATOR] Could not find offer property: ${swap.myGivenTile.name}`);
-          }
-          setTimeout(() => {
-            const snap4 = createDOMSnapshot();
-            const theirPropCard = snap4.findTradePropertyCard(swap.myReceivedTile.name);
-            if (theirPropCard) {
-              delayClick(theirPropCard, `Selecting request property: ${swap.myReceivedTile.name}`);
-            } else {
-              logToBot(`[TRADE CREATOR] Could not find request property: ${swap.myReceivedTile.name}`);
-            }
-            this.adjustCashInTradeModal(swap);
-            setTimeout(() => {
-              const snap5 = createDOMSnapshot();
-              const sendBtn = snap5.findSendTradeButton();
-              if (sendBtn) {
-                delayClick(sendBtn, `Submitting trade proposal to ${swap.targetOwner}`);
-                this.lastProposedTimes.set(swap.targetOwner, Date.now());
-                setTimeout(() => {
-                  ChatEngine.sendChatMessage("tradeOffer", swap.pitch);
-                }, 500);
-                this.isExecuting = false;
-                if (onComplete) onComplete(true);
-              } else {
-                logToBot("[TRADE CREATOR] Could not find [Send trade] button.");
-                this.closeTradeModal();
-                this.isExecuting = false;
-                if (onComplete) onComplete(false);
-              }
-            }, 400);
-          }, 350);
-        }, 450);
-      }, 380);
-    },
-    adjustCashInTradeModal(swap) {
-      try {
-        const modal = document.querySelector('[role="dialog"], [class*="modal"], [class*="trade"]');
-        if (!modal) return;
-        const inputs = modal.querySelectorAll('input[type="number"], input[type="range"], input[type="text"]');
-        if (inputs.length >= 2) {
-          if (swap.cashOffer > 0 && inputs[0]) {
-            this.setNativeInputValue(inputs[0], swap.cashOffer);
-          } else if (swap.cashDemand > 0 && inputs[1]) {
-            this.setNativeInputValue(inputs[1], swap.cashDemand);
-          }
-        }
-      } catch (err) {
-        logToBot(`Cash adjust note: ${err}`);
-      }
-    },
-    setNativeInputValue(input, val) {
-      try {
-        input.focus();
-        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
-        if (nativeSetter) nativeSetter.call(input, String(val));
-        else input.value = String(val);
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-        input.dispatchEvent(new Event("change", { bubbles: true }));
-      } catch (_) {
-      }
-    },
-    closeTradeModal() {
-      const closeBtn = document.querySelector('[class*="close" i], button[aria-label*="close" i], button:has(svg)');
-      if (closeBtn) {
-        closeBtn.click();
-      }
-    }
-  };
-
-  // src/engine/houseBuilder.js
-  var HouseBuilder = {
-    /**
-     * Checks if we are currently standing within 2 to 12 tiles of any opponent
-     * property that has 3+ houses or a hotel.
-     */
-    isPlayerInEnemyHotelZone() {
-      const myPos = GameMemory.myPos || 0;
-      for (let roll = 2; roll <= 12; roll++) {
-        const targetTileId = (myPos + roll) % 40;
-        const tile = BOARD_TILES[targetTileId];
-        if (!tile || !tile.group) continue;
-        const info = GameMemory.ownership[targetTileId];
-        if (info && !GameMemory.isMe(info.owner) && info.houses >= 3 && !info.mortgaged) {
-          const rent = tile.rent[info.houses] || 0;
-          if (rent > 250) {
-            return { inDanger: true, tile, rent, distance: roll };
-          }
-        }
-      }
-      return { inDanger: false };
-    },
-    /**
-     * Checks if any active opponent is currently 2 to 12 tiles away
-     * from any tile in the given color group.
-     */
-    areOpponentsInStrikeZone(groupTiles) {
-      const tileIds = new Set(groupTiles.map((t) => t.id));
-      for (const [pName, pData] of Object.entries(GameMemory.players)) {
-        if (GameMemory.isMe(pName) || pData.bankrupt || pData.inJail) continue;
-        const oppPos = pData.pos || 0;
-        for (const tileId of tileIds) {
-          const dist = (tileId - oppPos + 40) % 40;
-          if (dist >= 2 && dist <= 12) {
-            return { oppApproaching: true, opponentName: pName, distance: dist };
-          }
-        }
-      }
-      return { oppApproaching: false };
-    },
-    rankHouseUpgrades(myCash) {
-      const reserve = MarkovRisk.computeDynamicReserve(GameMemory.myPos);
-      const candidates = [];
-      if (myCash <= reserve) return candidates;
-      if (CONFIG.AMBUSH_BUILD_ONLY) {
-        const dangerCheck = this.isPlayerInEnemyHotelZone();
-        if (dangerCheck.inDanger) {
-          return candidates;
-        }
-      }
-      for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
-        if (tiles[0].type !== "property") continue;
-        const { owned, total } = GameMemory.getGroupCount(groupName, "__ME__");
-        if (owned !== total) continue;
-        const anyMortgaged = tiles.some((t) => GameMemory.ownership[t.id]?.mortgaged);
-        if (anyMortgaged) continue;
-        const houseCounts = tiles.map((t) => GameMemory.ownership[t.id]?.houses || 0);
-        const minHouses = Math.min(...houseCounts);
-        const strikeCheck = this.areOpponentsInStrikeZone(tiles);
-        const isAmbushWindow = strikeCheck.oppApproaching;
-        const isRushingTo3Houses = minHouses < 3;
-        const hasSufficientSurplus = isRushingTo3Houses ? myCash >= reserve + tiles[0].houseCost * 1.2 : myCash >= reserve + 300;
-        if (CONFIG.AMBUSH_BUILD_ONLY && !isAmbushWindow && !hasSufficientSurplus) {
-          continue;
-        }
-        for (const tile of tiles) {
-          const info = GameMemory.ownership[tile.id];
-          if (!info || info.houses >= 5) continue;
-          if (info.houses > minHouses) continue;
-          const cost = tile.houseCost;
-          if (myCash - cost < reserve) continue;
-          const currentRent = tile.rent[info.houses];
-          const nextRent = tile.rent[info.houses + 1] || currentRent;
-          const rentDelta = nextRent - currentRent;
-          const sweetSpotBoost = info.houses === 2 ? 2.6 : info.houses === 1 ? 1.5 : 1;
-          const ambushBoost = isAmbushWindow ? 1.8 : 1;
-          const roi = (rentDelta / cost * tile.markov * sweetSpotBoost * ambushBoost).toFixed(4);
-          candidates.push({
-            tile,
-            currentHouses: info.houses,
-            nextHouses: info.houses + 1,
-            cost,
-            rentDelta,
-            roi: parseFloat(roi),
-            isAmbush: isAmbushWindow,
-            targetOpp: strikeCheck.opponentName || null
-          });
-        }
-      }
-      candidates.sort((a, b) => b.roi - a.roi);
-      return candidates;
-    }
-  };
-
-  // src/engine/debtRecovery.js
-  var DebtRecovery = {
-    rankLiquidationTargets() {
-      const targets = [];
-      const blockers = new Set(OpponentTracker.getCriticalBlockers().map((b) => b.tile.id));
-      for (const tile of BOARD_TILES) {
-        if (!tile.group) continue;
-        const info = GameMemory.ownership[tile.id];
-        if (!info || !GameMemory.isMe(info.owner) || info.mortgaged) continue;
-        const { owned, total } = GameMemory.getGroupCount(tile.group, "__ME__");
-        let sacrificeScore = tile.price * (1 + tile.markov * 10);
-        if (owned === total) {
-          sacrificeScore *= 10;
-        } else if (owned === total - 1) {
-          sacrificeScore *= 4;
-        }
-        if (blockers.has(tile.id)) {
-          sacrificeScore *= 5;
-        }
-        const mortgageValue = Math.round(tile.price / 2);
-        const houseSellValue = Math.round(tile.houseCost / 2);
-        targets.push({
-          tile,
-          houses: info.houses,
-          mortgageValue,
-          houseSellValue,
-          sacrificeScore
-        });
-      }
-      targets.sort((a, b) => a.sacrificeScore - b.sacrificeScore);
-      return targets;
-    },
-    /**
-     * Finds safe, dead-weight properties that can be strategically mortgaged
-     * to raise immediate cash for high-yield monopoly building.
-     */
-    findStrategicMortgageCandidates() {
-      const targets = this.rankLiquidationTargets();
-      return targets.filter((t) => t.houses === 0 && t.sacrificeScore < 300);
-    }
-  };
-
   // src/engine/ollamaClient.js
   var OllamaClient = {
     status: "unchecked",
@@ -2119,6 +1815,461 @@ Respond ONLY with valid JSON:
       } catch (_) {
       }
       return null;
+    },
+    /**
+     * Generates a casual, human-like in-game chat reply to an opponent's message
+     */
+    async generateChatResponse(sender, messageText) {
+      if (!CONFIG.OLLAMA_ENABLED || this.status === "offline") {
+        return this.getFallbackChatReply(sender, messageText);
+      }
+      const prompt = `You are playing RichUp (online Monopoly) under the nickname "${GameMemory.myName || "matrix"}".
+Opponent "${sender}" just wrote in room chat: "${messageText}".
+
+Generate a brief, natural, authentic gamer reply.
+Guidelines:
+- Keep it under 8 words.
+- All lowercase or casual punctuation, relaxed gaming tone.
+- If they ask if you are a bot ("bot?", "chat if not bot", etc.): play along casually or deny naturally (e.g. "im here lol", "nah watching a video on 2nd screen", "just planning my turns", "nah im here").
+- If they say hi/hello: respond casually ("yo", "hey", "sup").
+- If they ask to trade: say "send an offer, ill look" or "what you offering?".
+- If they ask someone to start/ready: say "lets go" or "ready".
+- Output ONLY the message text. No quotes.`;
+      try {
+        const data = await this.httpRequest({
+          method: "POST",
+          url: `${CONFIG.OLLAMA_HOST}/api/chat`,
+          data: {
+            model: CONFIG.OLLAMA_MODEL,
+            messages: [
+              { role: "system", content: "You are an authentic online multiplayer gamer. Output ONLY a casual, friendly chat message under 8 words. No quotation marks." },
+              { role: "user", content: prompt }
+            ],
+            stream: false,
+            options: { temperature: 0.6, num_predict: 25 }
+          },
+          timeout: 1800
+        });
+        const content = (data?.message?.content || "").replace(/^["']|["']$/g, "").trim();
+        if (content && content.length <= 80) {
+          return content;
+        }
+      } catch (_) {
+      }
+      return this.getFallbackChatReply(sender, messageText);
+    },
+    getFallbackChatReply(sender, messageText) {
+      const lower = (messageText || "").toLowerCase();
+      if (lower.includes("bot")) {
+        const replies = ["im here lol", "nah watching a video on 2nd screen", "im here just playing quiet", "nah just planning turns"];
+        return replies[Math.floor(Math.random() * replies.length)];
+      }
+      if (lower.includes("trade")) {
+        return "send an offer, ill check it out";
+      }
+      if (lower.includes("hi") || lower.includes("hello") || lower.includes("yo") || lower.includes("hey")) {
+        return "yo";
+      }
+      if (lower.includes("start") || lower.includes("ready")) {
+        return "ready";
+      }
+      if (lower.includes("gg") || lower.includes("wp")) {
+        return "gg";
+      }
+      return "watching the board";
+    },
+    /**
+     * Deliberate strategic check right before ending turn
+     */
+    async deliberateEndTurnStrategy() {
+      if (!CONFIG.OLLAMA_ENABLED || !CONFIG.DELIBERATE_BEFORE_END_TURN || this.status === "offline") {
+        return { action: "END_TURN", rationale: "Minimax math checks satisfied" };
+      }
+      const monopolies = [];
+      for (const [groupName, groupTiles] of Object.entries(GROUP_TILES)) {
+        if (groupName === "Airport" || groupName === "Utility") continue;
+        const ownsAll = groupTiles.every((t) => GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
+        if (ownsAll) monopolies.push(groupName);
+      }
+      const prompt = `Player ${GameMemory.myName}: Cash $${GameMemory.myCash}, Monopolies: [${monopolies.join(", ") || "None"}]. Next turn danger: $${GameMemory.lastDangerEV}.
+Is it optimal to END_TURN now or UPGRADE_HOUSES?
+Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "under 10 words"}`;
+      try {
+        const data = await this.httpRequest({
+          method: "POST",
+          url: `${CONFIG.OLLAMA_HOST}/api/chat`,
+          data: {
+            model: CONFIG.OLLAMA_MODEL,
+            messages: [
+              { role: "system", content: 'You are a Grandmaster Monopoly AI. Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "..."}' },
+              { role: "user", content: prompt }
+            ],
+            stream: false,
+            options: { temperature: 0.1, num_predict: 40 }
+          },
+          timeout: 1800
+        });
+        const parsed = this.parseJsonSafely(data?.message?.content || "");
+        if (parsed && (parsed.action === "END_TURN" || parsed.action === "UPGRADE")) {
+          return parsed;
+        }
+      } catch (_) {
+      }
+      return { action: "END_TURN", rationale: "Minimax reserve preserved" };
+    }
+  };
+
+  // src/ui/chatEngine.js
+  var ChatEngine = {
+    lastSentTime: 0,
+    lastRepliedTime: 0,
+    processedChatIds: /* @__PURE__ */ new Set(),
+    TEMPLATES: Object.freeze({
+      tradeReject: [
+        "Numbers don't add up for me on that offer, sweeten the cash.",
+        "Can't let that property go that cheap. Add some cash on top?",
+        "That leaves me short on board value, no deal."
+      ],
+      tradeAccept: [
+        "Deal accepted! Win-win.",
+        "Pleasure doing business with you.",
+        "Good trade, let's see how the dice roll."
+      ],
+      tradeNegotiate: [
+        "Close, but let's counter-offer. Sweeten the deal?",
+        "I'm interested, but let's adjust terms to make it fair.",
+        "Counter-proposal sent, check if this works."
+      ]
+    }),
+    /**
+     * Scans the room chat feed and generates conversational replies to opponents
+     */
+    async scanAndRespondToOpponentChat() {
+      if (!CONFIG.CHAT_ENABLED || !CONFIG.AUTO_REPLY_CHAT) return false;
+      const now = Date.now();
+      if (now - this.lastRepliedTime < (CONFIG.CHAT_REPLY_COOLDOWN_MS || 7e3)) return false;
+      const input = document.querySelector('input[placeholder*="say" i], input[placeholder*="something" i], input[placeholder*="chat" i], input[placeholder*="message" i], textarea');
+      if (!input) return false;
+      const chatContainer = input.closest('form, [class*="chat"], div')?.parentElement || document.body;
+      const bubbles = chatContainer.querySelectorAll('[class*="message"], [class*="bubble"], div');
+      for (let i = bubbles.length - 1; i >= 0; i--) {
+        const el = bubbles[i];
+        const text = (el.innerText || "").trim();
+        if (!text || text.length < 2 || text.length > 140) continue;
+        if (text.includes("Say something") || text.includes("joined room") || text.includes("joined the game") || text.includes("Game started")) continue;
+        const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+        if (lines.length >= 2) {
+          const sender = lines[0];
+          const msgText = lines.slice(1).join(" ").trim();
+          if (GameMemory.isMe(sender) || !sender || sender.length > 20) continue;
+          const msgId = `${sender}:${msgText}`;
+          if (this.processedChatIds.has(msgId)) continue;
+          this.processedChatIds.add(msgId);
+          this.lastRepliedTime = now;
+          logToBot(`[CHAT DETECTED] ${sender}: "${msgText}". Engaging with AI reply...`);
+          const reply = await OllamaClient.generateChatResponse(sender, msgText);
+          if (reply) {
+            this.sendChatMessage(null, reply);
+            return true;
+          }
+        }
+      }
+      return false;
+    },
+    sendChatMessage(category, customText = null) {
+      if (!CONFIG.CHAT_ENABLED) return false;
+      const now = Date.now();
+      if (now - this.lastSentTime < (CONFIG.CHAT_COOLDOWN_MS || 1e4) && !customText) return false;
+      let message = customText;
+      if (!message) {
+        const list = this.TEMPLATES[category];
+        if (!list || list.length === 0) return false;
+        message = list[Math.floor(Math.random() * list.length)];
+      }
+      const input = document.querySelector('input[placeholder*="say" i], input[placeholder*="something" i], input[placeholder*="chat" i], input[placeholder*="message" i], textarea');
+      if (!input) return false;
+      this.lastSentTime = now;
+      logToBot(`[CHAT SEND] "${message}"`);
+      setTimeout(() => {
+        try {
+          input.focus();
+          const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
+          if (nativeSetter) {
+            nativeSetter.call(input, message);
+          } else {
+            input.value = message;
+          }
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+          setTimeout(() => {
+            input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+            input.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+            const sendBtn = input.parentElement?.querySelector("button");
+            if (sendBtn) {
+              try {
+                sendBtn.click();
+              } catch (_) {
+              }
+            }
+          }, 90);
+        } catch (err) {
+          logToBot(`Chat error: ${err}`);
+        }
+      }, 320);
+      return true;
+    }
+  };
+
+  // src/engine/tradeProposalExecutor.js
+  var TradeProposalExecutor = {
+    isExecuting: false,
+    lastProposedTimes: /* @__PURE__ */ new Map(),
+    // playerName -> timestamp
+    skippedSwaps: /* @__PURE__ */ new Map(),
+    // summary -> timestamp
+    canProposeToPlayer(playerName) {
+      if (!playerName) return false;
+      const lastTime = this.lastProposedTimes.get(playerName) || 0;
+      return Date.now() - lastTime > 4e4;
+    },
+    isSwapSkipped(summary) {
+      const lastSkipped = this.skippedSwaps.get(summary) || 0;
+      return Date.now() - lastSkipped < 6e4;
+    },
+    recordSkipped(summary) {
+      this.skippedSwaps.set(summary, Date.now());
+    },
+    executeProposal(swap, onComplete) {
+      if (this.isExecuting) return;
+      this.isExecuting = true;
+      logToBot(`[TRADE CREATOR] Starting automated proposal for ${swap.targetOwner}...`);
+      const snapshot = createDOMSnapshot();
+      const createBtn = snapshot.findCreateTradeButton();
+      if (!createBtn) {
+        logToBot("[TRADE CREATOR] Could not find [+ Create] trade button.");
+        this.isExecuting = false;
+        if (onComplete) onComplete(false);
+        return;
+      }
+      delayClick(createBtn, "Opening Create Trade dialog");
+      setTimeout(() => {
+        const snap2 = createDOMSnapshot();
+        const playerBtn = snap2.findPlayerSelectButton(swap.targetOwner);
+        if (!playerBtn) {
+          logToBot(`[TRADE CREATOR] Could not find player button for "${swap.targetOwner}".`);
+          this.closeTradeModal();
+          this.isExecuting = false;
+          if (onComplete) onComplete(false);
+          return;
+        }
+        delayClick(playerBtn, `Selecting trade partner: ${swap.targetOwner}`);
+        setTimeout(() => {
+          const snap3 = createDOMSnapshot();
+          const myPropCard = snap3.findTradePropertyCard(swap.myGivenTile.name);
+          if (myPropCard) {
+            delayClick(myPropCard, `Selecting offer property: ${swap.myGivenTile.name}`);
+          } else {
+            logToBot(`[TRADE CREATOR] Could not find offer property: ${swap.myGivenTile.name}`);
+          }
+          setTimeout(() => {
+            const snap4 = createDOMSnapshot();
+            const theirPropCard = snap4.findTradePropertyCard(swap.myReceivedTile.name);
+            if (theirPropCard) {
+              delayClick(theirPropCard, `Selecting request property: ${swap.myReceivedTile.name}`);
+            } else {
+              logToBot(`[TRADE CREATOR] Could not find request property: ${swap.myReceivedTile.name}`);
+            }
+            this.adjustCashInTradeModal(swap);
+            setTimeout(() => {
+              const snap5 = createDOMSnapshot();
+              const sendBtn = snap5.findSendTradeButton();
+              if (sendBtn) {
+                delayClick(sendBtn, `Submitting trade proposal to ${swap.targetOwner}`);
+                this.lastProposedTimes.set(swap.targetOwner, Date.now());
+                setTimeout(() => {
+                  ChatEngine.sendChatMessage("tradeOffer", swap.pitch);
+                }, 500);
+                this.isExecuting = false;
+                if (onComplete) onComplete(true);
+              } else {
+                logToBot("[TRADE CREATOR] Could not find [Send trade] button.");
+                this.closeTradeModal();
+                this.isExecuting = false;
+                if (onComplete) onComplete(false);
+              }
+            }, 400);
+          }, 350);
+        }, 450);
+      }, 380);
+    },
+    adjustCashInTradeModal(swap) {
+      try {
+        const modal = document.querySelector('[role="dialog"], [class*="modal"], [class*="trade"]');
+        if (!modal) return;
+        const inputs = modal.querySelectorAll('input[type="number"], input[type="range"], input[type="text"]');
+        if (inputs.length >= 2) {
+          if (swap.cashOffer > 0 && inputs[0]) {
+            this.setNativeInputValue(inputs[0], swap.cashOffer);
+          } else if (swap.cashDemand > 0 && inputs[1]) {
+            this.setNativeInputValue(inputs[1], swap.cashDemand);
+          }
+        }
+      } catch (err) {
+        logToBot(`Cash adjust note: ${err}`);
+      }
+    },
+    setNativeInputValue(input, val) {
+      try {
+        input.focus();
+        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+        if (nativeSetter) nativeSetter.call(input, String(val));
+        else input.value = String(val);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      } catch (_) {
+      }
+    },
+    closeTradeModal() {
+      const closeBtn = document.querySelector('[class*="close" i], button[aria-label*="close" i], button:has(svg)');
+      if (closeBtn) {
+        closeBtn.click();
+      }
+    }
+  };
+
+  // src/engine/houseBuilder.js
+  var HouseBuilder = {
+    /**
+     * Checks if we are currently standing within 2 to 12 tiles of any opponent
+     * property that has 3+ houses or a hotel.
+     */
+    isPlayerInEnemyHotelZone() {
+      const myPos = GameMemory.myPos || 0;
+      for (let roll = 2; roll <= 12; roll++) {
+        const targetTileId = (myPos + roll) % 40;
+        const tile = BOARD_TILES[targetTileId];
+        if (!tile || !tile.group) continue;
+        const info = GameMemory.ownership[targetTileId];
+        if (info && !GameMemory.isMe(info.owner) && info.houses >= 3 && !info.mortgaged) {
+          const rent = tile.rent[info.houses] || 0;
+          if (rent > 250) {
+            return { inDanger: true, tile, rent, distance: roll };
+          }
+        }
+      }
+      return { inDanger: false };
+    },
+    /**
+     * Checks if any active opponent is currently 2 to 12 tiles away
+     * from any tile in the given color group.
+     */
+    areOpponentsInStrikeZone(groupTiles) {
+      const tileIds = new Set(groupTiles.map((t) => t.id));
+      for (const [pName, pData] of Object.entries(GameMemory.players)) {
+        if (GameMemory.isMe(pName) || pData.bankrupt || pData.inJail) continue;
+        const oppPos = pData.pos || 0;
+        for (const tileId of tileIds) {
+          const dist = (tileId - oppPos + 40) % 40;
+          if (dist >= 2 && dist <= 12) {
+            return { oppApproaching: true, opponentName: pName, distance: dist };
+          }
+        }
+      }
+      return { oppApproaching: false };
+    },
+    rankHouseUpgrades(myCash) {
+      const reserve = MarkovRisk.computeDynamicReserve(GameMemory.myPos);
+      const candidates = [];
+      if (myCash <= reserve) return candidates;
+      if (CONFIG.AMBUSH_BUILD_ONLY) {
+        const dangerCheck = this.isPlayerInEnemyHotelZone();
+        if (dangerCheck.inDanger) {
+          return candidates;
+        }
+      }
+      for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
+        if (tiles[0].type !== "property") continue;
+        const { owned, total } = GameMemory.getGroupCount(groupName, "__ME__");
+        if (owned !== total) continue;
+        const anyMortgaged = tiles.some((t) => GameMemory.ownership[t.id]?.mortgaged);
+        if (anyMortgaged) continue;
+        const houseCounts = tiles.map((t) => GameMemory.ownership[t.id]?.houses || 0);
+        const minHouses = Math.min(...houseCounts);
+        const strikeCheck = this.areOpponentsInStrikeZone(tiles);
+        const isAmbushWindow = strikeCheck.oppApproaching;
+        const isRushingTo3Houses = minHouses < 3;
+        const hasSufficientSurplus = isRushingTo3Houses ? myCash >= reserve + tiles[0].houseCost * 1.2 : myCash >= reserve + 300;
+        if (CONFIG.AMBUSH_BUILD_ONLY && !isAmbushWindow && !hasSufficientSurplus) {
+          continue;
+        }
+        for (const tile of tiles) {
+          const info = GameMemory.ownership[tile.id];
+          if (!info || info.houses >= 5) continue;
+          if (info.houses > minHouses) continue;
+          const cost = tile.houseCost;
+          if (myCash - cost < reserve) continue;
+          const currentRent = tile.rent[info.houses];
+          const nextRent = tile.rent[info.houses + 1] || currentRent;
+          const rentDelta = nextRent - currentRent;
+          const sweetSpotBoost = info.houses === 2 ? 2.6 : info.houses === 1 ? 1.5 : 1;
+          const ambushBoost = isAmbushWindow ? 1.8 : 1;
+          const roi = (rentDelta / cost * tile.markov * sweetSpotBoost * ambushBoost).toFixed(4);
+          candidates.push({
+            tile,
+            currentHouses: info.houses,
+            nextHouses: info.houses + 1,
+            cost,
+            rentDelta,
+            roi: parseFloat(roi),
+            isAmbush: isAmbushWindow,
+            targetOpp: strikeCheck.opponentName || null
+          });
+        }
+      }
+      candidates.sort((a, b) => b.roi - a.roi);
+      return candidates;
+    }
+  };
+
+  // src/engine/debtRecovery.js
+  var DebtRecovery = {
+    rankLiquidationTargets() {
+      const targets = [];
+      const blockers = new Set(OpponentTracker.getCriticalBlockers().map((b) => b.tile.id));
+      for (const tile of BOARD_TILES) {
+        if (!tile.group) continue;
+        const info = GameMemory.ownership[tile.id];
+        if (!info || !GameMemory.isMe(info.owner) || info.mortgaged) continue;
+        const { owned, total } = GameMemory.getGroupCount(tile.group, "__ME__");
+        let sacrificeScore = tile.price * (1 + tile.markov * 10);
+        if (owned === total) {
+          sacrificeScore *= 10;
+        } else if (owned === total - 1) {
+          sacrificeScore *= 4;
+        }
+        if (blockers.has(tile.id)) {
+          sacrificeScore *= 5;
+        }
+        const mortgageValue = Math.round(tile.price / 2);
+        const houseSellValue = Math.round(tile.houseCost / 2);
+        targets.push({
+          tile,
+          houses: info.houses,
+          mortgageValue,
+          houseSellValue,
+          sacrificeScore
+        });
+      }
+      targets.sort((a, b) => a.sacrificeScore - b.sacrificeScore);
+      return targets;
+    },
+    /**
+     * Finds safe, dead-weight properties that can be strategically mortgaged
+     * to raise immediate cash for high-yield monopoly building.
+     */
+    findStrategicMortgageCandidates() {
+      const targets = this.rankLiquidationTargets();
+      return targets.filter((t) => t.houses === 0 && t.sacrificeScore < 300);
     }
   };
 
@@ -3107,6 +3258,23 @@ Respond ONLY with valid JSON:
       }
       return false;
     },
+    lastDeliberatedTurn: -1,
+    async deliberateBeforeEndTurn(snapshot) {
+      const endTurnBtn = snapshot.findExactOrIncludes(["end turn", "done", "continue", "ok"]);
+      if (!endTurnBtn) return false;
+      if (CONFIG.DELIBERATE_BEFORE_END_TURN && CONFIG.OLLAMA_ENABLED && this.lastDeliberatedTurn !== GameMemory.turnCount) {
+        this.lastDeliberatedTurn = GameMemory.turnCount;
+        logToBot("[STRATEGY] Ollama turn review before ending...");
+        const verdict = await OllamaClient.deliberateEndTurnStrategy();
+        logToBot(`[STRATEGY] Deliberation: ${verdict.action} - ${verdict.rationale}`);
+        if (verdict.action === "UPGRADE") {
+          if (this.handleHouseBuilding(snapshot)) {
+            return true;
+          }
+        }
+      }
+      return this.handleEndTurn(snapshot);
+    },
     handleEndTurn(snapshot) {
       const endTurnBtn = snapshot.findExactOrIncludes(["end turn", "done", "continue", "ok"]);
       if (endTurnBtn) {
@@ -3169,6 +3337,7 @@ Respond ONLY with valid JSON:
       isEvaluating = true;
       syncBoardStateFromDOM();
       HUDPanel.updateTelemetry();
+      await ChatEngine.scanAndRespondToOpponentChat();
       const snapshot = createDOMSnapshot();
       if (await ActionExecutor.handleTrade(snapshot)) return;
       if (ActionExecutor.handleDebtRecovery(snapshot)) return;
@@ -3178,7 +3347,7 @@ Respond ONLY with valid JSON:
       if (ActionExecutor.handleAuction(snapshot)) return;
       if (ActionExecutor.handleHouseBuilding(snapshot)) return;
       if (ActionExecutor.handleProactiveTrade(snapshot)) return;
-      ActionExecutor.handleEndTurn(snapshot);
+      await ActionExecutor.deliberateBeforeEndTurn(snapshot);
     } catch (err) {
       logToBot(`Eval loop error: ${err}`);
     } finally {
