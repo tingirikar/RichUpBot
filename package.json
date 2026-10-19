@@ -1,0 +1,17 @@
+{
+  "name": "richupbot",
+  "version": "1.0.0",
+  "description": "Grandmaster AI engine for RichUp.io",
+  "type": "module",
+  "main": "dist/RichUpBot.user.js",
+  "scripts": {
+    "build": "node build.js",
+    "watch": "node build.js --watch"
+  },
+  "keywords": ["richup", "bot", "ai", "tampermonkey"],
+  "author": "Grandmaster AI",
+  "license": "GPL-3.0",
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}
