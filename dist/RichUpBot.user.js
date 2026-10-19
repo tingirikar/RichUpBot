@@ -2735,9 +2735,14 @@ Respond ONLY with valid JSON:
     logToBot(`[ACTION] ${reason} (in ${delay}ms)`);
     setTimeout(() => {
       try {
-        el.scrollIntoView({ behavior: "smooth", block: "center" });
-        el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
-        el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+        if (typeof el.scrollIntoView === "function") {
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+        try {
+          el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+          el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
+        } catch (_) {
+        }
         el.click();
       } catch (err) {
         logToBot(`Click error: ${err}`);
