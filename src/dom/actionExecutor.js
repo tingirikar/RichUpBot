@@ -397,7 +397,8 @@ export const ActionExecutor = {
     },
 
     handleDebtRecovery(snapshot) {
-        const isDebt = GameMemory.myCash < 0 || Boolean(document.body && /pay\s+\$\d+|negative balance|\$-\d+/i.test(document.body.innerText));
+        // Player is in debt ONLY when cash is strictly below 0
+        const isDebt = GameMemory.myCash < 0;
         if (!CONFIG.AUTO_MORTGAGE_ENABLED || !isDebt) return false;
 
         logToBot(`[DEBT RECOVERY] Negative balance ($${GameMemory.myCash}). Liquidating assets to survive...`);

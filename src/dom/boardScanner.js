@@ -35,6 +35,16 @@ function detectLobbySettingsAndIdentity() {
     const hud = document.getElementById('rubot-hud-panel');
     const pageText = document.body.innerText || '';
 
+    // Only run lobby detection if the match has NOT started yet
+    const isInGame = Boolean(
+        pageText.includes('is playing') ||
+        pageText.includes('Roll the dice') ||
+        pageText.includes('End turn') ||
+        pageText.includes('Game started') ||
+        document.querySelector('[class*="bankrupt" i]')
+    );
+    if (isInGame) return;
+
     // 1. Starting Cash Setting (e.g. "Starting cash: ... $1000")
     const cashMatch = /Starting cash[\s\S]*?\$(\d{2,5})/i.exec(pageText);
     if (cashMatch) {
@@ -57,12 +67,12 @@ function detectLobbySettingsAndIdentity() {
     if (changeApp) {
         const row = changeApp.closest('div, li, [class*="player"], [class*="user"], [class*="item"]') || changeApp.parentElement;
         if (row) {
-            const lines = (row.innerText || '').split('\n').map(l => l.trim()).filter(Boolean);
+            const raw = (row.innerText || '').replace(/change appearance/gi, '').replace(/host/gi, '').trim();
+            const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
             const candidate = lines.find(l => 
-                l.length >= 2 && l.length <= 24 &&
+                l.length >= 2 && l.length <= 20 &&
                 !BOARD_LABELS_BLACKLIST.has(l.toLowerCase()) &&
-                !l.toLowerCase().includes('change appearance') &&
-                !l.toLowerCase().includes('host') &&
+                !l.toLowerCase().includes('share') &&
                 !l.includes('$')
             );
             if (candidate && (!GameMemory.myName || GameMemory.myName.toLowerCase() !== candidate.toLowerCase())) {
@@ -78,6 +88,13 @@ function detectLobbySettingsAndIdentity() {
  */
 function detectLocalPlayerFromPlayerList() {
     const hud = document.getElementById('rubot-hud-panel');
+
+    // Purge any accidental bad name like "Share this game"
+    if (GameMemory.myName && (GameMemory.myName.toLowerCase().includes('share') || BOARD_LABELS_BLACKLIST.has(GameMemory.myName.toLowerCase()))) {
+        GameMemory.myName = null;
+        try { localStorage.removeItem('richup_bot_my_name'); } catch (_) {}
+    }
+
     const currentName = GameMemory.myName;
 
     // Search for player row containers in the scoreboard
@@ -88,7 +105,7 @@ function detectLocalPlayerFromPlayerList() {
         if (hud && hud.contains(el)) continue;
 
         const text = el.innerText || '';
-        if (!text.includes('$')) continue;
+        if (!text.includes('$') || text.length > 100) continue;
 
         // Extract cash: $X or -$X or $-X
         const cashMatch = /(-?\$?\d{1,5}|\$-?\d{1,5})/.exec(text);
@@ -98,23 +115,33 @@ function detectLocalPlayerFromPlayerList() {
         const parsedCash = parseInt(rawCash, 10);
         if (isNaN(parsedCash)) continue;
 
-        // Parse lines to get player username
-        const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-        const nameCandidates = lines.filter(l => 
-            !l.includes('$') && 
-            l.length >= 2 && 
-            l.length <= 24 && 
-            !BOARD_LABELS_BLACKLIST.has(l.toLowerCase())
-        );
+        // Parse player username: extract all text before the $
+        const beforeDollar = text.split('$')[0].trim();
+        const candidateLines = beforeDollar.split('\n').map(l => l.trim()).filter(Boolean);
 
-        if (nameCandidates.length === 0) continue;
-        const candidateName = nameCandidates[0];
+        let candidateName = null;
+        for (const line of candidateLines) {
+            const clean = line.replace(/[->\]]+/g, '').trim();
+            if (
+                clean.length >= 2 && clean.length <= 24 &&
+                !BOARD_LABELS_BLACKLIST.has(clean.toLowerCase()) &&
+                !clean.toLowerCase().includes('share') &&
+                !/^\d+$/.test(clean)
+            ) {
+                candidateName = clean;
+                break;
+            }
+        }
+
+        if (!candidateName) continue;
 
         // In RichUp, only the local player's row has the interactive leave [->] button in the scoreboard
         const hasLeaveIcon = Boolean(
             el.querySelector('[class*="leave" i], [class*="exit" i], [title*="leave" i], [aria-label*="leave" i]') ||
-            el.querySelector('button') ||
-            (el.innerHTML.includes('->') && !text.includes('passed through'))
+            el.innerHTML.includes('->') ||
+            el.innerHTML.includes('M17 16l4') ||
+            el.innerHTML.includes('M11 16l-4-4') ||
+            el.innerHTML.includes('M15 3h4a2')
         );
 
         const isKnownMe = currentName && candidateName.toLowerCase() === currentName.toLowerCase();

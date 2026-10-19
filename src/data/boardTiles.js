@@ -102,5 +102,6 @@ export const BOARD_LABELS_BLACKLIST = new Set([
     'advisor', 'auto-pilot', 'danger ev', 'survival reserve', 'position', 'my name', 'cash',
     'store', 'shop', 'inventory', 'profile', 'settings', 'rules', 'lobby', 'room', 'host',
     'change appearance', 'waiting for', 'joined the game', 'start the game', 'is playing',
-    'good luck', 'even build', 'starting cash', 'randomize player order', 'create'
+    'good luck', 'even build', 'starting cash', 'randomize player order', 'create',
+    'share this game', 'share', 'share this', 'chat if not bot'
 ]);
