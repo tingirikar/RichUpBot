@@ -300,6 +300,40 @@ export function scrapeTradeModalDOM() {
         else receivedTiles.push(t);
     }
 
+    // Resolve partner name
+    let partnerName = 'Opponent';
+    for (const t of receivedTiles) {
+        const owner = GameMemory.ownership[t.id]?.owner;
+        if (owner && !GameMemory.isMe(owner)) {
+            partnerName = owner;
+            break;
+        }
+    }
+
+    if (partnerName === 'Opponent') {
+        for (const pName of Object.keys(GameMemory.players)) {
+            if (!GameMemory.isMe(pName) && new RegExp(`\\b${pName}\\b`, 'i').test(modalText)) {
+                partnerName = pName;
+                break;
+            }
+        }
+    }
+
+    if (partnerName === 'Opponent') {
+        const allTradeRows = Array.from(document.querySelectorAll('*'))
+            .map(e => e.innerText || '')
+            .filter(t => (t.includes('↔') || t.includes('<->')) && t.length < 60);
+
+        for (const rowText of allTradeRows) {
+            for (const pName of Object.keys(GameMemory.players)) {
+                if (!GameMemory.isMe(pName) && rowText.toLowerCase().includes(pName.toLowerCase())) {
+                    partnerName = pName;
+                    break;
+                }
+            }
+        }
+    }
+
     let givenCash = 0;
     let receivedCash = 0;
     const cashMatches = modalText.match(/\$\s*(\d{1,4})/g);
@@ -308,7 +342,7 @@ export function scrapeTradeModalDOM() {
     }
 
     return {
-        partnerName: '__OPP__',
+        partnerName,
         givenTiles,
         receivedTiles,
         givenCash,

@@ -838,6 +838,33 @@
       if (GameMemory.isMe(owner)) givenTiles.push(t);
       else receivedTiles.push(t);
     }
+    let partnerName = "Opponent";
+    for (const t of receivedTiles) {
+      const owner = GameMemory.ownership[t.id]?.owner;
+      if (owner && !GameMemory.isMe(owner)) {
+        partnerName = owner;
+        break;
+      }
+    }
+    if (partnerName === "Opponent") {
+      for (const pName of Object.keys(GameMemory.players)) {
+        if (!GameMemory.isMe(pName) && new RegExp(`\\b${pName}\\b`, "i").test(modalText)) {
+          partnerName = pName;
+          break;
+        }
+      }
+    }
+    if (partnerName === "Opponent") {
+      const allTradeRows = Array.from(document.querySelectorAll("*")).map((e) => e.innerText || "").filter((t) => (t.includes("\u2194") || t.includes("<->")) && t.length < 60);
+      for (const rowText of allTradeRows) {
+        for (const pName of Object.keys(GameMemory.players)) {
+          if (!GameMemory.isMe(pName) && rowText.toLowerCase().includes(pName.toLowerCase())) {
+            partnerName = pName;
+            break;
+          }
+        }
+      }
+    }
     let givenCash = 0;
     let receivedCash = 0;
     const cashMatches = modalText.match(/\$\s*(\d{1,4})/g);
@@ -845,7 +872,7 @@
       receivedCash = parseInt(cashMatches[0].replace(/\D/g, ""), 10) || 0;
     }
     return {
-      partnerName: "__OPP__",
+      partnerName,
       givenTiles,
       receivedTiles,
       givenCash,
@@ -1816,32 +1843,161 @@
       }
     },
     buildPrompt(tradeData) {
-      const givenTiles = (tradeData.givenTiles || []).map((t) => `${t.name} (${t.group || "Special"}, $${t.price})`).join(", ") || "None";
-      const receivedTiles = (tradeData.receivedTiles || []).map((t) => `${t.name} (${t.group || "Special"}, $${t.price})`).join(", ") || "None";
       const partner = tradeData.partnerName || "Opponent";
-      let givesMonopoly = false;
-      for (const t of tradeData.givenTiles || []) {
-        if (t.group && GROUP_TILES[t.group]) {
-          const groupTiles = GROUP_TILES[t.group];
-          const othersOwned = groupTiles.filter((gid) => gid !== t.id).every((gid) => GameMemory.ownership[gid]?.owner === partner);
-          if (othersOwned) givesMonopoly = true;
+      const partnerObj = GameMemory.players[partner] || { cash: "Unknown", pos: 0, inJail: false };
+      const partnerCash = partnerObj.cash;
+      const playerStats = {};
+      for (const [pName, pData] of Object.entries(GameMemory.players)) {
+        playerStats[pName] = {
+          cash: pData.cash,
+          pos: pData.pos,
+          inJail: pData.inJail,
+          monopolies: [],
+          properties: [],
+          totalHouses: 0,
+          totalHotels: 0,
+          mortgaged: []
+        };
+      }
+      const myName = GameMemory.myName || "Me";
+      if (!playerStats[myName]) {
+        playerStats[myName] = {
+          cash: GameMemory.myCash,
+          pos: GameMemory.myPos,
+          inJail: GameMemory.inJail,
+          monopolies: [],
+          properties: [],
+          totalHouses: 0,
+          totalHotels: 0,
+          mortgaged: []
+        };
+      } else {
+        playerStats[myName].cash = GameMemory.myCash;
+        playerStats[myName].pos = GameMemory.myPos;
+        playerStats[myName].inJail = GameMemory.inJail;
+      }
+      for (const [tileId, ownInfo] of Object.entries(GameMemory.ownership)) {
+        if (!ownInfo || !ownInfo.owner) continue;
+        const tile = BOARD_TILES[tileId];
+        if (!tile) continue;
+        const ownerKey = Object.keys(playerStats).find(
+          (k) => GameMemory.isMe(ownInfo.owner) ? k === myName || GameMemory.isMe(k) : k.toLowerCase() === ownInfo.owner.toLowerCase()
+        ) || ownInfo.owner;
+        if (!playerStats[ownerKey]) {
+          playerStats[ownerKey] = {
+            cash: "Unknown",
+            pos: 0,
+            inJail: false,
+            monopolies: [],
+            properties: [],
+            totalHouses: 0,
+            totalHotels: 0,
+            mortgaged: []
+          };
+        }
+        const pEntry = playerStats[ownerKey];
+        pEntry.properties.push(tile.name);
+        if (ownInfo.mortgaged) pEntry.mortgaged.push(tile.name);
+        if (ownInfo.houses === 5) {
+          pEntry.totalHotels++;
+        } else if (ownInfo.houses > 0) {
+          pEntry.totalHouses += ownInfo.houses;
         }
       }
-      let gainsMonopoly = false;
-      for (const t of tradeData.receivedTiles || []) {
-        if (t.group && GROUP_TILES[t.group]) {
-          const groupTiles = GROUP_TILES[t.group];
-          const othersOwned = groupTiles.filter((gid) => gid !== t.id).every((gid) => GameMemory.isMe(GameMemory.ownership[gid]?.owner));
-          if (othersOwned) gainsMonopoly = true;
+      for (const [pName, pEntry] of Object.entries(playerStats)) {
+        for (const [groupName, groupTiles] of Object.entries(GROUP_TILES)) {
+          if (groupName === "Airport" || groupName === "Utility") continue;
+          const ownsAll = groupTiles.every((t) => {
+            const o = GameMemory.ownership[t.id];
+            return o && (GameMemory.isMe(pName) ? GameMemory.isMe(o.owner) : o.owner?.toLowerCase() === pName.toLowerCase());
+          });
+          if (ownsAll) {
+            const houseCounts = groupTiles.map((t) => `${t.name}: ${GameMemory.ownership[t.id]?.houses || 0}h`).join(", ");
+            pEntry.monopolies.push(`${groupName} (${houseCounts})`);
+          }
         }
       }
-      return `Incoming trade from ${partner}:
-We Give: [${givenTiles}] + $${tradeData.givenCash || 0} cash
-We Receive: [${receivedTiles}] + $${tradeData.receivedCash || 0} cash
-Our Live Cash: $${GameMemory.myCash}
-Strategic Alert: Gives opponent monopoly? ${givesMonopoly ? "YES (High danger)" : "No"}. Gives us monopoly? ${gainsMonopoly ? "YES (High value)" : "No"}.
+      const playersFormatted = Object.entries(playerStats).map(([pName, p]) => {
+        const isMeText = GameMemory.isMe(pName) ? " (ME)" : pName === partner ? " (TRADE PARTNER)" : "";
+        const monoText = p.monopolies.length > 0 ? p.monopolies.join(" | ") : "None";
+        const mortgagedText = p.mortgaged.length > 0 ? ` | Mortgaged: [${p.mortgaged.join(", ")}]` : "";
+        return `- ${pName}${isMeText}:
+    Money: $${p.cash} | Pos: Tile #${p.pos} | In Jail: ${p.inJail ? "YES" : "No"}
+    Monopolies: [${monoText}]
+    Houses Built: ${p.totalHouses} | Hotels Built: ${p.totalHotels} | Properties Owned: ${p.properties.length}${mortgagedText}`;
+      }).join("\n");
+      const givenTiles = tradeData.givenTiles || [];
+      const receivedTiles = tradeData.receivedTiles || [];
+      const givenDetails = givenTiles.map((t) => {
+        return `${t.name} (Group: ${t.group || "Special"}, Price: $${t.price}, HouseCost: $${t.houseCost || 0})`;
+      }).join("\n  - ") || "None";
+      const receivedDetails = receivedTiles.map((t) => {
+        return `${t.name} (Group: ${t.group || "Special"}, Price: $${t.price}, HouseCost: $${t.houseCost || 0})`;
+      }).join("\n  - ") || "None";
+      const partnerCompletedGroups = [];
+      for (const t of givenTiles) {
+        if (t.group && GROUP_TILES[t.group]) {
+          const groupTiles = GROUP_TILES[t.group];
+          const othersOwned = groupTiles.filter((gid) => gid !== t.id).every((gid) => {
+            const o = GameMemory.ownership[gid];
+            return o && o.owner?.toLowerCase() === partner.toLowerCase();
+          });
+          if (othersOwned) partnerCompletedGroups.push(t.group);
+        }
+      }
+      const myCompletedGroups = [];
+      for (const t of receivedTiles) {
+        if (t.group && GROUP_TILES[t.group]) {
+          const groupTiles = GROUP_TILES[t.group];
+          const othersOwned = groupTiles.filter((gid) => gid !== t.id).every((gid) => {
+            const o = GameMemory.ownership[gid];
+            return o && GameMemory.isMe(o.owner);
+          });
+          if (othersOwned) myCompletedGroups.push(t.group);
+        }
+      }
+      const partnerCanBuild = partnerCompletedGroups.length > 0 && typeof partnerCash === "number" && partnerCash >= 300;
+      const myPostCash = GameMemory.myCash + (tradeData.receivedCash || 0) - (tradeData.givenCash || 0);
+      return `=== RICHUP FULL GAME-STATE BRIEFING ===
+LIVE FINANCIALS:
+- My Live Cash: $${GameMemory.myCash}
+- My Dynamic Survival Reserve: $${GameMemory.lastDynamicReserve} (Required cash floor to survive incoming rent hits)
+- Next Turn Danger EV: $${GameMemory.lastDangerEV}
 
-Should we CONFIRM, DECLINE, or NEGOTIATE? Output strictly valid JSON: {"decision": "...", "reason": "...", "chatReply": "..."}`;
+ALL PLAYERS IN MATCH (MONEY, HOUSES, POSITIONS):
+${playersFormatted}
+
+=== PROPOSED TRADE OFFER ===
+Trade Partner: ${partner} (Their Money: $${partnerCash})
+WE GIVE:
+  - ${givenDetails}
+  - Cash Offered: $${tradeData.givenCash || 0}
+
+WE RECEIVE:
+  - ${receivedDetails}
+  - Cash Demanded: $${tradeData.receivedCash || 0}
+
+Net Cash Transfer: ${tradeData.receivedCash - tradeData.givenCash >= 0 ? `+$${tradeData.receivedCash - tradeData.givenCash} to us` : `-$${tradeData.givenCash - tradeData.receivedCash} from us`}
+
+=== STRATEGIC THREAT & OPPORTUNITY SIMULATION ===
+1. Monopoly Impact on ${partner}:
+   ${partnerCompletedGroups.length > 0 ? `CRITICAL ALERT: Completes [${partnerCompletedGroups.join(", ")}] monopoly for ${partner}!` + (partnerCanBuild ? ` Partner has $${partnerCash} cash and CAN IMMEDIATELY RUSH HOUSES!` : ` Partner only has $${partnerCash} cash (building power delayed).`) : `No monopoly completed for partner.`}
+
+2. Monopoly Impact on Us:
+   ${myCompletedGroups.length > 0 ? `MASSIVE WIN: Completes [${myCompletedGroups.join(", ")}] monopoly for us! Post-trade cash: $${myPostCash}.` : `No monopoly completed for us.`}
+
+=== GRANDMASTER DIRECTIVE ===
+You are an elite Grandmaster Monopoly AI. Using the full context of everyone's money, existing houses, and post-trade building power:
+1. Decision: CONFIRM (if highly advantageous or safe win-win), DECLINE (if kingmaking opponent or danger too high), or NEGOTIATE (if close but needs more cash or counter-property).
+2. Reason: Under 15 words explaining the strategic reasoning based on opponent money, houses, or monopolies.
+3. Chat Reply: Under 15 words, a psychological, clever in-game chat message directed at ${partner}.
+
+Respond ONLY with valid JSON:
+{
+  "decision": "CONFIRM" | "DECLINE" | "NEGOTIATE",
+  "reason": "concise rationale under 15 words",
+  "chatReply": "short casual in-game message under 15 words"
+}`;
     },
     parseJsonSafely(text) {
       if (!text) return null;
