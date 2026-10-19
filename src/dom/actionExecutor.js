@@ -10,6 +10,7 @@ import { TradeProposalExecutor } from '../engine/tradeProposalExecutor.js';
 import { HouseBuilder } from '../engine/houseBuilder.js';
 import { DebtRecovery } from '../engine/debtRecovery.js';
 import { scrapeTradeModalDOM } from './boardScanner.js';
+import { OllamaClient } from '../engine/ollamaClient.js';
 import { ChatEngine } from '../ui/chatEngine.js';
 import { HUDPanel } from '../ui/hudPanel.js';
 
@@ -86,10 +87,20 @@ function executeOrAdvise({ el, title, reason, onExecute, onSkip }) {
 }
 
 export const ActionExecutor = {
-    handleTrade(snapshot) {
-        const declineBtn = snapshot.findExactOrIncludes(['decline', 'reject']);
-        const acceptBtn = snapshot.findExactOrIncludes(['accept']);
-        if (!declineBtn && !acceptBtn) return false;
+    async handleTrade(snapshot) {
+        // If modal buttons aren't visible, check if an incoming trade notification exists in the sidebar
+        const sidebarTrade = snapshot.findSidebarIncomingTradeItem();
+        const confirmBtn = snapshot.findTradeConfirmButton();
+        const declineBtn = snapshot.findTradeDeclineButton();
+        const negotiateBtn = snapshot.findTradeNegotiateButton();
+
+        if (!confirmBtn && !declineBtn && sidebarTrade) {
+            logToBot('[TRADE] Incoming trade row detected in sidebar. Opening trade modal...');
+            delayClick(sidebarTrade, 'Open incoming trade from sidebar');
+            return true;
+        }
+
+        if (!declineBtn && !confirmBtn) return false;
 
         if (!CONFIG.AUTO_TRADE_ENABLED) {
             if (declineBtn) {
@@ -100,17 +111,30 @@ export const ActionExecutor = {
         }
 
         const tradeData = scrapeTradeModalDOM();
-        const verdict = TradeEngine.evaluateIncomingTrade(tradeData);
+        logToBot('[TRADE] Evaluating incoming trade with Hybrid Brain...');
+        const verdict = await OllamaClient.evaluateTradeWithLLM(tradeData);
         logToBot(`Trade Verdict: ${verdict.reason}`);
 
-        if (verdict.accept && acceptBtn) {
+        if (verdict.negotiate && negotiateBtn) {
             return executeOrAdvise({
-                el: acceptBtn,
-                title: 'ACCEPT INCOMING TRADE',
+                el: negotiateBtn,
+                title: 'NEGOTIATE INCOMING TRADE',
                 reason: verdict.reason,
                 onExecute: () => {
-                    ChatEngine.sendChatMessage('tradeAccept', verdict.chatReply);
-                    delayClick(acceptBtn, `Accepting trade (${verdict.reason})`);
+                    if (verdict.chatReply) ChatEngine.sendChatMessage('tradeNegotiate', verdict.chatReply);
+                    delayClick(negotiateBtn, `Negotiating trade (${verdict.reason})`);
+                }
+            });
+        }
+
+        if (verdict.accept && confirmBtn) {
+            return executeOrAdvise({
+                el: confirmBtn,
+                title: 'CONFIRM INCOMING TRADE',
+                reason: verdict.reason,
+                onExecute: () => {
+                    if (verdict.chatReply) ChatEngine.sendChatMessage('tradeAccept', verdict.chatReply);
+                    delayClick(confirmBtn, `Confirming trade (${verdict.reason})`);
                 }
             });
         }
@@ -121,7 +145,7 @@ export const ActionExecutor = {
                 title: 'DECLINE INCOMING TRADE',
                 reason: verdict.reason,
                 onExecute: () => {
-                    ChatEngine.sendChatMessage('tradeReject', verdict.chatReply);
+                    if (verdict.chatReply) ChatEngine.sendChatMessage('tradeReject', verdict.chatReply);
                     delayClick(declineBtn, `Declining trade (${verdict.reason})`);
                 }
             });

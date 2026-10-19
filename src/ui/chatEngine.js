@@ -20,6 +20,11 @@ export const ChatEngine = {
             "Deal accepted! Win-win.",
             "Pleasure doing business with you.",
             "Good trade, let's see how the dice roll."
+        ],
+        tradeNegotiate: [
+            "Close, but let's counter-offer. Sweeten the deal?",
+            "I'm interested, but let's adjust terms to make it fair.",
+            "Counter-proposal sent, check if this works."
         ]
     }),
 

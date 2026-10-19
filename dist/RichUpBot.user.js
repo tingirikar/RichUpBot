@@ -6,7 +6,10 @@
 // @author       haxxor + Grandmaster AI
 // @license      GPL-3.0
 // @match        https://richup.io/*
-// @grant        none
+// @grant        GM_xmlhttpRequest
+// @grant        GM.xmlHttpRequest
+// @connect      localhost
+// @connect      127.0.0.1
 // @run-at       document-start
 // ==/UserScript==
 
@@ -50,8 +53,14 @@
     // Require at least 10% utility edge in trades
     AUCTION_MAX_OVERBID_RATIO: 1.4,
     // Max bid for critical blocker/completer
-    CHAT_COOLDOWN_MS: 2e4
+    CHAT_COOLDOWN_MS: 2e4,
     // Cooldown between chat negotiation messages
+    // Hybrid Vision / LLM Brain Configuration (Local Ollama)
+    OLLAMA_ENABLED: localStorage.getItem("richup_ollama_enabled") === "true",
+    OLLAMA_HOST: localStorage.getItem("richup_ollama_host") || "http://localhost:11434",
+    OLLAMA_MODEL: localStorage.getItem("richup_ollama_model") || "llama3.2-vision",
+    OLLAMA_TIMEOUT_MS: 2800
+    // Strict 2.8s cap to avoid stalling turns
   };
   var STATES = Object.freeze({
     IDLE: "idle",
@@ -481,6 +490,32 @@
           }
         }
         return null;
+      },
+      /**
+       * Finds incoming trade rows under the "Trades" sidebar (e.g. "Round Guest ↔ Lokesh")
+       */
+      findSidebarIncomingTradeItem() {
+        const allItems = document.querySelectorAll('div, li, button, [class*="trade"], p, span');
+        const hud = document.getElementById("rubot-hud-panel");
+        for (let i = 0; i < allItems.length; i++) {
+          const el = allItems[i];
+          if (hud && hud.contains(el)) continue;
+          if (!isVisibleAndEnabled(el)) continue;
+          const text = normalizeText(el);
+          if ((text.includes("\u2194") || text.includes("<->")) && text.length < 50) {
+            return el;
+          }
+        }
+        return null;
+      },
+      findTradeConfirmButton() {
+        return this.findExactOrIncludes(["confirm", "accept", "agree"]);
+      },
+      findTradeDeclineButton() {
+        return this.findExactOrIncludes(["decline", "reject", "refuse"]);
+      },
+      findTradeNegotiateButton() {
+        return this.findExactOrIncludes(["negotiate", "counter"]);
       },
       /**
        * Finds the UP-ARROW [↑] button to build a house inside the property card modal
@@ -1360,6 +1395,11 @@
         "Deal accepted! Win-win.",
         "Pleasure doing business with you.",
         "Good trade, let's see how the dice roll."
+      ],
+      tradeNegotiate: [
+        "Close, but let's counter-offer. Sweeten the deal?",
+        "I'm interested, but let's adjust terms to make it fair.",
+        "Counter-proposal sent, check if this works."
       ]
     }),
     sendChatMessage(category, customText = null) {
@@ -1652,6 +1692,170 @@
     }
   };
 
+  // src/engine/ollamaClient.js
+  var OllamaClient = {
+    status: "unchecked",
+    // 'connected' | 'offline' | 'error'
+    /**
+     * Universal HTTP helper using GM_xmlhttpRequest if present, else fetch
+     */
+    httpRequest({ method = "POST", url, data = null, timeout = 2800 }) {
+      return new Promise((resolve, reject) => {
+        const gmReq = typeof GM_xmlhttpRequest !== "undefined" ? GM_xmlhttpRequest : typeof GM !== "undefined" && GM && GM.xmlHttpRequest ? GM.xmlHttpRequest : null;
+        if (gmReq) {
+          gmReq({
+            method,
+            url,
+            headers: { "Content-Type": "application/json" },
+            data: data ? JSON.stringify(data) : null,
+            timeout,
+            onload: (res) => {
+              if (res.status >= 200 && res.status < 300) {
+                try {
+                  resolve(JSON.parse(res.responseText));
+                } catch (e) {
+                  reject(e);
+                }
+              } else {
+                reject(new Error(`Ollama HTTP ${res.status}: ${res.statusText || ""}`));
+              }
+            },
+            ontimeout: () => reject(new Error("Ollama request timed out (>2.8s)")),
+            onerror: (err) => reject(new Error(`Ollama connection error: ${err.message || "Host unreachable"}`))
+          });
+          return;
+        }
+        const controller = new AbortController();
+        const tid = setTimeout(() => controller.abort(), timeout);
+        fetch(url, {
+          method,
+          headers: { "Content-Type": "application/json" },
+          body: data ? JSON.stringify(data) : void 0,
+          signal: controller.signal
+        }).then((res) => {
+          clearTimeout(tid);
+          if (!res.ok) throw new Error(`Ollama HTTP ${res.status}`);
+          return res.json();
+        }).then(resolve).catch((err) => {
+          clearTimeout(tid);
+          reject(err);
+        });
+      });
+    },
+    /**
+     * Checks if Ollama is running and lists available models
+     */
+    async checkHealth() {
+      try {
+        const data = await this.httpRequest({
+          method: "GET",
+          url: `${CONFIG.OLLAMA_HOST}/api/tags`,
+          timeout: 1800
+        });
+        const models = (data?.models || []).map((m) => m.name);
+        this.status = "connected";
+        return {
+          ok: true,
+          models,
+          hasTargetModel: models.some((m) => m.includes(CONFIG.OLLAMA_MODEL))
+        };
+      } catch (err) {
+        this.status = "offline";
+        return {
+          ok: false,
+          error: err.message
+        };
+      }
+    },
+    /**
+     * Evaluates incoming trade with local LLM or falls back to Minimax Markov
+     */
+    async evaluateTradeWithLLM(tradeData) {
+      if (!CONFIG.OLLAMA_ENABLED) {
+        return TradeEngine.evaluateIncomingTrade(tradeData);
+      }
+      const prompt = this.buildPrompt(tradeData);
+      try {
+        const payload = {
+          model: CONFIG.OLLAMA_MODEL,
+          messages: [
+            {
+              role: "system",
+              content: 'You are a Grandmaster Monopoly / RichUp AI player. Evaluate trade offers with sharp strategic vision. Output ONLY valid JSON in format: {"decision": "CONFIRM" | "DECLINE" | "NEGOTIATE", "reason": "concise rationale under 15 words", "chatReply": "short casual in-game message under 15 words"}'
+            },
+            {
+              role: "user",
+              content: prompt
+            }
+          ],
+          stream: false,
+          options: {
+            temperature: 0.1,
+            num_predict: 120
+          }
+        };
+        const data = await this.httpRequest({
+          method: "POST",
+          url: `${CONFIG.OLLAMA_HOST}/api/chat`,
+          data: payload,
+          timeout: CONFIG.OLLAMA_TIMEOUT_MS || 2800
+        });
+        const rawContent = data?.message?.content || "";
+        const parsed = this.parseJsonSafely(rawContent);
+        if (parsed && (parsed.decision === "CONFIRM" || parsed.decision === "DECLINE" || parsed.decision === "NEGOTIATE")) {
+          return {
+            accept: parsed.decision === "CONFIRM",
+            negotiate: parsed.decision === "NEGOTIATE",
+            reason: `[Ollama ${CONFIG.OLLAMA_MODEL}] ${parsed.reason}`,
+            chatReply: parsed.chatReply || ""
+          };
+        }
+        return TradeEngine.evaluateIncomingTrade(tradeData);
+      } catch (_) {
+        return TradeEngine.evaluateIncomingTrade(tradeData);
+      }
+    },
+    buildPrompt(tradeData) {
+      const givenTiles = (tradeData.givenTiles || []).map((t) => `${t.name} (${t.group || "Special"}, $${t.price})`).join(", ") || "None";
+      const receivedTiles = (tradeData.receivedTiles || []).map((t) => `${t.name} (${t.group || "Special"}, $${t.price})`).join(", ") || "None";
+      const partner = tradeData.partnerName || "Opponent";
+      let givesMonopoly = false;
+      for (const t of tradeData.givenTiles || []) {
+        if (t.group && GROUP_TILES[t.group]) {
+          const groupTiles = GROUP_TILES[t.group];
+          const othersOwned = groupTiles.filter((gid) => gid !== t.id).every((gid) => GameMemory.ownership[gid]?.owner === partner);
+          if (othersOwned) givesMonopoly = true;
+        }
+      }
+      let gainsMonopoly = false;
+      for (const t of tradeData.receivedTiles || []) {
+        if (t.group && GROUP_TILES[t.group]) {
+          const groupTiles = GROUP_TILES[t.group];
+          const othersOwned = groupTiles.filter((gid) => gid !== t.id).every((gid) => GameMemory.isMe(GameMemory.ownership[gid]?.owner));
+          if (othersOwned) gainsMonopoly = true;
+        }
+      }
+      return `Incoming trade from ${partner}:
+We Give: [${givenTiles}] + $${tradeData.givenCash || 0} cash
+We Receive: [${receivedTiles}] + $${tradeData.receivedCash || 0} cash
+Our Live Cash: $${GameMemory.myCash}
+Strategic Alert: Gives opponent monopoly? ${givesMonopoly ? "YES (High danger)" : "No"}. Gives us monopoly? ${gainsMonopoly ? "YES (High value)" : "No"}.
+
+Should we CONFIRM, DECLINE, or NEGOTIATE? Output strictly valid JSON: {"decision": "...", "reason": "...", "chatReply": "..."}`;
+    },
+    parseJsonSafely(text) {
+      if (!text) return null;
+      try {
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          return JSON.parse(jsonMatch[0]);
+        }
+      } catch (_) {
+      }
+      return null;
+    }
+  };
+
   // src/ui/hudPanel.js
   var HUDPanel = {
     elements: {},
@@ -1889,6 +2093,63 @@
                 gap: 5px;
                 cursor: pointer;
             }
+            .rubot-ollama-section {
+                background: rgba(124, 58, 237, 0.08);
+                border: 1px solid rgba(139, 92, 246, 0.25);
+                border-radius: 6px;
+                padding: 6px 8px;
+                display: flex;
+                flex-direction: column;
+                gap: 5px;
+            }
+            .rubot-btn-ping {
+                background: rgba(139, 92, 246, 0.2);
+                border: 1px solid rgba(139, 92, 246, 0.4);
+                color: #e9d5ff;
+                padding: 2px 7px;
+                border-radius: 4px;
+                font-size: 9.5px;
+                font-weight: 600;
+                cursor: pointer;
+            }
+            .rubot-btn-ping:hover {
+                background: rgba(139, 92, 246, 0.4);
+            }
+            .rubot-ollama-fields {
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
+                margin-top: 3px;
+            }
+            .rubot-field-row {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+            }
+            .rubot-field-label {
+                font-size: 9.5px;
+                color: #a78bfa;
+                min-width: 36px;
+            }
+            .rubot-mini-input {
+                flex: 1;
+                background: rgba(0, 0, 0, 0.35);
+                border: 1px solid rgba(139, 92, 246, 0.3);
+                border-radius: 4px;
+                color: #fff;
+                padding: 2px 6px;
+                font-size: 10px;
+                font-family: inherit;
+            }
+            .rubot-mini-input:focus {
+                outline: none;
+                border-color: #8b5cf6;
+            }
+            .rubot-ollama-status {
+                font-size: 9px;
+                color: #a78bfa;
+                font-style: italic;
+            }
             .rubot-terminal {
                 flex: 1;
                 min-height: 80px;
@@ -1964,6 +2225,27 @@
 
                 <button class="rubot-master-btn" id="rubot-master-btn">START BOT [=]</button>
 
+                <!-- Hybrid Ollama Brain Card -->
+                <div class="rubot-ollama-section">
+                    <div class="rubot-row">
+                        <label style="font-weight:700; color:#c4b5fd; cursor:pointer;">
+                            <input type="checkbox" id="rubot-chk-ollama" ${CONFIG.OLLAMA_ENABLED ? "checked" : ""}> Hybrid Ollama Brain
+                        </label>
+                        <button class="rubot-btn-ping" id="rubot-btn-ollama-ping">\u26A1 Test</button>
+                    </div>
+                    <div class="rubot-ollama-fields" id="rubot-ollama-fields" style="${CONFIG.OLLAMA_ENABLED ? "" : "display:none;"}">
+                        <div class="rubot-field-row">
+                            <span class="rubot-field-label">Host:</span>
+                            <input type="text" id="rubot-input-ollama-host" class="rubot-mini-input" value="${CONFIG.OLLAMA_HOST}">
+                        </div>
+                        <div class="rubot-field-row">
+                            <span class="rubot-field-label">Model:</span>
+                            <input type="text" id="rubot-input-ollama-model" class="rubot-mini-input" value="${CONFIG.OLLAMA_MODEL}">
+                        </div>
+                        <div class="rubot-ollama-status" id="rubot-ollama-status">Status: Standby (Minimax Fallback)</div>
+                    </div>
+                </div>
+
                 <div class="rubot-toggles">
                     <label><input type="checkbox" id="rubot-chk-alwaysbuy" checked> Buy Land</label>
                     <label><input type="checkbox" id="rubot-chk-ambush" checked> Hotel Ambush</label>
@@ -2024,6 +2306,44 @@
       };
       this.elements.nameInput.addEventListener("change", (e) => handleNameUpdate(e.target.value));
       this.elements.nameInput.addEventListener("input", (e) => handleNameUpdate(e.target.value));
+      const chkOllama = document.getElementById("rubot-chk-ollama");
+      const fieldsOllama = document.getElementById("rubot-ollama-fields");
+      const inputHost = document.getElementById("rubot-input-ollama-host");
+      const inputModel = document.getElementById("rubot-input-ollama-model");
+      const statusOllama = document.getElementById("rubot-ollama-status");
+      const btnPing = document.getElementById("rubot-btn-ollama-ping");
+      chkOllama.addEventListener("change", (e) => {
+        CONFIG.OLLAMA_ENABLED = e.target.checked;
+        localStorage.setItem("richup_ollama_enabled", e.target.checked ? "true" : "false");
+        fieldsOllama.style.display = e.target.checked ? "flex" : "none";
+        this.logTerminal(`Hybrid Brain (Ollama) ${e.target.checked ? "ENABLED" : "DISABLED"}`);
+      });
+      inputHost.addEventListener("change", (e) => {
+        CONFIG.OLLAMA_HOST = e.target.value.trim();
+        localStorage.setItem("richup_ollama_host", CONFIG.OLLAMA_HOST);
+        this.logTerminal(`Ollama host set to: ${CONFIG.OLLAMA_HOST}`);
+      });
+      inputModel.addEventListener("change", (e) => {
+        CONFIG.OLLAMA_MODEL = e.target.value.trim();
+        localStorage.setItem("richup_ollama_model", CONFIG.OLLAMA_MODEL);
+        this.logTerminal(`Ollama model set to: ${CONFIG.OLLAMA_MODEL}`);
+      });
+      btnPing.addEventListener("click", async () => {
+        statusOllama.textContent = "Testing connection...";
+        statusOllama.style.color = "#fbbf24";
+        this.logTerminal(`Pinging Ollama at ${CONFIG.OLLAMA_HOST}...`);
+        const res = await OllamaClient.checkHealth();
+        if (res.ok) {
+          const modelFound = res.hasTargetModel ? `(${CONFIG.OLLAMA_MODEL} ready)` : `(models: ${res.models.slice(0, 2).join(", ") || "none"})`;
+          statusOllama.textContent = `\u{1F7E2} Connected ${modelFound}`;
+          statusOllama.style.color = "#34d399";
+          this.logTerminal(`Ollama online! Models: ${res.models.join(", ") || "none"}`);
+        } else {
+          statusOllama.textContent = `\u26AA Offline (Minimax Math Fallback)`;
+          statusOllama.style.color = "#94a3b8";
+          this.logTerminal(`Ollama offline: ${res.error || "Connection failed"}. Auto-fallback active.`);
+        }
+      });
       document.getElementById("rubot-chk-alwaysbuy").addEventListener("change", (e) => {
         CONFIG.ALWAYS_BUY_AFFORDABLE = e.target.checked;
       });
@@ -2209,10 +2529,17 @@
     return true;
   }
   var ActionExecutor = {
-    handleTrade(snapshot) {
-      const declineBtn = snapshot.findExactOrIncludes(["decline", "reject"]);
-      const acceptBtn = snapshot.findExactOrIncludes(["accept"]);
-      if (!declineBtn && !acceptBtn) return false;
+    async handleTrade(snapshot) {
+      const sidebarTrade = snapshot.findSidebarIncomingTradeItem();
+      const confirmBtn = snapshot.findTradeConfirmButton();
+      const declineBtn = snapshot.findTradeDeclineButton();
+      const negotiateBtn = snapshot.findTradeNegotiateButton();
+      if (!confirmBtn && !declineBtn && sidebarTrade) {
+        logToBot("[TRADE] Incoming trade row detected in sidebar. Opening trade modal...");
+        delayClick(sidebarTrade, "Open incoming trade from sidebar");
+        return true;
+      }
+      if (!declineBtn && !confirmBtn) return false;
       if (!CONFIG.AUTO_TRADE_ENABLED) {
         if (declineBtn) {
           delayClick(declineBtn, "Auto-declining trade (Auto-Trade disabled)");
@@ -2221,16 +2548,28 @@
         return false;
       }
       const tradeData = scrapeTradeModalDOM();
-      const verdict = TradeEngine.evaluateIncomingTrade(tradeData);
+      logToBot("[TRADE] Evaluating incoming trade with Hybrid Brain...");
+      const verdict = await OllamaClient.evaluateTradeWithLLM(tradeData);
       logToBot(`Trade Verdict: ${verdict.reason}`);
-      if (verdict.accept && acceptBtn) {
+      if (verdict.negotiate && negotiateBtn) {
         return executeOrAdvise({
-          el: acceptBtn,
-          title: "ACCEPT INCOMING TRADE",
+          el: negotiateBtn,
+          title: "NEGOTIATE INCOMING TRADE",
           reason: verdict.reason,
           onExecute: () => {
-            ChatEngine.sendChatMessage("tradeAccept", verdict.chatReply);
-            delayClick(acceptBtn, `Accepting trade (${verdict.reason})`);
+            if (verdict.chatReply) ChatEngine.sendChatMessage("tradeNegotiate", verdict.chatReply);
+            delayClick(negotiateBtn, `Negotiating trade (${verdict.reason})`);
+          }
+        });
+      }
+      if (verdict.accept && confirmBtn) {
+        return executeOrAdvise({
+          el: confirmBtn,
+          title: "CONFIRM INCOMING TRADE",
+          reason: verdict.reason,
+          onExecute: () => {
+            if (verdict.chatReply) ChatEngine.sendChatMessage("tradeAccept", verdict.chatReply);
+            delayClick(confirmBtn, `Confirming trade (${verdict.reason})`);
           }
         });
       }
@@ -2240,7 +2579,7 @@
           title: "DECLINE INCOMING TRADE",
           reason: verdict.reason,
           onExecute: () => {
-            ChatEngine.sendChatMessage("tradeReject", verdict.chatReply);
+            if (verdict.chatReply) ChatEngine.sendChatMessage("tradeReject", verdict.chatReply);
             delayClick(declineBtn, `Declining trade (${verdict.reason})`);
           }
         });
@@ -2550,13 +2889,15 @@
   function checkGameStarted(snapshot) {
     return !snapshot.findExactOrIncludes(["change color", "join game", "create game", "ready up"]);
   }
-  function evaluateAndAct() {
+  var isEvaluating = false;
+  async function evaluateAndAct() {
     try {
-      if (!state.status || getIsActing()) return;
+      if (!state.status || getIsActing() || isEvaluating) return;
+      isEvaluating = true;
       syncBoardStateFromDOM();
       HUDPanel.updateTelemetry();
       const snapshot = createDOMSnapshot();
-      if (ActionExecutor.handleTrade(snapshot)) return;
+      if (await ActionExecutor.handleTrade(snapshot)) return;
       if (ActionExecutor.handleDebtRecovery(snapshot)) return;
       if (ActionExecutor.handleJail(snapshot)) return;
       if (ActionExecutor.handleRollDice(snapshot)) return;
@@ -2567,6 +2908,8 @@
       ActionExecutor.handleEndTurn(snapshot);
     } catch (err) {
       logToBot(`Eval loop error: ${err}`);
+    } finally {
+      isEvaluating = false;
     }
   }
   function scheduleEvaluate() {
@@ -2575,9 +2918,9 @@
       clearTimeout(state.evaluateTimeout);
       state.timeouts.delete(state.evaluateTimeout);
     }
-    state.evaluateTimeout = scheduleTimeout(() => {
+    state.evaluateTimeout = scheduleTimeout(async () => {
       state.evaluateTimeout = null;
-      evaluateAndAct();
+      await evaluateAndAct();
     }, CONFIG.OBSERVER_DEBOUNCE_MS);
   }
   function toggleAutomation() {

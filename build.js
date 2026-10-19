@@ -10,7 +10,10 @@ const banner = `// ==UserScript==
 // @author       haxxor + Grandmaster AI
 // @license      GPL-3.0
 // @match        https://richup.io/*
-// @grant        none
+// @grant        GM_xmlhttpRequest
+// @grant        GM.xmlHttpRequest
+// @connect      localhost
+// @connect      127.0.0.1
 // @run-at       document-start
 // ==/UserScript==
 `;

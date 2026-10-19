@@ -128,6 +128,36 @@ export function createDOMSnapshot() {
         },
 
         /**
+         * Finds incoming trade rows under the "Trades" sidebar (e.g. "Round Guest ↔ Lokesh")
+         */
+        findSidebarIncomingTradeItem() {
+            const allItems = document.querySelectorAll('div, li, button, [class*="trade"], p, span');
+            const hud = document.getElementById('rubot-hud-panel');
+            for (let i = 0; i < allItems.length; i++) {
+                const el = allItems[i];
+                if (hud && hud.contains(el)) continue;
+                if (!isVisibleAndEnabled(el)) continue;
+                const text = normalizeText(el);
+                if ((text.includes('↔') || text.includes('<->')) && text.length < 50) {
+                    return el;
+                }
+            }
+            return null;
+        },
+
+        findTradeConfirmButton() {
+            return this.findExactOrIncludes(['confirm', 'accept', 'agree']);
+        },
+
+        findTradeDeclineButton() {
+            return this.findExactOrIncludes(['decline', 'reject', 'refuse']);
+        },
+
+        findTradeNegotiateButton() {
+            return this.findExactOrIncludes(['negotiate', 'counter']);
+        },
+
+        /**
          * Finds the UP-ARROW [↑] button to build a house inside the property card modal
          */
         findModalUpgradeButton() {

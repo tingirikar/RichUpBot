@@ -1,6 +1,7 @@
 import { CONFIG } from '../config.js';
 import { GameMemory } from '../memory/gameMemory.js';
 import { BOARD_LABELS_BLACKLIST } from '../data/boardTiles.js';
+import { OllamaClient } from '../engine/ollamaClient.js';
 
 /**
  * MODERN VIOLET RESIZABLE HUD PANEL
@@ -249,6 +250,63 @@ export const HUDPanel = {
                 gap: 5px;
                 cursor: pointer;
             }
+            .rubot-ollama-section {
+                background: rgba(124, 58, 237, 0.08);
+                border: 1px solid rgba(139, 92, 246, 0.25);
+                border-radius: 6px;
+                padding: 6px 8px;
+                display: flex;
+                flex-direction: column;
+                gap: 5px;
+            }
+            .rubot-btn-ping {
+                background: rgba(139, 92, 246, 0.2);
+                border: 1px solid rgba(139, 92, 246, 0.4);
+                color: #e9d5ff;
+                padding: 2px 7px;
+                border-radius: 4px;
+                font-size: 9.5px;
+                font-weight: 600;
+                cursor: pointer;
+            }
+            .rubot-btn-ping:hover {
+                background: rgba(139, 92, 246, 0.4);
+            }
+            .rubot-ollama-fields {
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
+                margin-top: 3px;
+            }
+            .rubot-field-row {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+            }
+            .rubot-field-label {
+                font-size: 9.5px;
+                color: #a78bfa;
+                min-width: 36px;
+            }
+            .rubot-mini-input {
+                flex: 1;
+                background: rgba(0, 0, 0, 0.35);
+                border: 1px solid rgba(139, 92, 246, 0.3);
+                border-radius: 4px;
+                color: #fff;
+                padding: 2px 6px;
+                font-size: 10px;
+                font-family: inherit;
+            }
+            .rubot-mini-input:focus {
+                outline: none;
+                border-color: #8b5cf6;
+            }
+            .rubot-ollama-status {
+                font-size: 9px;
+                color: #a78bfa;
+                font-style: italic;
+            }
             .rubot-terminal {
                 flex: 1;
                 min-height: 80px;
@@ -325,6 +383,27 @@ export const HUDPanel = {
 
                 <button class="rubot-master-btn" id="rubot-master-btn">START BOT [=]</button>
 
+                <!-- Hybrid Ollama Brain Card -->
+                <div class="rubot-ollama-section">
+                    <div class="rubot-row">
+                        <label style="font-weight:700; color:#c4b5fd; cursor:pointer;">
+                            <input type="checkbox" id="rubot-chk-ollama" ${CONFIG.OLLAMA_ENABLED ? 'checked' : ''}> Hybrid Ollama Brain
+                        </label>
+                        <button class="rubot-btn-ping" id="rubot-btn-ollama-ping">⚡ Test</button>
+                    </div>
+                    <div class="rubot-ollama-fields" id="rubot-ollama-fields" style="${CONFIG.OLLAMA_ENABLED ? '' : 'display:none;'}">
+                        <div class="rubot-field-row">
+                            <span class="rubot-field-label">Host:</span>
+                            <input type="text" id="rubot-input-ollama-host" class="rubot-mini-input" value="${CONFIG.OLLAMA_HOST}">
+                        </div>
+                        <div class="rubot-field-row">
+                            <span class="rubot-field-label">Model:</span>
+                            <input type="text" id="rubot-input-ollama-model" class="rubot-mini-input" value="${CONFIG.OLLAMA_MODEL}">
+                        </div>
+                        <div class="rubot-ollama-status" id="rubot-ollama-status">Status: Standby (Minimax Fallback)</div>
+                    </div>
+                </div>
+
                 <div class="rubot-toggles">
                     <label><input type="checkbox" id="rubot-chk-alwaysbuy" checked> Buy Land</label>
                     <label><input type="checkbox" id="rubot-chk-ambush" checked> Hotel Ambush</label>
@@ -397,6 +476,50 @@ export const HUDPanel = {
 
         this.elements.nameInput.addEventListener('change', (e) => handleNameUpdate(e.target.value));
         this.elements.nameInput.addEventListener('input', (e) => handleNameUpdate(e.target.value));
+
+        // Hybrid Ollama Brain Wiring
+        const chkOllama = document.getElementById('rubot-chk-ollama');
+        const fieldsOllama = document.getElementById('rubot-ollama-fields');
+        const inputHost = document.getElementById('rubot-input-ollama-host');
+        const inputModel = document.getElementById('rubot-input-ollama-model');
+        const statusOllama = document.getElementById('rubot-ollama-status');
+        const btnPing = document.getElementById('rubot-btn-ollama-ping');
+
+        chkOllama.addEventListener('change', (e) => {
+            CONFIG.OLLAMA_ENABLED = e.target.checked;
+            localStorage.setItem('richup_ollama_enabled', e.target.checked ? 'true' : 'false');
+            fieldsOllama.style.display = e.target.checked ? 'flex' : 'none';
+            this.logTerminal(`Hybrid Brain (Ollama) ${e.target.checked ? 'ENABLED' : 'DISABLED'}`);
+        });
+
+        inputHost.addEventListener('change', (e) => {
+            CONFIG.OLLAMA_HOST = e.target.value.trim();
+            localStorage.setItem('richup_ollama_host', CONFIG.OLLAMA_HOST);
+            this.logTerminal(`Ollama host set to: ${CONFIG.OLLAMA_HOST}`);
+        });
+
+        inputModel.addEventListener('change', (e) => {
+            CONFIG.OLLAMA_MODEL = e.target.value.trim();
+            localStorage.setItem('richup_ollama_model', CONFIG.OLLAMA_MODEL);
+            this.logTerminal(`Ollama model set to: ${CONFIG.OLLAMA_MODEL}`);
+        });
+
+        btnPing.addEventListener('click', async () => {
+            statusOllama.textContent = 'Testing connection...';
+            statusOllama.style.color = '#fbbf24';
+            this.logTerminal(`Pinging Ollama at ${CONFIG.OLLAMA_HOST}...`);
+            const res = await OllamaClient.checkHealth();
+            if (res.ok) {
+                const modelFound = res.hasTargetModel ? `(${CONFIG.OLLAMA_MODEL} ready)` : `(models: ${res.models.slice(0, 2).join(', ') || 'none'})`;
+                statusOllama.textContent = `🟢 Connected ${modelFound}`;
+                statusOllama.style.color = '#34d399';
+                this.logTerminal(`Ollama online! Models: ${res.models.join(', ') || 'none'}`);
+            } else {
+                statusOllama.textContent = `⚪ Offline (Minimax Math Fallback)`;
+                statusOllama.style.color = '#94a3b8';
+                this.logTerminal(`Ollama offline: ${res.error || 'Connection failed'}. Auto-fallback active.`);
+            }
+        });
 
         // Checkbox toggles
         document.getElementById('rubot-chk-alwaysbuy').addEventListener('change', e => { CONFIG.ALWAYS_BUY_AFFORDABLE = e.target.checked; });

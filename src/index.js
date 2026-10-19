@@ -56,17 +56,20 @@ function checkGameStarted(snapshot) {
     return !snapshot.findExactOrIncludes(['change color', 'join game', 'create game', 'ready up']);
 }
 
-function evaluateAndAct() {
+let isEvaluating = false;
+
+async function evaluateAndAct() {
     try {
-        if (!state.status || getIsActing()) return;
+        if (!state.status || getIsActing() || isEvaluating) return;
+        isEvaluating = true;
 
         syncBoardStateFromDOM();
         HUDPanel.updateTelemetry();
 
         const snapshot = createDOMSnapshot();
 
-        // 1. Check for incoming trade modal
-        if (ActionExecutor.handleTrade(snapshot)) return;
+        // 1. Check for incoming trade modal (Hybrid Ollama / Minimax)
+        if (await ActionExecutor.handleTrade(snapshot)) return;
 
         // 2. Check for Debt Recovery / Mortgaging (Negative cash must be resolved to proceed)
         if (ActionExecutor.handleDebtRecovery(snapshot)) return;
@@ -94,6 +97,8 @@ function evaluateAndAct() {
 
     } catch (err) {
         logToBot(`Eval loop error: ${err}`);
+    } finally {
+        isEvaluating = false;
     }
 }
 
@@ -103,9 +108,9 @@ function scheduleEvaluate() {
         clearTimeout(state.evaluateTimeout);
         state.timeouts.delete(state.evaluateTimeout);
     }
-    state.evaluateTimeout = scheduleTimeout(() => {
+    state.evaluateTimeout = scheduleTimeout(async () => {
         state.evaluateTimeout = null;
-        evaluateAndAct();
+        await evaluateAndAct();
     }, CONFIG.OBSERVER_DEBOUNCE_MS);
 }
 

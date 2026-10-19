@@ -29,7 +29,13 @@ export const CONFIG = {
     WORST_CASE_WEIGHT: 0.30,         // Weight on worst-case single roll in 5-9 window
     TRADE_MIN_ADVANTAGE_RATIO: 1.10, // Require at least 10% utility edge in trades
     AUCTION_MAX_OVERBID_RATIO: 1.40, // Max bid for critical blocker/completer
-    CHAT_COOLDOWN_MS: 20000          // Cooldown between chat negotiation messages
+    CHAT_COOLDOWN_MS: 20000,         // Cooldown between chat negotiation messages
+
+    // Hybrid Vision / LLM Brain Configuration (Local Ollama)
+    OLLAMA_ENABLED: localStorage.getItem('richup_ollama_enabled') === 'true',
+    OLLAMA_HOST: localStorage.getItem('richup_ollama_host') || 'http://localhost:11434',
+    OLLAMA_MODEL: localStorage.getItem('richup_ollama_model') || 'llama3.2-vision',
+    OLLAMA_TIMEOUT_MS: 2800          // Strict 2.8s cap to avoid stalling turns
 };
 
 export const STATES = Object.freeze({
