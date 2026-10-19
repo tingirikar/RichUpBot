@@ -317,8 +317,20 @@ export const ActionExecutor = {
             const priceMatch = /\$?\s*(\d{2,4})|(\d{2,4})\s*\$/.exec(btnText);
             const price = priceMatch ? parseInt(priceMatch[1] || priceMatch[2], 10) : (tile?.price || 60);
 
+            // Re-sync verified scoreboard cash for local player if available
+            if (GameMemory.myName && GameMemory.players[GameMemory.myName]?.cash) {
+                const sbCash = GameMemory.players[GameMemory.myName].cash;
+                if (typeof sbCash === 'number' && sbCash > GameMemory.myCash) {
+                    GameMemory.myCash = sbCash;
+                }
+            }
+
+            // In RichUp, if the "Buy" button is visibly enabled on the board, the player has enough funds.
+            // Using Math.max guarantees immunity to any stale DOM scraping states.
+            const effectiveCash = Math.max(GameMemory.myCash, GameMemory.players[GameMemory.myName]?.cash || 0, price);
+
             // 1. Prioritize Direct Buy: If we have enough cash, always secure the asset directly!
-            const decision = MarkovRisk.shouldBuyProperty(tile, price, GameMemory.myCash);
+            const decision = MarkovRisk.shouldBuyProperty(tile, price, effectiveCash);
 
             if (decision.buy) {
                 return executeOrAdvise({
@@ -338,7 +350,7 @@ export const ActionExecutor = {
             }
 
             // 2. If purchase cannot be made (e.g. insufficient cash):
-            const auctionCheck = AuctionSniper.shouldSendToAuctionInsteadOfBuy(tile, price, GameMemory.myCash);
+            const auctionCheck = AuctionSniper.shouldSendToAuctionInsteadOfBuy(tile, price, effectiveCash);
             if (auctionCheck.auction && auctionBtn) {
                 return executeOrAdvise({
                     el: auctionBtn,

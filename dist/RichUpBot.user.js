@@ -896,11 +896,7 @@
     syncBoardTilePricesAndBadgesFromDOM();
     syncPropertyCardModalFromDOM();
     syncMyPropertiesFromSidebar();
-    if (!wsHealthy) {
-      scanTextNodesAndActivityLogs();
-    } else {
-      scanActivityLogsOnly();
-    }
+    scanActivityLogsOnly();
   }
   function detectLobbySettingsAndIdentity() {
     const hud = document.getElementById("rubot-hud-panel");
@@ -908,6 +904,7 @@
     const isInGame = Boolean(
       pageText.includes("is playing") || pageText.includes("Roll the dice") || pageText.includes("End turn") || pageText.includes("Game started") || document.querySelector('[class*="bankrupt" i]')
     );
+    if (isInGame) return;
     const startingCashRow = Array.from(document.querySelectorAll("div, li, p, section, tr")).find((el) => {
       if (hud && hud.contains(el)) return false;
       const t = (el.innerText || "").toLowerCase();
@@ -1044,11 +1041,13 @@
         }
       }
     }
+    let foundLocalPlayerInScoreboard = false;
     if (bestScoreboardContainer) {
       const rows = Array.from(bestScoreboardContainer.children);
       for (const row of rows) {
         const rowText = row.innerText || "";
         if (!rowText.includes("$") || rowText.length > 160) continue;
+        if (/paid|bought|rolled|landed|rent|tax|pardon|jail|prison|bankrupt|joined|left|game started|is playing/i.test(rowText)) continue;
         const cashMatch = /\$\s*(-?\d{1,5})|(-?\d{1,5})\s*\$|(-\s*\$?\d{1,5})/.exec(rowText);
         if (!cashMatch) continue;
         const rawCash = (cashMatch[1] || cashMatch[2] || cashMatch[3] || "").replace(/[\$\s]/g, "");
@@ -1071,6 +1070,7 @@
         const isKnownMe = currentName && candidateName.toLowerCase() === currentName.toLowerCase();
         const isBankrupt = rowText.toLowerCase().includes("bankrupt") || row.classList.contains("bankrupt");
         if (hasLeaveIcon || isKnownMe) {
+          foundLocalPlayerInScoreboard = true;
           GameMemory.setMyName(candidateName);
           GameMemory.myCash = parsedCash;
           GameMemory.cashVerified = true;
@@ -1090,13 +1090,16 @@
         }
       }
     }
-    if (currentName) {
+    if (!foundLocalPlayerInScoreboard && !GameMemory.cashVerified && currentName) {
       const currentLower = currentName.toLowerCase();
       const candidates = document.querySelectorAll("*");
       for (let i = 0; i < candidates.length; i++) {
         const el = candidates[i];
         if (hud && hud.contains(el)) continue;
         const text = el.innerText || "";
+        if (/paid|bought|rolled|landed|rent|tax|pardon|jail|prison|bankrupt|joined|left|game started|is playing|received|pay|sent/i.test(text)) {
+          continue;
+        }
         if (text.toLowerCase().includes(currentLower) && text.includes("$") && text.length <= 150) {
           const cashMatch = /\$\s*(-?\d{1,5})|(-?\d{1,5})\s*\$|(-\s*\$?\d{1,5})/.exec(text);
           if (cashMatch) {
@@ -1114,9 +1117,12 @@
         }
       }
     }
-    if (GameMemory.myName && GameMemory.players[GameMemory.myName]) {
-      GameMemory.myCash = GameMemory.players[GameMemory.myName].cash;
-      GameMemory.cashVerified = true;
+    if (!foundLocalPlayerInScoreboard && GameMemory.myName && GameMemory.players[GameMemory.myName]) {
+      const storedCash = GameMemory.players[GameMemory.myName].cash;
+      if (typeof storedCash === "number") {
+        GameMemory.myCash = storedCash;
+        GameMemory.cashVerified = true;
+      }
     }
   }
   function syncBoardTilePricesAndBadgesFromDOM() {
@@ -1276,58 +1282,6 @@
         }
       }
       node = walker.nextNode();
-    }
-  }
-  function scanTextNodesAndActivityLogs() {
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    const textNodes = [];
-    const hud = document.getElementById("rubot-hud-panel");
-    let node = walker.nextNode();
-    while (node) {
-      if (!hud || !hud.contains(node.parentElement)) {
-        const val = node.nodeValue ? node.nodeValue.trim() : "";
-        if (val) textNodes.push({ text: val, el: node.parentElement });
-      }
-      node = walker.nextNode();
-    }
-    const cashCandidates = [];
-    for (let i = 0; i < textNodes.length; i++) {
-      const item = textNodes[i];
-      const m = /^(-?\$?\d{1,5}|\$-?\d{1,5})$/.exec(item.text);
-      if (m && item.text.includes("$")) {
-        const numeric = parseInt(item.text.replace(/[\$\s]/g, ""), 10);
-        let prevText = "";
-        for (let k = 1; k <= 4 && i - k >= 0; k++) {
-          const candidate = textNodes[i - k].text.trim().replace(/[->\]\[→←\|👑]/g, "").trim();
-          if (candidate.length >= 2 && candidate.length <= 24 && !/^\$|%|\d|^x\s*\$/i.test(candidate) && !BOARD_LABELS_BLACKLIST.has(candidate.toLowerCase())) {
-            prevText = candidate;
-            break;
-          }
-        }
-        if (prevText && !isNaN(numeric)) {
-          const isMe = GameMemory.isMe(prevText);
-          GameMemory.players[prevText] = GameMemory.players[prevText] || { cash: numeric, pos: 0, isMe };
-          GameMemory.players[prevText].cash = numeric;
-          cashCandidates.push({ name: prevText, cash: numeric });
-          if (isMe) {
-            GameMemory.myCash = numeric;
-            GameMemory.cashVerified = true;
-          }
-        }
-      }
-      const line = item.text;
-      if (line.length > 8 && line.length < 120 && !GameMemory.processedLogs.has(line)) {
-        parseActivityLogLine(line);
-      }
-    }
-    if (!GameMemory.cashVerified && cashCandidates.length > 0) {
-      if (GameMemory.myName) {
-        const myEntry = cashCandidates.find((c) => c.name.toLowerCase() === GameMemory.myName.toLowerCase());
-        if (myEntry) {
-          GameMemory.myCash = myEntry.cash;
-          GameMemory.cashVerified = true;
-        }
-      }
     }
   }
   function parseActivityLogLine(line) {
@@ -4055,7 +4009,14 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         const btnText = normalizeText(buyBtn);
         const priceMatch = /\$?\s*(\d{2,4})|(\d{2,4})\s*\$/.exec(btnText);
         const price = priceMatch ? parseInt(priceMatch[1] || priceMatch[2], 10) : tile?.price || 60;
-        const decision = MarkovRisk.shouldBuyProperty(tile, price, GameMemory.myCash);
+        if (GameMemory.myName && GameMemory.players[GameMemory.myName]?.cash) {
+          const sbCash = GameMemory.players[GameMemory.myName].cash;
+          if (typeof sbCash === "number" && sbCash > GameMemory.myCash) {
+            GameMemory.myCash = sbCash;
+          }
+        }
+        const effectiveCash = Math.max(GameMemory.myCash, GameMemory.players[GameMemory.myName]?.cash || 0, price);
+        const decision = MarkovRisk.shouldBuyProperty(tile, price, effectiveCash);
         if (decision.buy) {
           return executeOrAdvise({
             el: buyBtn,
@@ -4072,7 +4033,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
             }
           });
         }
-        const auctionCheck = AuctionSniper.shouldSendToAuctionInsteadOfBuy(tile, price, GameMemory.myCash);
+        const auctionCheck = AuctionSniper.shouldSendToAuctionInsteadOfBuy(tile, price, effectiveCash);
         if (auctionCheck.auction && auctionBtn) {
           return executeOrAdvise({
             el: auctionBtn,
