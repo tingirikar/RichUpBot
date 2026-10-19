@@ -253,25 +253,33 @@ export const ActionExecutor = {
 
         if (!buyBtn && !auctionBtn) return false;
 
-        let tile = BOARD_TILES[GameMemory.myPos] || null;
+        let tile = null;
 
-        // Verify or recover tile from open modal/popup text if available
-        const modal = document.querySelector('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="property" i]');
-        if (modal) {
-            const modalText = modal.innerText || '';
-            for (const t of BOARD_TILES) {
-                if (t.group && new RegExp(`\\b${t.name}\\b`, 'i').test(modalText)) {
-                    tile = t;
-                    GameMemory.myPos = t.id; // Self-heal position tracking
-                    break;
+        // Verify or recover tile directly from the prompt card surrounding the buy button
+        if (buyBtn) {
+            let container = buyBtn.parentElement;
+            for (let depth = 0; depth < 5 && container && container !== document.body; depth++) {
+                const cText = container.innerText || '';
+                for (const t of BOARD_TILES) {
+                    if (t.group && new RegExp(`\\b${t.name}\\b`, 'i').test(cText)) {
+                        tile = t;
+                        GameMemory.myPos = t.id; // Self-heal position tracking
+                        break;
+                    }
                 }
+                if (tile) break;
+                container = container.parentElement;
             }
+        }
+
+        if (!tile && BOARD_TILES[GameMemory.myPos]?.group) {
+            tile = BOARD_TILES[GameMemory.myPos];
         }
 
         if (buyBtn) {
             const btnText = normalizeText(buyBtn);
-            const priceMatch = /\$?\s*(\d{2,4})/.exec(btnText);
-            const price = priceMatch ? parseInt(priceMatch[1], 10) : (tile?.price || 150);
+            const priceMatch = /\$?\s*(\d{2,4})|(\d{2,4})\s*\$/.exec(btnText);
+            const price = priceMatch ? parseInt(priceMatch[1] || priceMatch[2], 10) : (tile?.price || 60);
 
             // 1. Prioritize Direct Buy: If we have enough cash, always secure the asset directly!
             const decision = MarkovRisk.shouldBuyProperty(tile, price, GameMemory.myCash);

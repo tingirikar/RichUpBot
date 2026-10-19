@@ -56,16 +56,35 @@ export function createDOMSnapshot() {
         },
 
         findBuyPropertyButton() {
-            // Check modal first if open
-            const modal = document.querySelector('[role="dialog"], [class*="modal" i]');
+            // 1. Direct scan across all detected buttons
+            for (const b of allButtons) {
+                const txt = b.text;
+                if (
+                    (txt.includes('buy') || txt.includes('purchase')) &&
+                    !txt.includes("don't buy") &&
+                    !txt.includes("dont buy") &&
+                    !txt.includes('house') &&
+                    !txt.includes('hotel') &&
+                    !txt.includes('back') &&
+                    !txt.includes('cancel')
+                ) {
+                    return b.el;
+                }
+            }
+
+            // 2. Check modal or center prompt if present
+            const modal = document.querySelector('[role="dialog"], [class*="modal" i], [class*="card" i]');
             if (modal && (!hud || !hud.contains(modal))) {
-                const modalBtns = modal.querySelectorAll('button, [role="button"], [class*="btn" i]');
+                const modalBtns = modal.querySelectorAll('button, [role="button"], [class*="btn" i], div');
                 for (let i = 0; i < modalBtns.length; i++) {
                     const btn = modalBtns[i];
                     if (!isVisibleAndEnabled(btn)) continue;
                     const txt = normalizeText(btn);
                     if (
-                        txt.includes('buy') &&
+                        txt.length <= 35 &&
+                        (txt.includes('buy') || txt.includes('purchase')) &&
+                        !txt.includes("don't") &&
+                        !txt.includes("dont") &&
                         !txt.includes('house') &&
                         !txt.includes('hotel') &&
                         !txt.includes('back')
@@ -75,17 +94,27 @@ export function createDOMSnapshot() {
                 }
             }
 
-            for (const b of allButtons) {
+            // 3. Fallback: scan any clickable element on the page
+            const allClickables = Array.from(document.querySelectorAll('button, [role="button"], [class*="btn" i], div, a, span'))
+                .filter(el => !hud || !hud.contains(el));
+            
+            for (const el of allClickables) {
+                if (!isVisibleAndEnabled(el)) continue;
+                const txt = normalizeText(el);
                 if (
-                    b.text.includes('buy') &&
-                    !b.text.includes('house') &&
-                    !b.text.includes('hotel') &&
-                    !b.text.includes('back') &&
-                    (b.text.startsWith('buy') || b.text.endsWith('buy') || b.text.includes('buy for') || b.text.includes('purchase'))
+                    txt.length <= 35 &&
+                    (txt.includes('buy') || txt.includes('purchase')) &&
+                    !txt.includes("don't") &&
+                    !txt.includes("dont") &&
+                    !txt.includes('house') &&
+                    !txt.includes('hotel') &&
+                    !txt.includes('back') &&
+                    !txt.includes('cancel')
                 ) {
-                    return b.el;
+                    return el;
                 }
             }
+
             return null;
         },
 
