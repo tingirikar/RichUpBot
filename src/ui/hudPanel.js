@@ -597,7 +597,11 @@ export const HUDPanel = {
             this.elements.valCash.classList.remove('red');
             this.elements.valCash.classList.add('green');
         }
-        this.elements.valPos.textContent = `Tile #${GameMemory.myPos}`;
+        if (GameMemory.inJail) {
+            this.elements.valPos.textContent = `In Jail (#10)`;
+        } else {
+            this.elements.valPos.textContent = `Tile #${GameMemory.myPos}`;
+        }
         this.elements.valEV.textContent = `$${GameMemory.lastDangerEV}`;
         this.elements.valRsv.textContent = `$${GameMemory.lastDynamicReserve}`;
         if (this.elements.nameInput && document.activeElement !== this.elements.nameInput && GameMemory.myName) {

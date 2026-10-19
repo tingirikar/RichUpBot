@@ -48,8 +48,8 @@ export const AuctionSniper = {
 
     /**
      * Decides whether to click "Auction" instead of "Buy for $X" upon landing on an unowned property.
-     * Rule: We almost ALWAYS buy directly! Auctioning is only for when we are broke,
-     * or when ALL opponents are so broke that we can steal the property for $20.
+     * Rule: We ALWAYS buy directly if we can afford it!
+     * Auctioning is ONLY for when we physically cannot afford the purchase.
      */
     shouldSendToAuctionInsteadOfBuy(tile, price, myCash) {
         if (!tile) return { auction: false, reason: 'Direct Buy' };
@@ -62,38 +62,10 @@ export const AuctionSniper = {
             };
         }
 
-        // Check max cash among all active opponents
-        let maxOppCash = 0;
-        for (const [pName, pData] of Object.entries(GameMemory.players)) {
-            if (!GameMemory.isMe(pName) && !pData.bankrupt) {
-                if ((pData.cash || 0) > maxOppCash) maxOppCash = pData.cash;
-            }
-        }
-
-        const mySet = GameMemory.getGroupCount(tile.group, '__ME__');
-        const completesMyMonopoly = tile.group && mySet.owned === mySet.total - 1;
-        const blocksOpponent = OpponentTracker.isBlockerAgainstAnyOpponent(tile);
-
-        // Crucial property: NEVER risk sending to auction if any opponent can afford to bid!
-        if (completesMyMonopoly || blocksOpponent) {
-            return {
-                auction: false,
-                reason: `Direct Buy: Crucial asset (${completesMyMonopoly ? 'Monopoly' : 'Blocker'}). Never risk auctioning!`
-            };
-        }
-
-        // Steal Opportunity: If all opponents have < $60 cash, we can auction and snipe it for cheap!
-        if (maxOppCash < 60 && price >= 200) {
-            return {
-                auction: true,
-                reason: `Auction Steal: Opponents are broke (Max Opp Cash $${maxOppCash}). Auctioning to buy for cheap!`
-            };
-        }
-
-        // Default: Buy directly to secure the property without bidding wars
+        // We can afford direct buy: ALWAYS BUY DIRECTLY! Never gamble with auctions!
         return {
             auction: false,
-            reason: `Direct Buy: Securing ${tile.name} without auction risk.`
+            reason: `Direct Buy: Securing ${tile.name} directly ($${price} <= $${myCash}).`
         };
     },
 

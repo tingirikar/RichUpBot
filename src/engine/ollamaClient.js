@@ -464,6 +464,6 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
             }
         } catch (_) {}
 
-        return { action: 'END_TURN', rationale: 'Minimax reserve preserved' };
+        return { action: 'END_TURN', rationale: 'Turn complete' };
     }
 };

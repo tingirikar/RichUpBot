@@ -72,9 +72,9 @@ export const TradeProposalExecutor = {
             setTimeout(() => {
                 const snap3 = createDOMSnapshot();
 
-                // Select our property to give (if applicable)
+                // Select our property to give (left column)
                 if (swap.myGivenTile) {
-                    const myPropCard = snap3.findTradePropertyCard(swap.myGivenTile.name);
+                    const myPropCard = snap3.findTradePropertyCard(swap.myGivenTile.name, 'mine');
                     if (myPropCard) {
                         delayClick(myPropCard, `Selecting offer property: ${swap.myGivenTile.name}`);
                     } else {
@@ -82,11 +82,11 @@ export const TradeProposalExecutor = {
                     }
                 }
 
-                // Select their property to request
+                // Select their property to request (right column)
                 setTimeout(() => {
                     const snap4 = createDOMSnapshot();
                     if (swap.myReceivedTile) {
-                        const theirPropCard = snap4.findTradePropertyCard(swap.myReceivedTile.name);
+                        const theirPropCard = snap4.findTradePropertyCard(swap.myReceivedTile.name, 'theirs');
                         if (theirPropCard) {
                             delayClick(theirPropCard, `Selecting request property: ${swap.myReceivedTile.name}`);
                         } else {
@@ -94,7 +94,7 @@ export const TradeProposalExecutor = {
                         }
                     }
 
-                    // STEP 4: Set cash if applicable
+                    // STEP 4: Set cash if applicable (via range sliders)
                     this.adjustCashInTradeModal(swap);
 
                     // STEP 5: Click "Send trade"
@@ -119,41 +119,69 @@ export const TradeProposalExecutor = {
                             this.isExecuting = false;
                             if (onComplete) onComplete(false);
                         }
-                    }, 400);
+                    }, 450);
 
-                }, 350);
+                }, 400);
 
-            }, 450);
+            }, 500);
 
-        }, 380);
+        }, 450);
     },
 
     adjustCashInTradeModal(swap) {
         try {
-            // Find inputs/sliders in trade modal
-            const modal = document.querySelector('[role="dialog"], [class*="modal"], [class*="trade"]');
+            const modal = document.querySelector('[role="dialog"], [class*="modal" i], [class*="trade" i]');
             if (!modal) return;
 
-            const inputs = modal.querySelectorAll('input[type="number"], input[type="range"], input[type="text"]');
-            if (inputs.length >= 2) {
-                // Input 0 = Our cash offer, Input 1 = Their cash demand
-                if (swap.cashOffer > 0 && inputs[0]) {
-                    this.setNativeInputValue(inputs[0], swap.cashOffer);
-                } else if (swap.cashDemand > 0 && inputs[1]) {
-                    this.setNativeInputValue(inputs[1], swap.cashDemand);
-                }
+            const modalRect = modal.getBoundingClientRect();
+            const modalCenter = modalRect.left + modalRect.width / 2;
+
+            const inputs = Array.from(modal.querySelectorAll('input[type="range"], input[type="number"], input'));
+            let ourSlider = null;
+            let theirSlider = null;
+
+            for (const input of inputs) {
+                const rect = input.getBoundingClientRect();
+                const center = rect.left + rect.width / 2;
+                if (center < modalCenter && !ourSlider) ourSlider = input;
+                else if (center >= modalCenter && !theirSlider) theirSlider = input;
+            }
+
+            if (swap.cashOffer > 0 && ourSlider) {
+                this.setReactInputValue(ourSlider, swap.cashOffer);
+            }
+            if (swap.cashDemand > 0 && theirSlider) {
+                this.setReactInputValue(theirSlider, swap.cashDemand);
             }
         } catch (err) {
             logToBot(`Cash adjust note: ${err}`);
         }
     },
 
-    setNativeInputValue(input, val) {
+    setReactInputValue(input, val) {
         try {
+            const maxVal = input.max ? Number(input.max) : 99999;
+            const minVal = input.min ? Number(input.min) : 0;
+            const clamped = Math.max(minVal, Math.min(Number(val), maxVal));
+
             input.focus();
-            const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-            if (nativeSetter) nativeSetter.call(input, String(val));
-            else input.value = String(val);
+            const prev = input.value;
+            input.value = String(clamped);
+
+            if (input._valueTracker) {
+                input._valueTracker.setValue(prev);
+            }
+
+            const nativeSetter = Object.getOwnPropertyDescriptor(
+                window.HTMLInputElement.prototype, 'value'
+            )?.set || (typeof unsafeWindow !== 'undefined' && Object.getOwnPropertyDescriptor(
+                unsafeWindow.HTMLInputElement.prototype, 'value'
+            )?.set);
+
+            if (nativeSetter) {
+                nativeSetter.call(input, String(clamped));
+            }
+
             input.dispatchEvent(new Event('input', { bubbles: true }));
             input.dispatchEvent(new Event('change', { bubbles: true }));
         } catch (_) {}
@@ -161,9 +189,9 @@ export const TradeProposalExecutor = {
 
     closeTradeModal() {
         // Attempt to close modal if stuck
-        const closeBtn = document.querySelector('[class*="close" i], button[aria-label*="close" i], button:has(svg)');
+        const closeBtn = document.querySelector('[role="dialog"] button, [class*="modal" i] button, [class*="close" i], button[aria-label*="close" i]');
         if (closeBtn) {
-            closeBtn.click();
+            delayClick(closeBtn, 'Closing trade modal');
         }
     }
 };

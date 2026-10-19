@@ -185,6 +185,61 @@ export const TradeEngine = {
             }
         }
 
+        // 3. SET CONSOLIDATION SWAPS (Advance toward sets by trading singletons)
+        const advancingNeeds = OpponentTracker.getMyAdvancingNeeds();
+        for (const need of advancingNeeds) {
+            const targetOppName = need.heldBy;
+            if (opportunities.some(o => o.targetOwner === targetOppName && o.myReceivedTile.id === need.wantedTile.id)) continue;
+
+            const sacrificeTile = safeSacrifices.find(s => s.id !== need.myTile.id) || null;
+            if (sacrificeTile) {
+                const cashOffer = Math.min(Math.max(0, GameMemory.myCash - 200), Math.round(need.wantedTile.price * 0.3));
+                opportunities.push({
+                    targetOwner: targetOppName,
+                    myGivenTile: sacrificeTile,
+                    myReceivedTile: need.wantedTile,
+                    cashOffer: Math.max(0, cashOffer),
+                    cashDemand: 0,
+                    summary: `SET CONSOLIDATION: Give ${sacrificeTile.name} -> Get ${need.wantedTile.name}`,
+                    pitch: `@${targetOppName} Let's trade: I'll give you ${sacrificeTile.name} for your ${need.wantedTile.name}!`
+                });
+            } else if (GameMemory.myCash >= need.wantedTile.price + 200) {
+                const cashOffer = Math.min(GameMemory.myCash - 150, Math.round(need.wantedTile.price * 1.5));
+                opportunities.push({
+                    targetOwner: targetOppName,
+                    myGivenTile: null,
+                    myReceivedTile: need.wantedTile,
+                    cashOffer: Math.max(80, cashOffer),
+                    cashDemand: 0,
+                    summary: `CASH ACQUISITION: Offer $${cashOffer} -> Get ${need.wantedTile.name}`,
+                    pitch: `@${targetOppName} Offering $${cashOffer} cash for your ${need.wantedTile.name}!`
+                });
+            }
+        }
+
+        // 4. AIRPORT ACQUISITION (Airport synergy)
+        const myAirports = BOARD_TILES.filter(t => t.type === 'airport' && GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
+        if (myAirports.length >= 1 && myAirports.length < 4) {
+            const otherAirports = BOARD_TILES.filter(t => t.type === 'airport' && !GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
+            for (const air of otherAirports) {
+                const holder = GameMemory.ownership[air.id]?.owner;
+                if (holder && !opportunities.some(o => o.targetOwner === holder && o.myReceivedTile.id === air.id)) {
+                    const cashOffer = Math.min(Math.max(0, GameMemory.myCash - 200), Math.round(air.price * 1.4));
+                    if (cashOffer >= 100) {
+                        opportunities.push({
+                            targetOwner: holder,
+                            myGivenTile: null,
+                            myReceivedTile: air,
+                            cashOffer,
+                            cashDemand: 0,
+                            summary: `AIRPORT BUYOUT: Offer $${cashOffer} -> Get ${air.name}`,
+                            pitch: `@${holder} Would you sell ${air.name} for $${cashOffer} cash?`
+                        });
+                    }
+                }
+            }
+        }
+
         return opportunities;
     }
 };

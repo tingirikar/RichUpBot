@@ -19,8 +19,18 @@ export const OpponentTracker = {
         const myName = GameMemory.myName || '__ME__';
         const analysis = {};
 
-        for (const [pName, pData] of Object.entries(GameMemory.players)) {
-            if (GameMemory.isMe(pName) || pData.bankrupt) continue;
+        // Merge all player names from players and ownership
+        const playerNames = new Set(Object.keys(GameMemory.players));
+        for (const info of Object.values(GameMemory.ownership)) {
+            if (info?.owner && !GameMemory.isMe(info.owner)) {
+                playerNames.add(info.owner);
+            }
+        }
+
+        for (const pName of playerNames) {
+            if (GameMemory.isMe(pName)) continue;
+            const pData = GameMemory.players[pName] || { cash: 500, pos: 0, bankrupt: false };
+            if (pData.bankrupt) continue;
 
             const ownedTiles = [];
             const hungrySets = []; // Color groups where opponent has total - 1
@@ -102,7 +112,7 @@ export const OpponentTracker = {
         const myMissing = [];
 
         for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
-            if (tiles[0].type !== 'property') continue;
+            if (tiles[0].type !== 'property' && tiles[0].type !== 'airport') continue;
             const myCount = tiles.filter(t => GameMemory.isMe(GameMemory.ownership[t.id]?.owner)).length;
 
             if (myCount === tiles.length - 1) {
@@ -119,6 +129,34 @@ export const OpponentTracker = {
             }
         }
         return myMissing;
+    },
+
+    /**
+     * Identifies sets where we own 1 card (out of 3) and an opponent owns another card,
+     * presenting a consolidation trade opportunity!
+     */
+    getMyAdvancingNeeds() {
+        const needs = [];
+        for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
+            if (tiles[0].type !== 'property' || tiles.length !== 3) continue;
+            const myCount = tiles.filter(t => GameMemory.isMe(GameMemory.ownership[t.id]?.owner)).length;
+            if (myCount === 1) {
+                const myTile = tiles.find(t => GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
+                const otherTiles = tiles.filter(t => !GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
+                for (const other of otherTiles) {
+                    const holder = GameMemory.ownership[other.id]?.owner;
+                    if (holder && !GameMemory.isMe(holder)) {
+                        needs.push({
+                            group: groupName,
+                            myTile,
+                            wantedTile: other,
+                            heldBy: holder
+                        });
+                    }
+                }
+            }
+        }
+        return needs;
     },
 
     /**

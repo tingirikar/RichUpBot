@@ -82,50 +82,50 @@
   });
 
   // src/data/boardTiles.js
-  var BOARD_TILES = [
+  var BOARD_TILES2 = [
     { id: 0, name: "Start", type: "special", group: null, price: 0, houseCost: 0, rent: [0], markov: 0.0309 },
-    { id: 1, name: "Salvador", type: "property", group: "Brazil", price: 60, houseCost: 50, rent: [2, 10, 30, 90, 160, 250], markov: 0.0213 },
+    { id: 1, name: "Salvador", type: "property", group: "Brazil", price: 60, houseCost: 50, rent: [2, 10, 30, 90, 150, 240], markov: 0.0213 },
     { id: 2, name: "Treasure", type: "card", group: null, price: 0, houseCost: 0, rent: [0], markov: 0.0188 },
-    { id: 3, name: "Rio", type: "property", group: "Brazil", price: 60, houseCost: 50, rent: [4, 20, 60, 180, 320, 450], markov: 0.0216 },
+    { id: 3, name: "Rio", type: "property", group: "Brazil", price: 60, houseCost: 50, rent: [4, 20, 60, 190, 330, 460], markov: 0.0216 },
     { id: 4, name: "Earnings Tax", type: "tax", group: null, price: 200, houseCost: 0, rent: [200], markov: 0.0233 },
     { id: 5, name: "TLV Airport", type: "airport", group: "Airport", price: 200, houseCost: 0, rent: [25, 50, 100, 200], markov: 0.0296 },
-    { id: 6, name: "Tel Aviv", type: "property", group: "Israel", price: 100, houseCost: 50, rent: [6, 30, 90, 270, 400, 550], markov: 0.0226 },
-    { id: 7, name: "Haifa", type: "property", group: "Israel", price: 110, houseCost: 50, rent: [7, 35, 100, 300, 450, 600], markov: 0.0232 },
+    { id: 6, name: "Tel Aviv", type: "property", group: "Israel", price: 100, houseCost: 50, rent: [6, 30, 90, 260, 380, 540], markov: 0.0226 },
+    { id: 7, name: "Haifa", type: "property", group: "Israel", price: 110, houseCost: 50, rent: [6, 30, 90, 280, 400, 560], markov: 0.0232 },
     { id: 8, name: "Surprise", type: "card", group: null, price: 0, houseCost: 0, rent: [0], markov: 86e-4 },
-    { id: 9, name: "Jerusalem", type: "property", group: "Israel", price: 120, houseCost: 50, rent: [8, 40, 100, 300, 450, 600], markov: 0.023 },
+    { id: 9, name: "Jerusalem", type: "property", group: "Israel", price: 120, houseCost: 50, rent: [8, 40, 110, 300, 460, 610], markov: 0.023 },
     { id: 10, name: "In Prison", type: "jail", group: null, price: 0, houseCost: 0, rent: [0], markov: 0.0589 },
-    { id: 11, name: "Venice", type: "property", group: "Italy", price: 130, houseCost: 100, rent: [10, 50, 150, 450, 625, 750], markov: 0.027 },
+    { id: 11, name: "Venice", type: "property", group: "Italy", price: 130, houseCost: 100, rent: [10, 50, 140, 440, 600, 740], markov: 0.027 },
     { id: 12, name: "Power Company", type: "utility", group: "Utility", price: 150, houseCost: 0, rent: [28, 70], markov: 0.026 },
-    { id: 13, name: "Milan", type: "property", group: "Italy", price: 140, houseCost: 100, rent: [10, 50, 150, 450, 625, 750], markov: 0.0237 },
+    { id: 13, name: "Milan", type: "property", group: "Italy", price: 140, houseCost: 100, rent: [10, 50, 160, 460, 630, 760], markov: 0.0237 },
     { id: 14, name: "Rome", type: "property", group: "Italy", price: 160, houseCost: 100, rent: [12, 60, 180, 500, 700, 900], markov: 0.0246 },
-    { id: 15, name: "NUC Airport", type: "airport", group: "Airport", price: 200, houseCost: 0, rent: [25, 50, 100, 200], markov: 0.0292 },
-    { id: 16, name: "Frankfurt", type: "property", group: "Germany", price: 180, houseCost: 100, rent: [14, 70, 200, 550, 750, 950], markov: 0.0279 },
+    { id: 15, name: "MUC Airport", type: "airport", group: "Airport", price: 200, houseCost: 0, rent: [25, 50, 100, 200], markov: 0.0292 },
+    { id: 16, name: "Frankfurt", type: "property", group: "Germany", price: 180, houseCost: 100, rent: [14, 70, 190, 540, 760, 950], markov: 0.0279 },
     { id: 17, name: "Treasure", type: "card", group: null, price: 0, houseCost: 0, rent: [0], markov: 0.0259 },
-    { id: 18, name: "Munich", type: "property", group: "Germany", price: 190, houseCost: 100, rent: [15, 75, 200, 550, 750, 950], markov: 0.0293 },
-    { id: 19, name: "Berlin", type: "property", group: "Germany", price: 200, houseCost: 100, rent: [16, 80, 220, 600, 800, 1e3], markov: 0.0308 },
+    { id: 18, name: "Munich", type: "property", group: "Germany", price: 190, houseCost: 100, rent: [15, 70, 210, 560, 760, 960], markov: 0.0293 },
+    { id: 19, name: "Berlin", type: "property", group: "Germany", price: 200, houseCost: 100, rent: [15, 80, 220, 600, 780, 1e3], markov: 0.0308 },
     { id: 20, name: "Vacation", type: "special", group: null, price: 0, houseCost: 0, rent: [0], markov: 0.0288 },
-    { id: 21, name: "Shenzhen", type: "property", group: "China", price: 210, houseCost: 150, rent: [17, 85, 240, 670, 840, 1025], markov: 0.0283 },
+    { id: 21, name: "Shenzhen", type: "property", group: "China", price: 210, houseCost: 150, rent: [18, 90, 240, 680, 850, 1e3], markov: 0.0283 },
     { id: 22, name: "Surprise", type: "card", group: null, price: 0, houseCost: 0, rent: [0], markov: 0.0104 },
-    { id: 23, name: "Beijing", type: "property", group: "China", price: 220, houseCost: 150, rent: [18, 90, 250, 700, 875, 1050], markov: 0.0273 },
-    { id: 24, name: "Shanghai", type: "property", group: "China", price: 240, houseCost: 150, rent: [20, 100, 300, 750, 925, 1100], markov: 0.0318 },
+    { id: 23, name: "Beijing", type: "property", group: "China", price: 220, houseCost: 150, rent: [20, 90, 260, 710, 900, 1100], markov: 0.0273 },
+    { id: 24, name: "Shanghai", type: "property", group: "China", price: 240, houseCost: 150, rent: [20, 100, 290, 740, 920, 1100], markov: 0.0318 },
     { id: 25, name: "CDG Airport", type: "airport", group: "Airport", price: 200, houseCost: 0, rent: [25, 50, 100, 200], markov: 0.0306 },
-    { id: 26, name: "Lyon", type: "property", group: "France", price: 260, houseCost: 150, rent: [22, 110, 330, 800, 975, 1150], markov: 0.027 },
+    { id: 26, name: "Lyon", type: "property", group: "France", price: 260, houseCost: 150, rent: [20, 100, 320, 800, 950, 1100], markov: 0.027 },
     { id: 27, name: "Water Company", type: "utility", group: "Utility", price: 150, houseCost: 0, rent: [28, 70], markov: 0.0281 },
-    { id: 28, name: "Toulouse", type: "property", group: "France", price: 270, houseCost: 150, rent: [23, 115, 345, 825, 1e3, 1175], markov: 0.0268 },
-    { id: 29, name: "Paris", type: "property", group: "France", price: 280, houseCost: 150, rent: [24, 120, 360, 850, 1025, 1200], markov: 0.0258 },
+    { id: 28, name: "Toulouse", type: "property", group: "France", price: 270, houseCost: 150, rent: [20, 120, 350, 825, 1e3, 1150], markov: 0.0268 },
+    { id: 29, name: "Paris", type: "property", group: "France", price: 280, houseCost: 150, rent: [25, 120, 350, 850, 1e3, 1200], markov: 0.0258 },
     { id: 30, name: "Go to prison", type: "gotojail", group: null, price: 0, houseCost: 0, rent: [0], markov: 0 },
-    { id: 31, name: "Liverpool", type: "property", group: "UK", price: 300, houseCost: 200, rent: [26, 130, 390, 900, 1100, 1275], markov: 0.0267 },
-    { id: 32, name: "Manchester", type: "property", group: "UK", price: 300, houseCost: 200, rent: [26, 130, 390, 900, 1100, 1275], markov: 0.0262 },
-    { id: 33, name: "London", type: "property", group: "UK", price: 320, houseCost: 200, rent: [28, 150, 450, 1e3, 1200, 1400], markov: 0.025 },
-    { id: 34, name: "JFK Airport", type: "airport", group: "Airport", price: 200, houseCost: 0, rent: [25, 50, 100, 200], markov: 0.0243 },
-    { id: 35, name: "Surprise", type: "card", group: null, price: 0, houseCost: 0, rent: [0], markov: 86e-4 },
-    { id: 36, name: "San Francisco", type: "property", group: "USA", price: 350, houseCost: 200, rent: [35, 175, 500, 1100, 1300, 1500], markov: 0.0218 },
-    { id: 37, name: "Treasure", type: "card", group: null, price: 0, houseCost: 0, rent: [0], markov: 0.0236 },
-    { id: 38, name: "Luxury Tax", type: "tax", group: null, price: 75, houseCost: 0, rent: [75], markov: 0.0217 },
+    { id: 31, name: "Liverpool", type: "property", group: "UK", price: 290, houseCost: 200, rent: [25, 120, 380, 850, 1050, 1250], markov: 0.0267 },
+    { id: 32, name: "Manchester", type: "property", group: "UK", price: 300, houseCost: 200, rent: [26, 140, 400, 950, 1150, 1300], markov: 0.0262 },
+    { id: 33, name: "Treasure", type: "card", group: null, price: 0, houseCost: 0, rent: [0], markov: 0.0245 },
+    { id: 34, name: "London", type: "property", group: "UK", price: 320, houseCost: 200, rent: [30, 140, 440, 1e3, 1200, 1400], markov: 0.025 },
+    { id: 35, name: "JFK Airport", type: "airport", group: "Airport", price: 200, houseCost: 0, rent: [25, 50, 100, 200], markov: 0.0243 },
+    { id: 36, name: "Surprise", type: "card", group: null, price: 0, houseCost: 0, rent: [0], markov: 0.0102 },
+    { id: 37, name: "San Francisco", type: "property", group: "USA", price: 360, houseCost: 200, rent: [35, 180, 550, 1150, 1350, 1525], markov: 0.0218 },
+    { id: 38, name: "Premium Tax", type: "tax", group: null, price: 75, houseCost: 0, rent: [75], markov: 0.0217 },
     { id: 39, name: "New York", type: "property", group: "USA", price: 400, houseCost: 200, rent: [50, 200, 600, 1400, 1700, 2e3], markov: 0.0263 }
   ];
   var GROUP_TILES = Object.freeze(
-    BOARD_TILES.reduce((acc, tile) => {
+    BOARD_TILES2.reduce((acc, tile) => {
       if (tile.group) {
         if (!acc[tile.group]) acc[tile.group] = [];
         acc[tile.group].push(tile);
@@ -134,25 +134,29 @@
     }, {})
   );
   var TILE_BY_NAME = Object.freeze(
-    BOARD_TILES.reduce((acc, tile) => {
+    BOARD_TILES2.reduce((acc, tile) => {
       acc[tile.name.toLowerCase()] = tile;
       return acc;
     }, {
       // Aliases for RichUp alternate names
-      "electric company": BOARD_TILES[12],
-      "muc airport": BOARD_TILES[15],
-      "income tax": BOARD_TILES[4]
+      "electric company": BOARD_TILES2[12],
+      "power": BOARD_TILES2[12],
+      "muc airport": BOARD_TILES2[15],
+      "nuc airport": BOARD_TILES2[15],
+      "income tax": BOARD_TILES2[4],
+      "luxury tax": BOARD_TILES2[38],
+      "premium tax": BOARD_TILES2[38]
     })
   );
   var TILE_BY_ID = Object.freeze(
-    BOARD_TILES.reduce((acc, tile) => {
+    BOARD_TILES2.reduce((acc, tile) => {
       acc[tile.id] = tile;
       return acc;
     }, {})
   );
   var HIGH_TRAFFIC_GROUPS = /* @__PURE__ */ new Set(["Germany", "China", "France", "Italy"]);
   var BOARD_LABELS_BLACKLIST = /* @__PURE__ */ new Set([
-    ...BOARD_TILES.map((t) => t.name.toLowerCase()),
+    ...BOARD_TILES2.map((t) => t.name.toLowerCase()),
     "start",
     "passing by",
     "in prison",
@@ -314,7 +318,7 @@
       this.isMyTurn = false;
       this.players = {};
       this.ownership = {};
-      BOARD_TILES.forEach((t) => {
+      BOARD_TILES2.forEach((t) => {
         if (t.group) {
           this.ownership[t.id] = { owner: null, houses: 0, mortgaged: false };
         }
@@ -335,7 +339,7 @@
     },
     getUnownedPropertyCount() {
       let unowned = 0;
-      for (const t of BOARD_TILES) {
+      for (const t of BOARD_TILES2) {
         if (t.group && (!this.ownership[t.id] || !this.ownership[t.id].owner)) {
           unowned++;
         }
@@ -343,7 +347,7 @@
       return unowned;
     },
     getTileCurrentRent(tileId, visitorName = null) {
-      const tile = BOARD_TILES[tileId];
+      const tile = BOARD_TILES2[tileId];
       if (!tile) return 0;
       if (tile.type === "tax") return tile.rent[0] || 0;
       if (!tile.group) return 0;
@@ -582,6 +586,16 @@
             return b.el;
           }
         }
+        const elements = document.querySelectorAll("div, span, button, a");
+        for (let i = 0; i < elements.length; i++) {
+          const el = elements[i];
+          if (hud && hud.contains(el)) continue;
+          if (!isVisibleAndEnabled(el)) continue;
+          const text = normalizeText(el);
+          if ((text === "+ create" || text === "create") && !text.includes("game") && !text.includes("room")) {
+            return el;
+          }
+        }
         return null;
       },
       /**
@@ -595,6 +609,18 @@
             return b.el;
           }
         }
+        const modal = document.querySelector('[role="dialog"], [class*="modal" i], [class*="trade" i]');
+        const searchRoot = modal || document.body;
+        const candidates = searchRoot.querySelectorAll('button, div, [role="button"], li, a, span');
+        for (let i = 0; i < candidates.length; i++) {
+          const el = candidates[i];
+          if (hud && hud.contains(el)) continue;
+          if (!isVisibleAndEnabled(el)) continue;
+          const text = normalizeText(el);
+          if (text === targetLower || text.includes(targetLower) && text.length < targetLower.length + 20) {
+            return el;
+          }
+        }
         return null;
       },
       /**
@@ -604,6 +630,18 @@
         for (const b of allButtons) {
           if (b.text.includes("send trade") || b.text.includes("propose trade") || b.text === "send") {
             return b.el;
+          }
+        }
+        const modal = document.querySelector('[role="dialog"], [class*="modal" i], [class*="trade" i]');
+        const searchRoot = modal || document.body;
+        const btns = searchRoot.querySelectorAll('button, [role="button"], div, span');
+        for (let i = 0; i < btns.length; i++) {
+          const el = btns[i];
+          if (hud && hud.contains(el)) continue;
+          if (!isVisibleAndEnabled(el)) continue;
+          const text = normalizeText(el);
+          if (text.includes("send trade") || text.includes("propose trade") || text === "send") {
+            return el;
           }
         }
         return null;
@@ -635,65 +673,81 @@
         return this.findExactOrIncludes(["negotiate", "counter"]);
       },
       /**
-       * Finds the UP-ARROW [↑] button to build a house inside the property card modal
+       * Finds the UP-ARROW [↑] button to build a house inside the property card popover
+       * (Supports floating card popup without role="dialog" as shown in building-houses.png)
        */
       findModalUpgradeButton() {
-        const modal = document.querySelector('[role="dialog"], [class*="modal"], [class*="property-modal"]');
-        if (!modal) return null;
-        const btns = modal.querySelectorAll("button");
-        for (let i = 0; i < btns.length; i++) {
-          const btn = btns[i];
-          if (!isVisibleAndEnabled(btn)) continue;
-          const inner = btn.innerHTML || "";
-          const text = normalizeText(btn);
-          if (inner.includes("\u2191") || inner.includes("arrow-up") || inner.includes("M5 10l7-7m0 0l7 7m-7-7v18") || text.includes("upgrade") || text.includes("build")) {
-            return btn;
+        const containers = document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="popover" i], [class*="property" i]');
+        for (const c of containers) {
+          if (hud && hud.contains(c)) continue;
+          const btns = c.querySelectorAll('button, [role="button"], div');
+          for (let i = 0; i < btns.length; i++) {
+            const btn = btns[i];
+            if (!isVisibleAndEnabled(btn)) continue;
+            const inner = btn.innerHTML || "";
+            const text = normalizeText(btn);
+            if (inner.includes("\u2191") || inner.includes("\u2B61") || inner.includes("arrow-up") || inner.includes("M5 10l7-7m0 0l7 7m-7-7v18") || text.includes("upgrade") || text.includes("build")) {
+              return btn;
+            }
           }
         }
-        if (btns.length >= 3 && isVisibleAndEnabled(btns[0])) {
-          return btns[0];
+        for (const b of allButtons) {
+          const inner = b.el.innerHTML || "";
+          if (inner.includes("\u2191") || inner.includes("\u2B61") || b.text === "\u2191" || b.text.includes("upgrade") || b.text.includes("build")) {
+            return b.el;
+          }
         }
         return null;
       },
       /**
-       * Finds the DOWN-ARROW [↓] button to sell a house inside the property modal
+       * Finds the DOWN-ARROW [↓] button to sell a house inside the property card popover
        */
       findModalSellHouseButton() {
-        const modal = document.querySelector('[role="dialog"], [class*="modal"], [class*="property-modal"]');
-        if (!modal) return null;
-        const btns = modal.querySelectorAll("button");
-        for (let i = 0; i < btns.length; i++) {
-          const btn = btns[i];
-          if (!isVisibleAndEnabled(btn)) continue;
-          const inner = btn.innerHTML || "";
-          const text = normalizeText(btn);
-          if (inner.includes("\u2193") || inner.includes("arrow-down") || inner.includes("M19 14l-7 7m0 0l-7-7m7 7V3") || text.includes("sell") || text.includes("downgrade")) {
-            return btn;
+        const containers = document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="popover" i], [class*="property" i]');
+        for (const c of containers) {
+          if (hud && hud.contains(c)) continue;
+          const btns = c.querySelectorAll('button, [role="button"], div');
+          for (let i = 0; i < btns.length; i++) {
+            const btn = btns[i];
+            if (!isVisibleAndEnabled(btn)) continue;
+            const inner = btn.innerHTML || "";
+            const text = normalizeText(btn);
+            if (inner.includes("\u2193") || inner.includes("\u2B63") || inner.includes("arrow-down") || inner.includes("M19 14l-7 7m0 0l-7-7m7 7V3") || text.includes("sell") || text.includes("downgrade")) {
+              return btn;
+            }
           }
         }
-        if (btns.length >= 3 && isVisibleAndEnabled(btns[1])) {
-          return btns[1];
+        for (const b of allButtons) {
+          const inner = b.el.innerHTML || "";
+          if (inner.includes("\u2193") || inner.includes("\u2B63") || b.text === "\u2193" || b.text.includes("sell") || b.text.includes("downgrade")) {
+            return b.el;
+          }
         }
         return null;
       },
       /**
-       * Finds the TRASH [🗑] button to mortgage a property inside the modal
+       * Finds the TRASH [🗑] button to mortgage a property inside the card popover
        */
       findModalMortgageButton() {
-        const modal = document.querySelector('[role="dialog"], [class*="modal"], [class*="property-modal"]');
-        if (!modal) return null;
-        const btns = modal.querySelectorAll("button");
-        for (let i = 0; i < btns.length; i++) {
-          const btn = btns[i];
-          if (!isVisibleAndEnabled(btn)) continue;
-          const inner = btn.innerHTML || "";
-          const text = normalizeText(btn);
-          if (inner.includes("\u{1F5D1}") || inner.includes("trash") || inner.includes("mortgage") || text.includes("mortgage")) {
-            return btn;
+        const containers = document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="popover" i], [class*="property" i]');
+        for (const c of containers) {
+          if (hud && hud.contains(c)) continue;
+          const btns = c.querySelectorAll('button, [role="button"], div');
+          for (let i = 0; i < btns.length; i++) {
+            const btn = btns[i];
+            if (!isVisibleAndEnabled(btn)) continue;
+            const inner = btn.innerHTML || "";
+            const text = normalizeText(btn);
+            if (inner.includes("\u{1F5D1}") || inner.includes("trash") || inner.includes("mortgage") || text.includes("mortgage")) {
+              return btn;
+            }
           }
         }
-        if (btns.length >= 3 && isVisibleAndEnabled(btns[2])) {
-          return btns[2];
+        for (const b of allButtons) {
+          const inner = b.el.innerHTML || "";
+          if (inner.includes("\u{1F5D1}") || inner.includes("trash") || b.text.includes("mortgage")) {
+            return b.el;
+          }
         }
         return null;
       },
@@ -715,17 +769,26 @@
         return null;
       },
       /**
-       * Finds a property element inside the trade modal
+       * Finds a property element inside the trade modal, with column-awareness:
+       * column: 'mine' / 'left' (left side) vs 'theirs' / 'right' (right side)
        */
-      findTradePropertyCard(propertyName) {
+      findTradePropertyCard(propertyName, column = null) {
         if (!propertyName) return null;
         const lowerName = propertyName.toLowerCase();
-        const modal = document.querySelector('[role="dialog"], [class*="modal"], [class*="trade"]');
+        const modal = document.querySelector('[role="dialog"], [class*="modal" i], [class*="trade" i]');
         const searchRoot = modal || document.body;
-        const candidates = searchRoot.querySelectorAll("button, div, span, p");
+        const modalRect = searchRoot.getBoundingClientRect();
+        const modalCenter = modalRect.left + modalRect.width / 2;
+        const candidates = searchRoot.querySelectorAll('button, [role="button"], div, li, span, p');
         for (let i = 0; i < candidates.length; i++) {
           const el = candidates[i];
           if (!isVisibleAndEnabled(el)) continue;
+          if (column && modal) {
+            const rect = el.getBoundingClientRect();
+            const elCenter = rect.left + rect.width / 2;
+            if ((column === "mine" || column === "left") && elCenter > modalCenter) continue;
+            if ((column === "theirs" || column === "right") && elCenter < modalCenter) continue;
+          }
           const text = normalizeText(el);
           if (text === lowerName || text.startsWith(lowerName) || text.endsWith(lowerName) || text.includes(lowerName) && text.length < lowerName.length + 35) {
             return el;
@@ -816,6 +879,17 @@
   }
   function detectLocalPlayerFromPlayerList() {
     const hud = document.getElementById("rubot-hud-panel");
+    const hasJailUI = Boolean(
+      Array.from(document.querySelectorAll('button, [role="button"], div, span')).some((b) => {
+        if (hud && hud.contains(b)) return false;
+        const t = (b.innerText || "").toLowerCase();
+        return t.includes("get free for") || t.includes("pay $50") || t.includes("pardon card");
+      })
+    );
+    if (hasJailUI) {
+      GameMemory.myPos = 10;
+      GameMemory.inJail = true;
+    }
     if (GameMemory.myName && (GameMemory.myName.toLowerCase().includes("share") || GameMemory.myName.toLowerCase().includes("copy") || BOARD_LABELS_BLACKLIST.has(GameMemory.myName.toLowerCase()))) {
       GameMemory.myName = null;
       try {
@@ -824,9 +898,77 @@
       }
     }
     const currentName = GameMemory.myName;
-    const candidates = document.querySelectorAll('[class*="player"], [class*="user"], [class*="item"], [class*="row"], [class*="card"]');
+    const allContainers = document.querySelectorAll("div, section, aside, ul");
+    let bestScoreboardContainer = null;
+    let maxDollarChildren = 0;
+    for (let i = 0; i < allContainers.length; i++) {
+      const el = allContainers[i];
+      if (hud && hud.contains(el)) continue;
+      if (el === document.body || el === document.documentElement) continue;
+      const children = Array.from(el.children);
+      if (children.length >= 2 && children.length <= 8) {
+        let dollarCount = 0;
+        for (const child of children) {
+          const cText = child.innerText || "";
+          if (cText.includes("$") && cText.length < 160 && !cText.toLowerCase().includes("my properties")) {
+            dollarCount++;
+          }
+        }
+        if (dollarCount >= 2 && dollarCount > maxDollarChildren && (el.innerText || "").length < 800) {
+          maxDollarChildren = dollarCount;
+          bestScoreboardContainer = el;
+        }
+      }
+    }
+    if (bestScoreboardContainer) {
+      const rows = Array.from(bestScoreboardContainer.children);
+      for (const row of rows) {
+        const rowText = row.innerText || "";
+        if (!rowText.includes("$") || rowText.length > 160) continue;
+        const cashMatch = /\$\s*(-?\d{1,5})|(-?\d{1,5})\s*\$|(-\s*\$?\d{1,5})/.exec(rowText);
+        if (!cashMatch) continue;
+        const rawCash = (cashMatch[1] || cashMatch[2] || cashMatch[3] || "").replace(/[\$\s]/g, "");
+        const parsedCash = parseInt(rawCash, 10);
+        if (isNaN(parsedCash)) continue;
+        const beforeDollar = rowText.split("$")[0].trim();
+        const candidateLines = beforeDollar.split("\n").map((l) => l.trim()).filter(Boolean);
+        let candidateName = null;
+        for (const line of candidateLines) {
+          const clean = line.replace(/[->\]\[→←\|👑]/g, "").trim();
+          if (clean.length >= 2 && clean.length <= 24 && !BOARD_LABELS_BLACKLIST.has(clean.toLowerCase()) && !clean.toLowerCase().includes("share") && !clean.toLowerCase().includes("copy") && !/^\d+$/.test(clean)) {
+            candidateName = clean;
+            break;
+          }
+        }
+        if (!candidateName) continue;
+        const hasLeaveIcon = Boolean(
+          row.querySelector('[class*="leave" i], [class*="exit" i], [title*="leave" i], [aria-label*="leave" i]') || row.innerHTML.includes("->") || row.innerHTML.includes("M17 16l4") || row.innerHTML.includes("M11 16l-4-4") || row.innerHTML.includes("M15 3h4a2")
+        );
+        const isKnownMe = currentName && candidateName.toLowerCase() === currentName.toLowerCase();
+        const isBankrupt = rowText.toLowerCase().includes("bankrupt") || row.classList.contains("bankrupt");
+        if (hasLeaveIcon || isKnownMe) {
+          GameMemory.setMyName(candidateName);
+          GameMemory.myCash = parsedCash;
+          GameMemory.cashVerified = true;
+          GameMemory.players[candidateName] = {
+            cash: parsedCash,
+            pos: GameMemory.myPos,
+            isMe: true,
+            bankrupt: isBankrupt
+          };
+        } else {
+          GameMemory.players[candidateName] = {
+            cash: parsedCash,
+            pos: GameMemory.players[candidateName]?.pos || 0,
+            isMe: false,
+            bankrupt: isBankrupt
+          };
+        }
+      }
+    }
     if (currentName) {
       const currentLower = currentName.toLowerCase();
+      const candidates = document.querySelectorAll("*");
       for (let i = 0; i < candidates.length; i++) {
         const el = candidates[i];
         if (hud && hud.contains(el)) continue;
@@ -839,48 +981,13 @@
             if (!isNaN(parsedCash)) {
               GameMemory.myCash = parsedCash;
               GameMemory.cashVerified = true;
-              GameMemory.players[currentName] = GameMemory.players[currentName] || { cash: parsedCash, pos: 0, isMe: true };
+              GameMemory.players[currentName] = GameMemory.players[currentName] || { cash: parsedCash, pos: GameMemory.myPos, isMe: true };
               GameMemory.players[currentName].cash = parsedCash;
               GameMemory.players[currentName].isMe = true;
-              return;
+              break;
             }
           }
         }
-      }
-    }
-    for (let i = 0; i < candidates.length; i++) {
-      const el = candidates[i];
-      if (hud && hud.contains(el)) continue;
-      const text = el.innerText || "";
-      if (!text.includes("$") || text.length > 120) continue;
-      const cashMatch = /\$\s*(-?\d{1,5})|(-?\d{1,5})\s*\$|(-\s*\$?\d{1,5})/.exec(text);
-      if (!cashMatch) continue;
-      const rawCash = (cashMatch[1] || cashMatch[2] || cashMatch[3] || "").replace(/[\$\s]/g, "");
-      const parsedCash = parseInt(rawCash, 10);
-      if (isNaN(parsedCash)) continue;
-      const beforeDollar = text.split("$")[0].trim();
-      const candidateLines = beforeDollar.split("\n").map((l) => l.trim()).filter(Boolean);
-      let candidateName = null;
-      for (const line of candidateLines) {
-        const clean = line.replace(/[->\]\[→←\|]/g, "").trim();
-        if (clean.length >= 2 && clean.length <= 24 && !BOARD_LABELS_BLACKLIST.has(clean.toLowerCase()) && !clean.toLowerCase().includes("share") && !clean.toLowerCase().includes("copy") && !/^\d+$/.test(clean)) {
-          candidateName = clean;
-          break;
-        }
-      }
-      if (!candidateName) continue;
-      const hasLeaveIcon = Boolean(
-        el.querySelector('[class*="leave" i], [class*="exit" i], [title*="leave" i], [aria-label*="leave" i]') || el.innerHTML.includes("->") || el.innerHTML.includes("M17 16l4") || el.innerHTML.includes("M11 16l-4-4") || el.innerHTML.includes("M15 3h4a2")
-      );
-      const isKnownMe = currentName && candidateName.toLowerCase() === currentName.toLowerCase();
-      GameMemory.players[candidateName] = GameMemory.players[candidateName] || { cash: parsedCash, pos: 0, isMe: false };
-      GameMemory.players[candidateName].cash = parsedCash;
-      if (hasLeaveIcon || isKnownMe) {
-        GameMemory.players[candidateName].isMe = true;
-        GameMemory.setMyName(candidateName);
-        GameMemory.myCash = parsedCash;
-        GameMemory.cashVerified = true;
-        return;
       }
     }
     if (GameMemory.myName && GameMemory.players[GameMemory.myName]) {
@@ -896,7 +1003,7 @@
       if (hud && hud.contains(el)) continue;
       const text = el.innerText || "";
       if (!text.includes("$") || text.length > 80) continue;
-      for (const tile of BOARD_TILES) {
+      for (const tile of BOARD_TILES2) {
         if (!tile.group) continue;
         if (new RegExp(`\\b${tile.name}\\b`, "i").test(text)) {
           const m = /(\d{2,4})\s*\$|\$\s*(\d{2,4})/.exec(text);
@@ -946,8 +1053,8 @@
       const line = lines[i];
       const lower = line.toLowerCase();
       let matchedTile = null;
-      for (const tile of BOARD_TILES) {
-        if (tile.group && lower === tile.name.toLowerCase()) {
+      for (const tile of BOARD_TILES2) {
+        if (tile.group && (lower === tile.name.toLowerCase() || new RegExp(`^${tile.name}\\b`, "i").test(line))) {
           matchedTile = tile;
           break;
         }
@@ -987,13 +1094,24 @@
       const item = textNodes[i];
       const m = /^(-?\$?\d{1,5}|\$-?\d{1,5})$/.exec(item.text);
       if (m && item.text.includes("$")) {
-        const numeric = parseInt(item.text.replace(/\$/g, ""), 10);
-        const prevText = i > 0 ? textNodes[i - 1].text.trim() : "";
-        const prevLower = prevText.toLowerCase();
-        if (!isNaN(numeric) && prevText.length >= 2 && prevText.length <= 24 && !/^\$|%|\d|^x\s*\$/i.test(prevText) && !BOARD_LABELS_BLACKLIST.has(prevLower)) {
-          GameMemory.players[prevText] = GameMemory.players[prevText] || { cash: numeric, pos: 0, isMe: false };
+        const numeric = parseInt(item.text.replace(/[\$\s]/g, ""), 10);
+        let prevText = "";
+        for (let k = 1; k <= 4 && i - k >= 0; k++) {
+          const candidate = textNodes[i - k].text.trim().replace(/[->\]\[→←\|👑]/g, "").trim();
+          if (candidate.length >= 2 && candidate.length <= 24 && !/^\$|%|\d|^x\s*\$/i.test(candidate) && !BOARD_LABELS_BLACKLIST.has(candidate.toLowerCase())) {
+            prevText = candidate;
+            break;
+          }
+        }
+        if (prevText && !isNaN(numeric)) {
+          const isMe = GameMemory.isMe(prevText);
+          GameMemory.players[prevText] = GameMemory.players[prevText] || { cash: numeric, pos: 0, isMe };
           GameMemory.players[prevText].cash = numeric;
           cashCandidates.push({ name: prevText, cash: numeric });
+          if (isMe) {
+            GameMemory.myCash = numeric;
+            GameMemory.cashVerified = true;
+          }
         }
       }
       const line = item.text;
@@ -1012,14 +1130,70 @@
     }
   }
   function parseActivityLogLine(line) {
+    if (/got into prison|went to prison|sent to prison/i.test(line)) {
+      const playerPart = line.split(/got into prison|went to prison|sent to prison/i)[0].trim();
+      const cleanPlayer = playerPart.replace(/[^\w\s-]/g, "").trim();
+      if (GameMemory.isMe(cleanPlayer)) {
+        GameMemory.myPos = 10;
+        GameMemory.inJail = true;
+      } else if (cleanPlayer && GameMemory.players[cleanPlayer]) {
+        GameMemory.players[cleanPlayer].pos = 10;
+        GameMemory.players[cleanPlayer].inJail = true;
+      }
+      GameMemory.processedLogs.add(line);
+      return;
+    }
+    if (/got free|left prison|paid.*jail|paid.*bail/i.test(line)) {
+      const playerPart = line.split(/got free|left prison|paid/i)[0].trim();
+      const cleanPlayer = playerPart.replace(/[^\w\s-]/g, "").trim();
+      if (GameMemory.isMe(cleanPlayer)) {
+        GameMemory.inJail = false;
+      } else if (cleanPlayer && GameMemory.players[cleanPlayer]) {
+        GameMemory.players[cleanPlayer].inJail = false;
+      }
+      GameMemory.processedLogs.add(line);
+      return;
+    }
+    const rollMatch = /^(.+?)\s+rolled\s+(\d+)/i.exec(line);
+    if (rollMatch) {
+      const player = rollMatch[1].trim();
+      const rollVal = parseInt(rollMatch[2], 10);
+      if (!isNaN(rollVal) && rollVal >= 2 && rollVal <= 12) {
+        if (GameMemory.isMe(player)) {
+          GameMemory.myPos = (GameMemory.myPos + rollVal) % 40;
+        } else if (GameMemory.players[player]) {
+          GameMemory.players[player].pos = ((GameMemory.players[player].pos || 0) + rollVal) % 40;
+        }
+      }
+      GameMemory.processedLogs.add(line);
+      return;
+    }
+    if (line.includes("landed on")) {
+      for (const tile of BOARD_TILES2) {
+        if (new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
+          const playerPart = line.split(/landed on/i)[0].trim();
+          const cleanPlayer = playerPart.replace(/[^\w\s-]/g, "").trim();
+          if (GameMemory.isMe(cleanPlayer)) {
+            GameMemory.myPos = tile.id;
+          } else if (cleanPlayer && GameMemory.players[cleanPlayer]) {
+            GameMemory.players[cleanPlayer].pos = tile.id;
+          }
+          GameMemory.processedLogs.add(line);
+          return;
+        }
+      }
+    }
     if (line.includes("bought a house in")) {
-      for (const tile of BOARD_TILES) {
+      for (const tile of BOARD_TILES2) {
         if (tile.group && new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
           const buyerPart = line.split(/bought a house in/i)[0].trim();
           const cleanBuyer = buyerPart.replace(/[^\w\s-]/g, "").trim();
           if (cleanBuyer && GameMemory.ownership[tile.id]) {
             GameMemory.ownership[tile.id].owner = cleanBuyer;
             GameMemory.ownership[tile.id].houses = Math.min(5, (GameMemory.ownership[tile.id].houses || 0) + 1);
+            if (GameMemory.isMe(cleanBuyer)) {
+              GameMemory.myPos = tile.id;
+            }
             GameMemory.processedLogs.add(line);
             return;
           }
@@ -1027,13 +1201,16 @@
       }
     }
     if (line.includes("bought a hotel in")) {
-      for (const tile of BOARD_TILES) {
+      for (const tile of BOARD_TILES2) {
         if (tile.group && new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
           const buyerPart = line.split(/bought a hotel in/i)[0].trim();
           const cleanBuyer = buyerPart.replace(/[^\w\s-]/g, "").trim();
           if (cleanBuyer && GameMemory.ownership[tile.id]) {
             GameMemory.ownership[tile.id].owner = cleanBuyer;
             GameMemory.ownership[tile.id].houses = 5;
+            if (GameMemory.isMe(cleanBuyer)) {
+              GameMemory.myPos = tile.id;
+            }
             GameMemory.processedLogs.add(line);
             return;
           }
@@ -1041,12 +1218,15 @@
       }
     }
     if (line.includes("bought") && !line.includes("house") && !line.includes("hotel")) {
-      for (const tile of BOARD_TILES) {
+      for (const tile of BOARD_TILES2) {
         if (tile.group && new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
           const buyerPart = line.split(/bought/i)[0].trim();
           const cleanBuyer = buyerPart.replace(/[^\w\s-]/g, "").trim();
           if (cleanBuyer && GameMemory.ownership[tile.id]) {
             GameMemory.ownership[tile.id].owner = cleanBuyer;
+            if (GameMemory.isMe(cleanBuyer)) {
+              GameMemory.myPos = tile.id;
+            }
             GameMemory.processedLogs.add(line);
             return;
           }
@@ -1064,12 +1244,36 @@
         }
       }
       GameMemory.processedLogs.add(line);
+      return;
+    }
+    if (line.includes("mortgaged")) {
+      for (const tile of BOARD_TILES2) {
+        if (tile.group && new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
+          if (GameMemory.ownership[tile.id]) {
+            GameMemory.ownership[tile.id].mortgaged = !line.includes("unmortgaged");
+            GameMemory.processedLogs.add(line);
+            return;
+          }
+        }
+      }
+    }
+    if (line.includes("traded")) {
+      for (const tile of BOARD_TILES2) {
+        if (tile.group && new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
+          const matchTo = /to\s+([A-Za-z0-9_-]+)/i.exec(line);
+          if (matchTo && GameMemory.ownership[tile.id]) {
+            GameMemory.ownership[tile.id].owner = matchTo[1].trim();
+            GameMemory.processedLogs.add(line);
+            return;
+          }
+        }
+      }
     }
   }
   function scrapeTradeModalDOM() {
     const modal = document.querySelector('[role="dialog"], [class*="modal"], [class*="trade-modal"]');
     const modalText = modal ? modal.innerText : "";
-    const mentionedTiles = BOARD_TILES.filter((t) => t.group && new RegExp(`\\b${t.name}\\b`, "i").test(modalText));
+    const mentionedTiles = BOARD_TILES2.filter((t) => t.group && new RegExp(`\\b${t.name}\\b`, "i").test(modalText));
     const givenTiles = [];
     const receivedTiles = [];
     for (const t of mentionedTiles) {
@@ -1155,7 +1359,7 @@
       let expectedLoss3Turns = expectedLoss1Turn;
       for (let step = 13; step <= 21; step++) {
         const targetTile = (currentPos + step) % 40;
-        const tileData = BOARD_TILES[targetTile];
+        const tileData = BOARD_TILES2[targetTile];
         const rent = GameMemory.getTileCurrentRent(targetTile);
         const markovWeight = tileData.markov * 0.45;
         expectedLoss3Turns += markovWeight * rent;
@@ -1179,23 +1383,34 @@
     },
     /**
      * Evaluates property purchase when landing on unowned tile.
-     * Enforces strict survival reserve when facing deadly enemy hotels ahead!
+     * Enforces strict buy preference: Always secure airports, utilities, and properties!
      */
     shouldBuyProperty(tile, price, myCash) {
-      const reserve = this.computeDynamicReserve(GameMemory.myPos);
-      const danger = this.analyzeDangerAhead(GameMemory.myPos);
-      if (CONFIG.ALWAYS_BUY_AFFORDABLE) {
+      if (myCash < price) {
+        return {
+          buy: false,
+          reason: `Cannot afford ${tile ? tile.name : "property"} ($${price} > $${myCash})`
+        };
+      }
+      if (CONFIG.ALWAYS_BUY_AFFORDABLE || CONFIG.BUY_LAND_ENABLED) {
         return {
           buy: true,
           reason: `Acquiring ${tile ? tile.name : "property"} ($${price}) [Always-Buy mode]`
         };
       }
-      if (danger.maxDangerWindowLoss >= 300 || danger.expectedLoss1Turn >= 120) {
+      if (tile && (tile.group === "Airport" || tile.group === "Airports")) {
+        return { buy: true, reason: `Essential High-Yield Asset: ${tile.name} (Airport)` };
+      }
+      if (tile && (tile.group === "Utility" || tile.group === "Utilities")) {
+        return { buy: true, reason: `Cashflow Asset: ${tile.name} (Utility)` };
+      }
+      const danger = this.analyzeDangerAhead(GameMemory.myPos);
+      if (danger.maxDangerWindowLoss >= 400 && danger.expectedLoss1Turn >= 150) {
         const postCash = myCash - price;
-        if (postCash < reserve * 0.75) {
+        if (postCash < 50) {
           return {
             buy: false,
-            reason: `Hotel Danger Veto: Enemy hotels ($${danger.maxDangerWindowLoss} rent) ahead! Preserving $${myCash} cash to survive.`
+            reason: `Hotel Danger Veto: Enemy hotel ($${danger.maxDangerWindowLoss} rent) ahead! Preserving $${myCash} cash.`
           };
         }
       }
@@ -1206,19 +1421,15 @@
       if (mySet.owned === mySet.total - 1 || tile.group === "USA" || tile.group === "Brazil") {
         return { buy: true, reason: `CRITICAL: Completes ${tile.group} Monopoly!` };
       }
+      if (OpponentTracker.isBlockerAgainstAnyOpponent(tile)) {
+        return { buy: true, reason: `DEFENSIVE BLOCK: Prevents opponent from completing ${tile.group}` };
+      }
       if (HIGH_TRAFFIC_GROUPS.has(tile.group)) {
         return { buy: true, reason: `High-Traffic Strategic Asset: ${tile.name} (${tile.group})` };
       }
-      const effectiveCash = Math.max(myCash, price);
-      if (effectiveCash - price >= reserve * 0.6) {
-        return {
-          buy: true,
-          reason: `EV+ Buy: ${tile.name} ($${price}) | Safe Cash Reserve $${Math.round(reserve)}`
-        };
-      }
       return {
-        buy: false,
-        reason: `Preserving survival reserve ($${reserve}) for danger ahead`
+        buy: true,
+        reason: `EV+ Buy: ${tile.name} ($${price})`
       };
     }
   };
@@ -1281,7 +1492,7 @@
      */
     areOpponentsApproachingOurProperties() {
       const myHotels = [];
-      for (const tile of BOARD_TILES) {
+      for (const tile of BOARD_TILES2) {
         const info = GameMemory.ownership[tile.id];
         if (info && GameMemory.isMe(info.owner) && info.houses >= 1) {
           myHotels.push(tile.id);
@@ -1305,7 +1516,7 @@
      */
     countOpponentHouses() {
       let count = 0;
-      for (const tile of BOARD_TILES) {
+      for (const tile of BOARD_TILES2) {
         const info = GameMemory.ownership[tile.id];
         if (info && info.owner && !GameMemory.isMe(info.owner)) {
           count += info.houses || 0;
@@ -1316,19 +1527,27 @@
   };
 
   // src/memory/opponentTracker.js
-  var OpponentTracker = {
+  var OpponentTracker2 = {
     /**
      * Comprehensive scan of all opponents
      */
     analyzeOpponents() {
       const myName = GameMemory.myName || "__ME__";
       const analysis = {};
-      for (const [pName, pData] of Object.entries(GameMemory.players)) {
-        if (GameMemory.isMe(pName) || pData.bankrupt) continue;
+      const playerNames = new Set(Object.keys(GameMemory.players));
+      for (const info of Object.values(GameMemory.ownership)) {
+        if (info?.owner && !GameMemory.isMe(info.owner)) {
+          playerNames.add(info.owner);
+        }
+      }
+      for (const pName of playerNames) {
+        if (GameMemory.isMe(pName)) continue;
+        const pData = GameMemory.players[pName] || { cash: 500, pos: 0, bankrupt: false };
+        if (pData.bankrupt) continue;
         const ownedTiles = [];
         const hungrySets = [];
         let totalPropertyNetWorth = 0;
-        for (const tile of BOARD_TILES) {
+        for (const tile of BOARD_TILES2) {
           if (!tile.group) continue;
           const info = GameMemory.ownership[tile.id];
           if (info && info.owner === pName) {
@@ -1396,7 +1615,7 @@
     getMyMissingCards() {
       const myMissing = [];
       for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
-        if (tiles[0].type !== "property") continue;
+        if (tiles[0].type !== "property" && tiles[0].type !== "airport") continue;
         const myCount = tiles.filter((t) => GameMemory.isMe(GameMemory.ownership[t.id]?.owner)).length;
         if (myCount === tiles.length - 1) {
           const missing = tiles.find((t) => !GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
@@ -1414,13 +1633,40 @@
       return myMissing;
     },
     /**
+     * Identifies sets where we own 1 card (out of 3) and an opponent owns another card,
+     * presenting a consolidation trade opportunity!
+     */
+    getMyAdvancingNeeds() {
+      const needs = [];
+      for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
+        if (tiles[0].type !== "property" || tiles.length !== 3) continue;
+        const myCount = tiles.filter((t) => GameMemory.isMe(GameMemory.ownership[t.id]?.owner)).length;
+        if (myCount === 1) {
+          const myTile = tiles.find((t) => GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
+          const otherTiles = tiles.filter((t) => !GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
+          for (const other of otherTiles) {
+            const holder = GameMemory.ownership[other.id]?.owner;
+            if (holder && !GameMemory.isMe(holder)) {
+              needs.push({
+                group: groupName,
+                myTile,
+                wantedTile: other,
+                heldBy: holder
+              });
+            }
+          }
+        }
+      }
+      return needs;
+    },
+    /**
      * Assets we own that are SAFE to trade away as sweeteners.
      * Singletons that do NOT complete any opponent's monopoly.
      */
     getSafeTradeSacrifices() {
       const blockers = new Set(this.getCriticalBlockers().map((b) => b.tile.id));
       const sacrifices = [];
-      for (const tile of BOARD_TILES) {
+      for (const tile of BOARD_TILES2) {
         if (!tile.group) continue;
         const info = GameMemory.ownership[tile.id];
         if (info && GameMemory.isMe(info.owner) && info.houses === 0 && !blockers.has(tile.id)) {
@@ -1457,7 +1703,7 @@
       if (tile.group && mySet.owned === mySet.total - 1) {
         multiplier = 2.5;
         reason = `MUST-HAVE: Completes our ${tile.group} Monopoly!`;
-      } else if (tile.group && OpponentTracker.isBlockerAgainstAnyOpponent(tile)) {
+      } else if (tile.group && OpponentTracker2.isBlockerAgainstAnyOpponent(tile)) {
         multiplier = 1.6;
         reason = `DEFENSIVE BLOCK: Prevents opponent from completing ${tile.group}`;
       } else if (tile.group && (HIGH_TRAFFIC_GROUPS.has(tile.group) || tile.group === "USA" || tile.group === "Brazil")) {
@@ -1474,8 +1720,8 @@
     },
     /**
      * Decides whether to click "Auction" instead of "Buy for $X" upon landing on an unowned property.
-     * Rule: We almost ALWAYS buy directly! Auctioning is only for when we are broke,
-     * or when ALL opponents are so broke that we can steal the property for $20.
+     * Rule: We ALWAYS buy directly if we can afford it!
+     * Auctioning is ONLY for when we physically cannot afford the purchase.
      */
     shouldSendToAuctionInsteadOfBuy(tile, price, myCash) {
       if (!tile) return { auction: false, reason: "Direct Buy" };
@@ -1485,30 +1731,9 @@
           reason: `Cannot afford direct buy ($${myCash} < $${price}). Sending to auction.`
         };
       }
-      let maxOppCash = 0;
-      for (const [pName, pData] of Object.entries(GameMemory.players)) {
-        if (!GameMemory.isMe(pName) && !pData.bankrupt) {
-          if ((pData.cash || 0) > maxOppCash) maxOppCash = pData.cash;
-        }
-      }
-      const mySet = GameMemory.getGroupCount(tile.group, "__ME__");
-      const completesMyMonopoly = tile.group && mySet.owned === mySet.total - 1;
-      const blocksOpponent = OpponentTracker.isBlockerAgainstAnyOpponent(tile);
-      if (completesMyMonopoly || blocksOpponent) {
-        return {
-          auction: false,
-          reason: `Direct Buy: Crucial asset (${completesMyMonopoly ? "Monopoly" : "Blocker"}). Never risk auctioning!`
-        };
-      }
-      if (maxOppCash < 60 && price >= 200) {
-        return {
-          auction: true,
-          reason: `Auction Steal: Opponents are broke (Max Opp Cash $${maxOppCash}). Auctioning to buy for cheap!`
-        };
-      }
       return {
         auction: false,
-        reason: `Direct Buy: Securing ${tile.name} without auction risk.`
+        reason: `Direct Buy: Securing ${tile.name} directly ($${price} <= $${myCash}).`
       };
     },
     /**
@@ -1613,9 +1838,9 @@
      */
     scanMutualMonopolySwaps() {
       const opportunities = [];
-      const myMissing = OpponentTracker.getMyMissingCards();
-      const opponents = OpponentTracker.analyzeOpponents();
-      const safeSacrifices = OpponentTracker.getSafeTradeSacrifices();
+      const myMissing = OpponentTracker2.getMyMissingCards();
+      const opponents = OpponentTracker2.analyzeOpponents();
+      const safeSacrifices = OpponentTracker2.getSafeTradeSacrifices();
       for (const myNeed of myMissing) {
         if (!myNeed.heldBy || myNeed.isUnowned) continue;
         const targetOppName = myNeed.heldBy;
@@ -1672,6 +1897,56 @@
             summary: `CASH ACQUISITION: Offer $${cashOffer} -> Get ${myNeed.missingTile.name}`,
             pitch: `@${targetOppName} Offering $${cashOffer} cash for your ${myNeed.missingTile.name}!`
           });
+        }
+      }
+      const advancingNeeds = OpponentTracker2.getMyAdvancingNeeds();
+      for (const need of advancingNeeds) {
+        const targetOppName = need.heldBy;
+        if (opportunities.some((o) => o.targetOwner === targetOppName && o.myReceivedTile.id === need.wantedTile.id)) continue;
+        const sacrificeTile = safeSacrifices.find((s) => s.id !== need.myTile.id) || null;
+        if (sacrificeTile) {
+          const cashOffer = Math.min(Math.max(0, GameMemory.myCash - 200), Math.round(need.wantedTile.price * 0.3));
+          opportunities.push({
+            targetOwner: targetOppName,
+            myGivenTile: sacrificeTile,
+            myReceivedTile: need.wantedTile,
+            cashOffer: Math.max(0, cashOffer),
+            cashDemand: 0,
+            summary: `SET CONSOLIDATION: Give ${sacrificeTile.name} -> Get ${need.wantedTile.name}`,
+            pitch: `@${targetOppName} Let's trade: I'll give you ${sacrificeTile.name} for your ${need.wantedTile.name}!`
+          });
+        } else if (GameMemory.myCash >= need.wantedTile.price + 200) {
+          const cashOffer = Math.min(GameMemory.myCash - 150, Math.round(need.wantedTile.price * 1.5));
+          opportunities.push({
+            targetOwner: targetOppName,
+            myGivenTile: null,
+            myReceivedTile: need.wantedTile,
+            cashOffer: Math.max(80, cashOffer),
+            cashDemand: 0,
+            summary: `CASH ACQUISITION: Offer $${cashOffer} -> Get ${need.wantedTile.name}`,
+            pitch: `@${targetOppName} Offering $${cashOffer} cash for your ${need.wantedTile.name}!`
+          });
+        }
+      }
+      const myAirports = BOARD_TILES.filter((t) => t.type === "airport" && GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
+      if (myAirports.length >= 1 && myAirports.length < 4) {
+        const otherAirports = BOARD_TILES.filter((t) => t.type === "airport" && !GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
+        for (const air of otherAirports) {
+          const holder = GameMemory.ownership[air.id]?.owner;
+          if (holder && !opportunities.some((o) => o.targetOwner === holder && o.myReceivedTile.id === air.id)) {
+            const cashOffer = Math.min(Math.max(0, GameMemory.myCash - 200), Math.round(air.price * 1.4));
+            if (cashOffer >= 100) {
+              opportunities.push({
+                targetOwner: holder,
+                myGivenTile: null,
+                myReceivedTile: air,
+                cashOffer,
+                cashDemand: 0,
+                summary: `AIRPORT BUYOUT: Offer $${cashOffer} -> Get ${air.name}`,
+                pitch: `@${holder} Would you sell ${air.name} for $${cashOffer} cash?`
+              });
+            }
+          }
         }
       }
       return opportunities;
@@ -1837,7 +2112,7 @@
       }
       for (const [tileId, ownInfo] of Object.entries(GameMemory.ownership)) {
         if (!ownInfo || !ownInfo.owner) continue;
-        const tile = BOARD_TILES[tileId];
+        const tile = BOARD_TILES2[tileId];
         if (!tile) continue;
         const ownerKey = Object.keys(playerStats).find(
           (k) => GameMemory.isMe(ownInfo.owner) ? k === myName || GameMemory.isMe(k) : k.toLowerCase() === ownInfo.owner.toLowerCase()
@@ -2068,7 +2343,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         }
       } catch (_) {
       }
-      return { action: "END_TURN", rationale: "Minimax reserve preserved" };
+      return { action: "END_TURN", rationale: "Turn complete" };
     }
   };
 
@@ -2219,7 +2494,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         setTimeout(() => {
           const snap3 = createDOMSnapshot();
           if (swap.myGivenTile) {
-            const myPropCard = snap3.findTradePropertyCard(swap.myGivenTile.name);
+            const myPropCard = snap3.findTradePropertyCard(swap.myGivenTile.name, "mine");
             if (myPropCard) {
               delayClick(myPropCard, `Selecting offer property: ${swap.myGivenTile.name}`);
             } else {
@@ -2229,7 +2504,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
           setTimeout(() => {
             const snap4 = createDOMSnapshot();
             if (swap.myReceivedTile) {
-              const theirPropCard = snap4.findTradePropertyCard(swap.myReceivedTile.name);
+              const theirPropCard = snap4.findTradePropertyCard(swap.myReceivedTile.name, "theirs");
               if (theirPropCard) {
                 delayClick(theirPropCard, `Selecting request property: ${swap.myReceivedTile.name}`);
               } else {
@@ -2254,42 +2529,66 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
                 this.isExecuting = false;
                 if (onComplete) onComplete(false);
               }
-            }, 400);
-          }, 350);
-        }, 450);
-      }, 380);
+            }, 450);
+          }, 400);
+        }, 500);
+      }, 450);
     },
     adjustCashInTradeModal(swap) {
       try {
-        const modal = document.querySelector('[role="dialog"], [class*="modal"], [class*="trade"]');
+        const modal = document.querySelector('[role="dialog"], [class*="modal" i], [class*="trade" i]');
         if (!modal) return;
-        const inputs = modal.querySelectorAll('input[type="number"], input[type="range"], input[type="text"]');
-        if (inputs.length >= 2) {
-          if (swap.cashOffer > 0 && inputs[0]) {
-            this.setNativeInputValue(inputs[0], swap.cashOffer);
-          } else if (swap.cashDemand > 0 && inputs[1]) {
-            this.setNativeInputValue(inputs[1], swap.cashDemand);
-          }
+        const modalRect = modal.getBoundingClientRect();
+        const modalCenter = modalRect.left + modalRect.width / 2;
+        const inputs = Array.from(modal.querySelectorAll('input[type="range"], input[type="number"], input'));
+        let ourSlider = null;
+        let theirSlider = null;
+        for (const input of inputs) {
+          const rect = input.getBoundingClientRect();
+          const center = rect.left + rect.width / 2;
+          if (center < modalCenter && !ourSlider) ourSlider = input;
+          else if (center >= modalCenter && !theirSlider) theirSlider = input;
+        }
+        if (swap.cashOffer > 0 && ourSlider) {
+          this.setReactInputValue(ourSlider, swap.cashOffer);
+        }
+        if (swap.cashDemand > 0 && theirSlider) {
+          this.setReactInputValue(theirSlider, swap.cashDemand);
         }
       } catch (err) {
         logToBot(`Cash adjust note: ${err}`);
       }
     },
-    setNativeInputValue(input, val) {
+    setReactInputValue(input, val) {
       try {
+        const maxVal = input.max ? Number(input.max) : 99999;
+        const minVal = input.min ? Number(input.min) : 0;
+        const clamped = Math.max(minVal, Math.min(Number(val), maxVal));
         input.focus();
-        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
-        if (nativeSetter) nativeSetter.call(input, String(val));
-        else input.value = String(val);
+        const prev = input.value;
+        input.value = String(clamped);
+        if (input._valueTracker) {
+          input._valueTracker.setValue(prev);
+        }
+        const nativeSetter = Object.getOwnPropertyDescriptor(
+          window.HTMLInputElement.prototype,
+          "value"
+        )?.set || typeof unsafeWindow !== "undefined" && Object.getOwnPropertyDescriptor(
+          unsafeWindow.HTMLInputElement.prototype,
+          "value"
+        )?.set;
+        if (nativeSetter) {
+          nativeSetter.call(input, String(clamped));
+        }
         input.dispatchEvent(new Event("input", { bubbles: true }));
         input.dispatchEvent(new Event("change", { bubbles: true }));
       } catch (_) {
       }
     },
     closeTradeModal() {
-      const closeBtn = document.querySelector('[class*="close" i], button[aria-label*="close" i], button:has(svg)');
+      const closeBtn = document.querySelector('[role="dialog"] button, [class*="modal" i] button, [class*="close" i], button[aria-label*="close" i]');
       if (closeBtn) {
-        closeBtn.click();
+        delayClick(closeBtn, "Closing trade modal");
       }
     }
   };
@@ -2304,7 +2603,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       const myPos = GameMemory.myPos || 0;
       for (let roll = 2; roll <= 12; roll++) {
         const targetTileId = (myPos + roll) % 40;
-        const tile = BOARD_TILES[targetTileId];
+        const tile = BOARD_TILES2[targetTileId];
         if (!tile || !tile.group) continue;
         const info = GameMemory.ownership[targetTileId];
         if (info && !GameMemory.isMe(info.owner) && info.houses >= 3 && !info.mortgaged) {
@@ -2392,8 +2691,8 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
   var DebtRecovery = {
     rankLiquidationTargets() {
       const targets = [];
-      const blockers = new Set(OpponentTracker.getCriticalBlockers().map((b) => b.tile.id));
-      for (const tile of BOARD_TILES) {
+      const blockers = new Set(OpponentTracker2.getCriticalBlockers().map((b) => b.tile.id));
+      for (const tile of BOARD_TILES2) {
         if (!tile.group) continue;
         const info = GameMemory.ownership[tile.id];
         if (!info || !GameMemory.isMe(info.owner) || info.mortgaged) continue;
@@ -2989,7 +3288,11 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         this.elements.valCash.classList.remove("red");
         this.elements.valCash.classList.add("green");
       }
-      this.elements.valPos.textContent = `Tile #${GameMemory.myPos}`;
+      if (GameMemory.inJail) {
+        this.elements.valPos.textContent = `In Jail (#10)`;
+      } else {
+        this.elements.valPos.textContent = `Tile #${GameMemory.myPos}`;
+      }
       this.elements.valEV.textContent = `$${GameMemory.lastDangerEV}`;
       this.elements.valRsv.textContent = `$${GameMemory.lastDynamicReserve}`;
       if (this.elements.nameInput && document.activeElement !== this.elements.nameInput && GameMemory.myName) {
@@ -3226,6 +3529,8 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       const payBailBtn = snapshot.findExactOrIncludes(["get free for", "pay $50", "pay 50"]);
       const rollBtn = snapshot.findExactOrIncludes(["roll the dice", "roll again", "roll"]);
       if (!pardonBtn && !payBailBtn) return false;
+      GameMemory.myPos = 10;
+      GameMemory.inJail = true;
       const decision = JailStrategy.shouldPayToLeaveJail(GameMemory.myCash);
       if (decision.exit) {
         if (pardonBtn) {
@@ -3233,7 +3538,10 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
             el: pardonBtn,
             title: "USE PARDON CARD",
             reason: decision.reason,
-            onExecute: () => delayClick(pardonBtn, decision.reason)
+            onExecute: () => {
+              GameMemory.inJail = false;
+              delayClick(pardonBtn, decision.reason);
+            }
           });
         }
         if (payBailBtn) {
@@ -3241,7 +3549,11 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
             el: payBailBtn,
             title: "PAY $50 JAIL BAIL",
             reason: decision.reason,
-            onExecute: () => delayClick(payBailBtn, decision.reason)
+            onExecute: () => {
+              if (GameMemory.myCash >= 50) GameMemory.myCash -= 50;
+              GameMemory.inJail = false;
+              delayClick(payBailBtn, decision.reason);
+            }
           });
         }
       } else {
@@ -3261,20 +3573,22 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       const buyBtn = snapshot.findBuyPropertyButton();
       const auctionBtn = snapshot.findExactOrIncludes(["auction", "pass", "don't buy"]);
       if (!buyBtn && !auctionBtn) return false;
-      const tile = BOARD_TILES[GameMemory.myPos] || null;
+      let tile = BOARD_TILES2[GameMemory.myPos] || null;
+      const modal = document.querySelector('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="property" i]');
+      if (modal) {
+        const modalText = modal.innerText || "";
+        for (const t of BOARD_TILES2) {
+          if (t.group && new RegExp(`\\b${t.name}\\b`, "i").test(modalText)) {
+            tile = t;
+            GameMemory.myPos = t.id;
+            break;
+          }
+        }
+      }
       if (buyBtn) {
         const btnText = normalizeText(buyBtn);
         const priceMatch = /\$?\s*(\d{2,4})/.exec(btnText);
         const price = priceMatch ? parseInt(priceMatch[1], 10) : tile?.price || 150;
-        const auctionCheck = AuctionSniper.shouldSendToAuctionInsteadOfBuy(tile, price, GameMemory.myCash);
-        if (auctionCheck.auction && auctionBtn) {
-          return executeOrAdvise({
-            el: auctionBtn,
-            title: "TRIGGER AUCTION (Discount Steal)",
-            reason: auctionCheck.reason,
-            onExecute: () => delayClick(auctionBtn, auctionCheck.reason)
-          });
-        }
         const decision = MarkovRisk.shouldBuyProperty(tile, price, GameMemory.myCash);
         if (decision.buy) {
           return executeOrAdvise({
@@ -3285,8 +3599,20 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
               if (tile && GameMemory.ownership[tile.id]) {
                 GameMemory.ownership[tile.id].owner = GameMemory.myName || "__ME__";
               }
+              if (price > 0 && GameMemory.myCash >= price) {
+                GameMemory.myCash -= price;
+              }
               delayClick(buyBtn, decision.reason);
             }
+          });
+        }
+        const auctionCheck = AuctionSniper.shouldSendToAuctionInsteadOfBuy(tile, price, GameMemory.myCash);
+        if (auctionCheck.auction && auctionBtn) {
+          return executeOrAdvise({
+            el: auctionBtn,
+            title: "TRIGGER AUCTION",
+            reason: auctionCheck.reason,
+            onExecute: () => delayClick(auctionBtn, auctionCheck.reason)
           });
         }
       }
@@ -3308,14 +3634,14 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       const modal = document.querySelector('[role="dialog"], [class*="modal"], [class*="auction"]');
       const modalText = modal ? modal.innerText : document.body ? document.body.innerText : "";
       let auctionedTile = null;
-      for (const t of BOARD_TILES) {
+      for (const t of BOARD_TILES2) {
         if (t.group && new RegExp(`\\b${t.name}\\b`, "i").test(modalText)) {
           auctionedTile = t;
           break;
         }
       }
       if (!auctionedTile) {
-        auctionedTile = BOARD_TILES[GameMemory.myPos] || null;
+        auctionedTile = BOARD_TILES2[GameMemory.myPos] || null;
       }
       const bidMatch = /highest bid:?\s*\$?(\d+)|current bid:?\s*\$?(\d+)/i.exec(modalText);
       const currentBid = bidMatch ? parseInt(bidMatch[1] || bidMatch[2], 10) : 50;

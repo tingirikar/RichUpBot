@@ -64,28 +64,43 @@ export const MarkovRisk = {
 
     /**
      * Evaluates property purchase when landing on unowned tile.
-     * Enforces strict survival reserve when facing deadly enemy hotels ahead!
+     * Enforces strict buy preference: Always secure airports, utilities, and properties!
      */
     shouldBuyProperty(tile, price, myCash) {
-        const reserve = this.computeDynamicReserve(GameMemory.myPos);
-        const danger = this.analyzeDangerAhead(GameMemory.myPos);
+        // 1. Physical cash check
+        if (myCash < price) {
+            return {
+                buy: false,
+                reason: `Cannot afford ${tile ? tile.name : 'property'} ($${price} > $${myCash})`
+            };
+        }
 
-        // ALWAYS_BUY takes absolute priority: if the checkbox is ON, buy immediately
-        // without any hotel-danger veto or reserve checks
-        if (CONFIG.ALWAYS_BUY_AFFORDABLE) {
+        // 2. ALWAYS_BUY takes absolute priority
+        if (CONFIG.ALWAYS_BUY_AFFORDABLE || CONFIG.BUY_LAND_ENABLED) {
             return {
                 buy: true,
                 reason: `Acquiring ${tile ? tile.name : 'property'} ($${price}) [Always-Buy mode]`
             };
         }
 
-        // SMART RESERVE MODE: Veto if enemy hotels are deadly close AND we'd be wiped out
-        if (danger.maxDangerWindowLoss >= 300 || danger.expectedLoss1Turn >= 120) {
+        // 3. AIRPORTS & UTILITIES: Absolute must-buys!
+        // Airports scale to $200 rent with ZERO building investment.
+        if (tile && (tile.group === 'Airport' || tile.group === 'Airports')) {
+            return { buy: true, reason: `Essential High-Yield Asset: ${tile.name} (Airport)` };
+        }
+        if (tile && (tile.group === 'Utility' || tile.group === 'Utilities')) {
+            return { buy: true, reason: `Cashflow Asset: ${tile.name} (Utility)` };
+        }
+
+        // 4. SMART RESERVE VETO: ONLY veto if an enemy hotel ($400+) is within 1 turn
+        // and buying would leave us with under $50 emergency cash.
+        const danger = this.analyzeDangerAhead(GameMemory.myPos);
+        if (danger.maxDangerWindowLoss >= 400 && danger.expectedLoss1Turn >= 150) {
             const postCash = myCash - price;
-            if (postCash < reserve * 0.75) {
+            if (postCash < 50) {
                 return {
                     buy: false,
-                    reason: `Hotel Danger Veto: Enemy hotels ($${danger.maxDangerWindowLoss} rent) ahead! Preserving $${myCash} cash to survive.`
+                    reason: `Hotel Danger Veto: Enemy hotel ($${danger.maxDangerWindowLoss} rent) ahead! Preserving $${myCash} cash.`
                 };
             }
         }
@@ -101,22 +116,19 @@ export const MarkovRisk = {
             return { buy: true, reason: `CRITICAL: Completes ${tile.group} Monopoly!` };
         }
 
+        // Opponent blocker
+        if (OpponentTracker.isBlockerAgainstAnyOpponent(tile)) {
+            return { buy: true, reason: `DEFENSIVE BLOCK: Prevents opponent from completing ${tile.group}` };
+        }
+
         // High traffic groups (Germany, China, France, Italy)
         if (HIGH_TRAFFIC_GROUPS.has(tile.group)) {
             return { buy: true, reason: `High-Traffic Strategic Asset: ${tile.name} (${tile.group})` };
         }
 
-        const effectiveCash = Math.max(myCash, price);
-        if (effectiveCash - price >= reserve * 0.6) {
-            return {
-                buy: true,
-                reason: `EV+ Buy: ${tile.name} ($${price}) | Safe Cash Reserve $${Math.round(reserve)}`
-            };
-        }
-
         return {
-            buy: false,
-            reason: `Preserving survival reserve ($${reserve}) for danger ahead`
+            buy: true,
+            reason: `EV+ Buy: ${tile.name} ($${price})`
         };
     }
 };

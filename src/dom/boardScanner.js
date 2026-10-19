@@ -110,13 +110,28 @@ function detectLobbySettingsAndIdentity() {
 }
 
 /**
- * In RichUp, the local player's card in the top-right scoreboard has a unique
- * "leave game" / exit door icon [->]. This allows 100% foolproof identity & cash detection!
+ * In RichUp, the top-right scoreboard lists all players in the room.
+ * The local player's card uniquely has an interactive "leave game" / exit door icon [->].
+ * This function extracts exact cash balances for the local player AND all opponents,
+ * completely immune to React build hashes or CSS class name changes.
  */
 function detectLocalPlayerFromPlayerList() {
     const hud = document.getElementById('rubot-hud-panel');
 
-    // Purge any accidental bad name
+    // 1. Jail State Self-Healing: bail buttons appear exclusively when the player is in Jail (Tile 10)
+    const hasJailUI = Boolean(
+        Array.from(document.querySelectorAll('button, [role="button"], div, span')).some(b => {
+            if (hud && hud.contains(b)) return false;
+            const t = (b.innerText || '').toLowerCase();
+            return t.includes('get free for') || t.includes('pay $50') || t.includes('pardon card');
+        })
+    );
+    if (hasJailUI) {
+        GameMemory.myPos = 10;
+        GameMemory.inJail = true;
+    }
+
+    // 2. Purge accidental bad name
     if (GameMemory.myName && (
         GameMemory.myName.toLowerCase().includes('share') ||
         GameMemory.myName.toLowerCase().includes('copy') ||
@@ -128,12 +143,104 @@ function detectLocalPlayerFromPlayerList() {
 
     const currentName = GameMemory.myName;
 
-    // Search for player row containers in the scoreboard
-    const candidates = document.querySelectorAll('[class*="player"], [class*="user"], [class*="item"], [class*="row"], [class*="card"]');
+    // 3. Class-Agnostic Scoreboard Discovery:
+    // Find the container element that holds 2 to 8 player cards, each containing a dollar sign
+    const allContainers = document.querySelectorAll('div, section, aside, ul');
+    let bestScoreboardContainer = null;
+    let maxDollarChildren = 0;
 
-    // FAST-PATH: If our name is already known (e.g. "matrix"), directly match our card!
+    for (let i = 0; i < allContainers.length; i++) {
+        const el = allContainers[i];
+        if (hud && hud.contains(el)) continue;
+        if (el === document.body || el === document.documentElement) continue;
+
+        const children = Array.from(el.children);
+        if (children.length >= 2 && children.length <= 8) {
+            let dollarCount = 0;
+            for (const child of children) {
+                const cText = child.innerText || '';
+                if (cText.includes('$') && cText.length < 160 && !cText.toLowerCase().includes('my properties')) {
+                    dollarCount++;
+                }
+            }
+            if (dollarCount >= 2 && dollarCount > maxDollarChildren && (el.innerText || '').length < 800) {
+                maxDollarChildren = dollarCount;
+                bestScoreboardContainer = el;
+            }
+        }
+    }
+
+    // 4. Extract players from discovered scoreboard container
+    if (bestScoreboardContainer) {
+        const rows = Array.from(bestScoreboardContainer.children);
+        for (const row of rows) {
+            const rowText = row.innerText || '';
+            if (!rowText.includes('$') || rowText.length > 160) continue;
+
+            const cashMatch = /\$\s*(-?\d{1,5})|(-?\d{1,5})\s*\$|(-\s*\$?\d{1,5})/.exec(rowText);
+            if (!cashMatch) continue;
+
+            const rawCash = (cashMatch[1] || cashMatch[2] || cashMatch[3] || '').replace(/[\$\s]/g, '');
+            const parsedCash = parseInt(rawCash, 10);
+            if (isNaN(parsedCash)) continue;
+
+            const beforeDollar = rowText.split('$')[0].trim();
+            const candidateLines = beforeDollar.split('\n').map(l => l.trim()).filter(Boolean);
+
+            let candidateName = null;
+            for (const line of candidateLines) {
+                const clean = line.replace(/[->\]\[→←\|👑]/g, '').trim();
+                if (
+                    clean.length >= 2 && clean.length <= 24 &&
+                    !BOARD_LABELS_BLACKLIST.has(clean.toLowerCase()) &&
+                    !clean.toLowerCase().includes('share') &&
+                    !clean.toLowerCase().includes('copy') &&
+                    !/^\d+$/.test(clean)
+                ) {
+                    candidateName = clean;
+                    break;
+                }
+            }
+
+            if (!candidateName) continue;
+
+            // In RichUp, only the local player's row has the interactive leave [->] button
+            const hasLeaveIcon = Boolean(
+                row.querySelector('[class*="leave" i], [class*="exit" i], [title*="leave" i], [aria-label*="leave" i]') ||
+                row.innerHTML.includes('->') ||
+                row.innerHTML.includes('M17 16l4') ||
+                row.innerHTML.includes('M11 16l-4-4') ||
+                row.innerHTML.includes('M15 3h4a2')
+            );
+
+            const isKnownMe = currentName && candidateName.toLowerCase() === currentName.toLowerCase();
+            const isBankrupt = rowText.toLowerCase().includes('bankrupt') || row.classList.contains('bankrupt');
+
+            if (hasLeaveIcon || isKnownMe) {
+                GameMemory.setMyName(candidateName);
+                GameMemory.myCash = parsedCash;
+                GameMemory.cashVerified = true;
+                GameMemory.players[candidateName] = {
+                    cash: parsedCash,
+                    pos: GameMemory.myPos,
+                    isMe: true,
+                    bankrupt: isBankrupt
+                };
+            } else {
+                GameMemory.players[candidateName] = {
+                    cash: parsedCash,
+                    pos: GameMemory.players[candidateName]?.pos || 0,
+                    isMe: false,
+                    bankrupt: isBankrupt
+                };
+            }
+        }
+    }
+
+    // 5. Direct Fallback: Scan any elements containing current player name & $
     if (currentName) {
         const currentLower = currentName.toLowerCase();
+        const candidates = document.querySelectorAll('*');
         for (let i = 0; i < candidates.length; i++) {
             const el = candidates[i];
             if (hud && hud.contains(el)) continue;
@@ -147,80 +254,17 @@ function detectLocalPlayerFromPlayerList() {
                     if (!isNaN(parsedCash)) {
                         GameMemory.myCash = parsedCash;
                         GameMemory.cashVerified = true;
-                        GameMemory.players[currentName] = GameMemory.players[currentName] || { cash: parsedCash, pos: 0, isMe: true };
+                        GameMemory.players[currentName] = GameMemory.players[currentName] || { cash: parsedCash, pos: GameMemory.myPos, isMe: true };
                         GameMemory.players[currentName].cash = parsedCash;
                         GameMemory.players[currentName].isMe = true;
-                        return;
+                        break;
                     }
                 }
             }
         }
     }
 
-    // GENERAL SCAN: Scan all candidate player rows for cash and [->] leave icon
-    for (let i = 0; i < candidates.length; i++) {
-        const el = candidates[i];
-        if (hud && hud.contains(el)) continue;
-
-        const text = el.innerText || '';
-        // Must contain $ and not be a massive DOM dump
-        if (!text.includes('$') || text.length > 120) continue;
-
-        // Extract cash: handles $500, $-185, -$185, -185 adjacent to $
-        const cashMatch = /\$\s*(-?\d{1,5})|(-?\d{1,5})\s*\$|(-\s*\$?\d{1,5})/.exec(text);
-        if (!cashMatch) continue;
-
-        const rawCash = (cashMatch[1] || cashMatch[2] || cashMatch[3] || '').replace(/[\$\s]/g, '');
-        const parsedCash = parseInt(rawCash, 10);
-        if (isNaN(parsedCash)) continue;
-
-        // Parse player username: extract text before the $ sign
-        const beforeDollar = text.split('$')[0].trim();
-        const candidateLines = beforeDollar.split('\n').map(l => l.trim()).filter(Boolean);
-
-        let candidateName = null;
-        for (const line of candidateLines) {
-            // Strip arrow/icon characters and trailing/leading noise
-            const clean = line.replace(/[->\]\[→←\|]/g, '').trim();
-            if (
-                clean.length >= 2 && clean.length <= 24 &&
-                !BOARD_LABELS_BLACKLIST.has(clean.toLowerCase()) &&
-                !clean.toLowerCase().includes('share') &&
-                !clean.toLowerCase().includes('copy') &&
-                !/^\d+$/.test(clean)
-            ) {
-                candidateName = clean;
-                break;
-            }
-        }
-
-        if (!candidateName) continue;
-
-        // In RichUp, only the local player's row has the interactive leave [->] button in the scoreboard
-        const hasLeaveIcon = Boolean(
-            el.querySelector('[class*="leave" i], [class*="exit" i], [title*="leave" i], [aria-label*="leave" i]') ||
-            el.innerHTML.includes('->') ||
-            el.innerHTML.includes('M17 16l4') ||
-            el.innerHTML.includes('M11 16l-4-4') ||
-            el.innerHTML.includes('M15 3h4a2')
-        );
-
-        const isKnownMe = currentName && candidateName.toLowerCase() === currentName.toLowerCase();
-
-        // Update player record in memory
-        GameMemory.players[candidateName] = GameMemory.players[candidateName] || { cash: parsedCash, pos: 0, isMe: false };
-        GameMemory.players[candidateName].cash = parsedCash;
-
-        if (hasLeaveIcon || isKnownMe) {
-            GameMemory.players[candidateName].isMe = true;
-            GameMemory.setMyName(candidateName);
-            GameMemory.myCash = parsedCash;
-            GameMemory.cashVerified = true;
-            return;
-        }
-    }
-
-    // Direct fallback if player name is known and present in players dictionary
+    // 6. Direct fallback if player name is known and present in players dictionary
     if (GameMemory.myName && GameMemory.players[GameMemory.myName]) {
         GameMemory.myCash = GameMemory.players[GameMemory.myName].cash;
         GameMemory.cashVerified = true;
@@ -314,7 +358,7 @@ function syncMyPropertiesFromSidebar() {
         // Check if line matches a known board tile
         let matchedTile = null;
         for (const tile of BOARD_TILES) {
-            if (tile.group && lower === tile.name.toLowerCase()) {
+            if (tile.group && (lower === tile.name.toLowerCase() || new RegExp(`^${tile.name}\\b`, 'i').test(line))) {
                 matchedTile = tile;
                 break;
             }
@@ -365,20 +409,31 @@ function scanTextNodesAndActivityLogs() {
         const m = /^(-?\$?\d{1,5}|\$-?\d{1,5})$/.exec(item.text);
 
         if (m && item.text.includes('$')) {
-            const numeric = parseInt(item.text.replace(/\$/g, ''), 10);
-            const prevText = i > 0 ? textNodes[i - 1].text.trim() : '';
-            const prevLower = prevText.toLowerCase();
+            const numeric = parseInt(item.text.replace(/[\$\s]/g, ''), 10);
+            
+            // Search backwards up to 4 text nodes to skip icons like "->", "👑", "→"
+            let prevText = '';
+            for (let k = 1; k <= 4 && (i - k) >= 0; k++) {
+                const candidate = textNodes[i - k].text.trim().replace(/[->\]\[→←\|👑]/g, '').trim();
+                if (
+                    candidate.length >= 2 && candidate.length <= 24 &&
+                    !/^\$|%|\d|^x\s*\$/i.test(candidate) &&
+                    !BOARD_LABELS_BLACKLIST.has(candidate.toLowerCase())
+                ) {
+                    prevText = candidate;
+                    break;
+                }
+            }
 
-            if (
-                !isNaN(numeric) &&
-                prevText.length >= 2 &&
-                prevText.length <= 24 &&
-                !/^\$|%|\d|^x\s*\$/i.test(prevText) &&
-                !BOARD_LABELS_BLACKLIST.has(prevLower)
-            ) {
-                GameMemory.players[prevText] = GameMemory.players[prevText] || { cash: numeric, pos: 0, isMe: false };
+            if (prevText && !isNaN(numeric)) {
+                const isMe = GameMemory.isMe(prevText);
+                GameMemory.players[prevText] = GameMemory.players[prevText] || { cash: numeric, pos: 0, isMe };
                 GameMemory.players[prevText].cash = numeric;
                 cashCandidates.push({ name: prevText, cash: numeric });
+                if (isMe) {
+                    GameMemory.myCash = numeric;
+                    GameMemory.cashVerified = true;
+                }
             }
         }
 
@@ -401,6 +456,67 @@ function scanTextNodesAndActivityLogs() {
 }
 
 function parseActivityLogLine(line) {
+    // 1. In Prison / Go to Prison events
+    if (/got into prison|went to prison|sent to prison/i.test(line)) {
+        const playerPart = line.split(/got into prison|went to prison|sent to prison/i)[0].trim();
+        const cleanPlayer = playerPart.replace(/[^\w\s-]/g, '').trim();
+        if (GameMemory.isMe(cleanPlayer)) {
+            GameMemory.myPos = 10;
+            GameMemory.inJail = true;
+        } else if (cleanPlayer && GameMemory.players[cleanPlayer]) {
+            GameMemory.players[cleanPlayer].pos = 10;
+            GameMemory.players[cleanPlayer].inJail = true;
+        }
+        GameMemory.processedLogs.add(line);
+        return;
+    }
+
+    // 2. Left Prison / Got free events
+    if (/got free|left prison|paid.*jail|paid.*bail/i.test(line)) {
+        const playerPart = line.split(/got free|left prison|paid/i)[0].trim();
+        const cleanPlayer = playerPart.replace(/[^\w\s-]/g, '').trim();
+        if (GameMemory.isMe(cleanPlayer)) {
+            GameMemory.inJail = false;
+        } else if (cleanPlayer && GameMemory.players[cleanPlayer]) {
+            GameMemory.players[cleanPlayer].inJail = false;
+        }
+        GameMemory.processedLogs.add(line);
+        return;
+    }
+
+    // 3. Dice Roll events (position update)
+    const rollMatch = /^(.+?)\s+rolled\s+(\d+)/i.exec(line);
+    if (rollMatch) {
+        const player = rollMatch[1].trim();
+        const rollVal = parseInt(rollMatch[2], 10);
+        if (!isNaN(rollVal) && rollVal >= 2 && rollVal <= 12) {
+            if (GameMemory.isMe(player)) {
+                GameMemory.myPos = (GameMemory.myPos + rollVal) % 40;
+            } else if (GameMemory.players[player]) {
+                GameMemory.players[player].pos = ((GameMemory.players[player].pos || 0) + rollVal) % 40;
+            }
+        }
+        GameMemory.processedLogs.add(line);
+        return;
+    }
+
+    // 4. Landed on events
+    if (line.includes('landed on')) {
+        for (const tile of BOARD_TILES) {
+            if (new RegExp(`\\b${tile.name}\\b`, 'i').test(line)) {
+                const playerPart = line.split(/landed on/i)[0].trim();
+                const cleanPlayer = playerPart.replace(/[^\w\s-]/g, '').trim();
+                if (GameMemory.isMe(cleanPlayer)) {
+                    GameMemory.myPos = tile.id;
+                } else if (cleanPlayer && GameMemory.players[cleanPlayer]) {
+                    GameMemory.players[cleanPlayer].pos = tile.id;
+                }
+                GameMemory.processedLogs.add(line);
+                return;
+            }
+        }
+    }
+
     if (line.includes('bought a house in')) {
         for (const tile of BOARD_TILES) {
             if (tile.group && new RegExp(`\\b${tile.name}\\b`, 'i').test(line)) {
@@ -409,6 +525,9 @@ function parseActivityLogLine(line) {
                 if (cleanBuyer && GameMemory.ownership[tile.id]) {
                     GameMemory.ownership[tile.id].owner = cleanBuyer;
                     GameMemory.ownership[tile.id].houses = Math.min(5, (GameMemory.ownership[tile.id].houses || 0) + 1);
+                    if (GameMemory.isMe(cleanBuyer)) {
+                        GameMemory.myPos = tile.id;
+                    }
                     GameMemory.processedLogs.add(line);
                     return;
                 }
@@ -424,6 +543,9 @@ function parseActivityLogLine(line) {
                 if (cleanBuyer && GameMemory.ownership[tile.id]) {
                     GameMemory.ownership[tile.id].owner = cleanBuyer;
                     GameMemory.ownership[tile.id].houses = 5;
+                    if (GameMemory.isMe(cleanBuyer)) {
+                        GameMemory.myPos = tile.id;
+                    }
                     GameMemory.processedLogs.add(line);
                     return;
                 }
@@ -438,6 +560,9 @@ function parseActivityLogLine(line) {
                 const cleanBuyer = buyerPart.replace(/[^\w\s-]/g, '').trim();
                 if (cleanBuyer && GameMemory.ownership[tile.id]) {
                     GameMemory.ownership[tile.id].owner = cleanBuyer;
+                    if (GameMemory.isMe(cleanBuyer)) {
+                        GameMemory.myPos = tile.id;
+                    }
                     GameMemory.processedLogs.add(line);
                     return;
                 }
@@ -456,6 +581,32 @@ function parseActivityLogLine(line) {
             }
         }
         GameMemory.processedLogs.add(line);
+        return;
+    }
+
+    if (line.includes('mortgaged')) {
+        for (const tile of BOARD_TILES) {
+            if (tile.group && new RegExp(`\\b${tile.name}\\b`, 'i').test(line)) {
+                if (GameMemory.ownership[tile.id]) {
+                    GameMemory.ownership[tile.id].mortgaged = !line.includes('unmortgaged');
+                    GameMemory.processedLogs.add(line);
+                    return;
+                }
+            }
+        }
+    }
+
+    if (line.includes('traded')) {
+        for (const tile of BOARD_TILES) {
+            if (tile.group && new RegExp(`\\b${tile.name}\\b`, 'i').test(line)) {
+                const matchTo = /to\s+([A-Za-z0-9_-]+)/i.exec(line);
+                if (matchTo && GameMemory.ownership[tile.id]) {
+                    GameMemory.ownership[tile.id].owner = matchTo[1].trim();
+                    GameMemory.processedLogs.add(line);
+                    return;
+                }
+            }
+        }
     }
 }
 

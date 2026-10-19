@@ -119,6 +119,17 @@ export function createDOMSnapshot() {
                     return b.el;
                 }
             }
+            // Fallback: search any clickable element containing "+ create" or "create" near Trades
+            const elements = document.querySelectorAll('div, span, button, a');
+            for (let i = 0; i < elements.length; i++) {
+                const el = elements[i];
+                if (hud && hud.contains(el)) continue;
+                if (!isVisibleAndEnabled(el)) continue;
+                const text = normalizeText(el);
+                if ((text === '+ create' || text === 'create') && !text.includes('game') && !text.includes('room')) {
+                    return el;
+                }
+            }
             return null;
         },
 
@@ -133,6 +144,19 @@ export function createDOMSnapshot() {
                     return b.el;
                 }
             }
+            // Check within modal/dialog for player option row/card
+            const modal = document.querySelector('[role="dialog"], [class*="modal" i], [class*="trade" i]');
+            const searchRoot = modal || document.body;
+            const candidates = searchRoot.querySelectorAll('button, div, [role="button"], li, a, span');
+            for (let i = 0; i < candidates.length; i++) {
+                const el = candidates[i];
+                if (hud && hud.contains(el)) continue;
+                if (!isVisibleAndEnabled(el)) continue;
+                const text = normalizeText(el);
+                if (text === targetLower || (text.includes(targetLower) && text.length < targetLower.length + 20)) {
+                    return el;
+                }
+            }
             return null;
         },
 
@@ -143,6 +167,18 @@ export function createDOMSnapshot() {
             for (const b of allButtons) {
                 if (b.text.includes('send trade') || b.text.includes('propose trade') || b.text === 'send') {
                     return b.el;
+                }
+            }
+            const modal = document.querySelector('[role="dialog"], [class*="modal" i], [class*="trade" i]');
+            const searchRoot = modal || document.body;
+            const btns = searchRoot.querySelectorAll('button, [role="button"], div, span');
+            for (let i = 0; i < btns.length; i++) {
+                const el = btns[i];
+                if (hud && hud.contains(el)) continue;
+                if (!isVisibleAndEnabled(el)) continue;
+                const text = normalizeText(el);
+                if (text.includes('send trade') || text.includes('propose trade') || text === 'send') {
+                    return el;
                 }
             }
             return null;
@@ -179,92 +215,99 @@ export function createDOMSnapshot() {
         },
 
         /**
-         * Finds the UP-ARROW [↑] button to build a house inside the property card modal
+         * Finds the UP-ARROW [↑] button to build a house inside the property card popover
+         * (Supports floating card popup without role="dialog" as shown in building-houses.png)
          */
         findModalUpgradeButton() {
-            const modal = document.querySelector('[role="dialog"], [class*="modal"], [class*="property-modal"]');
-            if (!modal) return null;
-
-            const btns = modal.querySelectorAll('button');
-            for (let i = 0; i < btns.length; i++) {
-                const btn = btns[i];
-                if (!isVisibleAndEnabled(btn)) continue;
-                const inner = btn.innerHTML || '';
-                const text = normalizeText(btn);
-
-                // Matches up arrow icon, svg, or upgrade text
-                if (
-                    inner.includes('↑') || 
-                    inner.includes('arrow-up') || 
-                    inner.includes('M5 10l7-7m0 0l7 7m-7-7v18') ||
-                    text.includes('upgrade') ||
-                    text.includes('build')
-                ) {
-                    return btn;
+            const containers = document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="popover" i], [class*="property" i]');
+            for (const c of containers) {
+                if (hud && hud.contains(c)) continue;
+                const btns = c.querySelectorAll('button, [role="button"], div');
+                for (let i = 0; i < btns.length; i++) {
+                    const btn = btns[i];
+                    if (!isVisibleAndEnabled(btn)) continue;
+                    const inner = btn.innerHTML || '';
+                    const text = normalizeText(btn);
+                    if (
+                        inner.includes('↑') || inner.includes('⭡') ||
+                        inner.includes('arrow-up') || 
+                        inner.includes('M5 10l7-7m0 0l7 7m-7-7v18') ||
+                        text.includes('upgrade') || text.includes('build')
+                    ) {
+                        return btn;
+                    }
                 }
             }
-            // Fallback: If 3 buttons exist in a row, button 0 is usually Upgrade
-            if (btns.length >= 3 && isVisibleAndEnabled(btns[0])) {
-                return btns[0];
+            // Page-wide fallback
+            for (const b of allButtons) {
+                const inner = b.el.innerHTML || '';
+                if (inner.includes('↑') || inner.includes('⭡') || b.text === '↑' || b.text.includes('upgrade') || b.text.includes('build')) {
+                    return b.el;
+                }
             }
             return null;
         },
 
         /**
-         * Finds the DOWN-ARROW [↓] button to sell a house inside the property modal
+         * Finds the DOWN-ARROW [↓] button to sell a house inside the property card popover
          */
         findModalSellHouseButton() {
-            const modal = document.querySelector('[role="dialog"], [class*="modal"], [class*="property-modal"]');
-            if (!modal) return null;
-
-            const btns = modal.querySelectorAll('button');
-            for (let i = 0; i < btns.length; i++) {
-                const btn = btns[i];
-                if (!isVisibleAndEnabled(btn)) continue;
-                const inner = btn.innerHTML || '';
-                const text = normalizeText(btn);
-
-                if (
-                    inner.includes('↓') || 
-                    inner.includes('arrow-down') || 
-                    inner.includes('M19 14l-7 7m0 0l-7-7m7 7V3') ||
-                    text.includes('sell') ||
-                    text.includes('downgrade')
-                ) {
-                    return btn;
+            const containers = document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="popover" i], [class*="property" i]');
+            for (const c of containers) {
+                if (hud && hud.contains(c)) continue;
+                const btns = c.querySelectorAll('button, [role="button"], div');
+                for (let i = 0; i < btns.length; i++) {
+                    const btn = btns[i];
+                    if (!isVisibleAndEnabled(btn)) continue;
+                    const inner = btn.innerHTML || '';
+                    const text = normalizeText(btn);
+                    if (
+                        inner.includes('↓') || inner.includes('⭣') ||
+                        inner.includes('arrow-down') || 
+                        inner.includes('M19 14l-7 7m0 0l-7-7m7 7V3') ||
+                        text.includes('sell') || text.includes('downgrade')
+                    ) {
+                        return btn;
+                    }
                 }
             }
-            if (btns.length >= 3 && isVisibleAndEnabled(btns[1])) {
-                return btns[1];
+            // Page-wide fallback
+            for (const b of allButtons) {
+                const inner = b.el.innerHTML || '';
+                if (inner.includes('↓') || inner.includes('⭣') || b.text === '↓' || b.text.includes('sell') || b.text.includes('downgrade')) {
+                    return b.el;
+                }
             }
             return null;
         },
 
         /**
-         * Finds the TRASH [🗑] button to mortgage a property inside the modal
+         * Finds the TRASH [🗑] button to mortgage a property inside the card popover
          */
         findModalMortgageButton() {
-            const modal = document.querySelector('[role="dialog"], [class*="modal"], [class*="property-modal"]');
-            if (!modal) return null;
-
-            const btns = modal.querySelectorAll('button');
-            for (let i = 0; i < btns.length; i++) {
-                const btn = btns[i];
-                if (!isVisibleAndEnabled(btn)) continue;
-                const inner = btn.innerHTML || '';
-                const text = normalizeText(btn);
-
-                if (
-                    inner.includes('🗑') || 
-                    inner.includes('trash') || 
-                    inner.includes('mortgage') ||
-                    text.includes('mortgage')
-                ) {
-                    return btn;
+            const containers = document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="popover" i], [class*="property" i]');
+            for (const c of containers) {
+                if (hud && hud.contains(c)) continue;
+                const btns = c.querySelectorAll('button, [role="button"], div');
+                for (let i = 0; i < btns.length; i++) {
+                    const btn = btns[i];
+                    if (!isVisibleAndEnabled(btn)) continue;
+                    const inner = btn.innerHTML || '';
+                    const text = normalizeText(btn);
+                    if (
+                        inner.includes('🗑') || inner.includes('trash') || 
+                        inner.includes('mortgage') || text.includes('mortgage')
+                    ) {
+                        return btn;
+                    }
                 }
             }
-            if (btns.length >= 3 && isVisibleAndEnabled(btns[2])) {
-                return btns[2];
+            // Page-wide fallback
+            for (const b of allButtons) {
+                const inner = b.el.innerHTML || '';
+                if (inner.includes('🗑') || inner.includes('trash') || b.text.includes('mortgage')) {
+                    return b.el;
+                }
             }
             return null;
         },
@@ -291,19 +334,31 @@ export function createDOMSnapshot() {
         },
 
         /**
-         * Finds a property element inside the trade modal
+         * Finds a property element inside the trade modal, with column-awareness:
+         * column: 'mine' / 'left' (left side) vs 'theirs' / 'right' (right side)
          */
-        findTradePropertyCard(propertyName) {
+        findTradePropertyCard(propertyName, column = null) {
             if (!propertyName) return null;
             const lowerName = propertyName.toLowerCase();
 
-            const modal = document.querySelector('[role="dialog"], [class*="modal"], [class*="trade"]');
+            const modal = document.querySelector('[role="dialog"], [class*="modal" i], [class*="trade" i]');
             const searchRoot = modal || document.body;
+            const modalRect = searchRoot.getBoundingClientRect();
+            const modalCenter = modalRect.left + modalRect.width / 2;
 
-            const candidates = searchRoot.querySelectorAll('button, div, span, p');
+            const candidates = searchRoot.querySelectorAll('button, [role="button"], div, li, span, p');
             for (let i = 0; i < candidates.length; i++) {
                 const el = candidates[i];
                 if (!isVisibleAndEnabled(el)) continue;
+
+                // Column side partitioning
+                if (column && modal) {
+                    const rect = el.getBoundingClientRect();
+                    const elCenter = rect.left + rect.width / 2;
+                    if ((column === 'mine' || column === 'left') && elCenter > modalCenter) continue;
+                    if ((column === 'theirs' || column === 'right') && elCenter < modalCenter) continue;
+                }
+
                 const text = normalizeText(el);
                 if (
                     text === lowerName || 

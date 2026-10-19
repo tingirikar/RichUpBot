@@ -202,6 +202,10 @@ export const ActionExecutor = {
 
         if (!pardonBtn && !payBailBtn) return false;
 
+        // Position self-healing: bail buttons appear exclusively in Jail (Tile 10)
+        GameMemory.myPos = 10;
+        GameMemory.inJail = true;
+
         const decision = JailStrategy.shouldPayToLeaveJail(GameMemory.myCash);
 
         if (decision.exit) {
@@ -210,7 +214,10 @@ export const ActionExecutor = {
                     el: pardonBtn,
                     title: 'USE PARDON CARD',
                     reason: decision.reason,
-                    onExecute: () => delayClick(pardonBtn, decision.reason)
+                    onExecute: () => {
+                        GameMemory.inJail = false;
+                        delayClick(pardonBtn, decision.reason);
+                    }
                 });
             }
             if (payBailBtn) {
@@ -218,7 +225,11 @@ export const ActionExecutor = {
                     el: payBailBtn,
                     title: 'PAY $50 JAIL BAIL',
                     reason: decision.reason,
-                    onExecute: () => delayClick(payBailBtn, decision.reason)
+                    onExecute: () => {
+                        if (GameMemory.myCash >= 50) GameMemory.myCash -= 50;
+                        GameMemory.inJail = false;
+                        delayClick(payBailBtn, decision.reason);
+                    }
                 });
             }
         } else {
@@ -242,25 +253,27 @@ export const ActionExecutor = {
 
         if (!buyBtn && !auctionBtn) return false;
 
-        const tile = BOARD_TILES[GameMemory.myPos] || null;
+        let tile = BOARD_TILES[GameMemory.myPos] || null;
+
+        // Verify or recover tile from open modal/popup text if available
+        const modal = document.querySelector('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="property" i]');
+        if (modal) {
+            const modalText = modal.innerText || '';
+            for (const t of BOARD_TILES) {
+                if (t.group && new RegExp(`\\b${t.name}\\b`, 'i').test(modalText)) {
+                    tile = t;
+                    GameMemory.myPos = t.id; // Self-heal position tracking
+                    break;
+                }
+            }
+        }
 
         if (buyBtn) {
             const btnText = normalizeText(buyBtn);
             const priceMatch = /\$?\s*(\d{2,4})/.exec(btnText);
             const price = priceMatch ? parseInt(priceMatch[1], 10) : (tile?.price || 150);
 
-            // 1. Intelligent Auction Check: Should we intentionally auction instead of buying?
-            const auctionCheck = AuctionSniper.shouldSendToAuctionInsteadOfBuy(tile, price, GameMemory.myCash);
-            if (auctionCheck.auction && auctionBtn) {
-                return executeOrAdvise({
-                    el: auctionBtn,
-                    title: 'TRIGGER AUCTION (Discount Steal)',
-                    reason: auctionCheck.reason,
-                    onExecute: () => delayClick(auctionBtn, auctionCheck.reason)
-                });
-            }
-
-            // 2. Buy Evaluation: Can we afford it and is it safe to buy?
+            // 1. Prioritize Direct Buy: If we have enough cash, always secure the asset directly!
             const decision = MarkovRisk.shouldBuyProperty(tile, price, GameMemory.myCash);
 
             if (decision.buy) {
@@ -272,13 +285,27 @@ export const ActionExecutor = {
                         if (tile && GameMemory.ownership[tile.id]) {
                             GameMemory.ownership[tile.id].owner = GameMemory.myName || '__ME__';
                         }
+                        if (price > 0 && GameMemory.myCash >= price) {
+                            GameMemory.myCash -= price;
+                        }
                         delayClick(buyBtn, decision.reason);
                     }
                 });
             }
+
+            // 2. If purchase cannot be made (e.g. insufficient cash):
+            const auctionCheck = AuctionSniper.shouldSendToAuctionInsteadOfBuy(tile, price, GameMemory.myCash);
+            if (auctionCheck.auction && auctionBtn) {
+                return executeOrAdvise({
+                    el: auctionBtn,
+                    title: 'TRIGGER AUCTION',
+                    reason: auctionCheck.reason,
+                    onExecute: () => delayClick(auctionBtn, auctionCheck.reason)
+                });
+            }
         }
 
-        // If we cannot buy directly (e.g. not enough cash):
+        // If we cannot buy directly (e.g. no buy button or not enough cash):
         if (auctionBtn) {
             return executeOrAdvise({
                 el: auctionBtn,
