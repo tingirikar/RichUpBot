@@ -18,9 +18,9 @@
   // src/config.js
   var CONFIG = {
     // Action timing delays (in milliseconds) for human-like interaction
-    ACTION_DELAY_MIN: 300,
-    ACTION_DELAY_MAX: 3e3,
-    OBSERVER_DEBOUNCE_MS: 1e3,
+    ACTION_DELAY_MIN: 400,
+    ACTION_DELAY_MAX: 1800,
+    OBSERVER_DEBOUNCE_MS: 200,
     POLL_INTERVAL_MS: 1200,
     SELF_HEAL_INTERVAL_MS: 1e3,
     STALL_TIMEOUT_SEC: 8,
