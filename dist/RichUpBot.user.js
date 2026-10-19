@@ -714,14 +714,35 @@
         return this.findExactOrIncludes(["negotiate", "counter"]);
       },
       /**
-       * Finds the UP-ARROW [↑] button to build a house inside the property card popover
-       * (Supports floating card popup without role="dialog" as shown in building-houses.png)
+       * Detects if a property card popover/modal is currently open and returns its DOM element & tile info
        */
-      findModalUpgradeButton() {
+      getOpenPropertyCard() {
         const containers = document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="popover" i], [class*="property" i]');
         for (const c of containers) {
           if (hud && hud.contains(c)) continue;
-          const btns = c.querySelectorAll('button, [role="button"], div');
+          if (!isVisibleAndEnabled(c)) continue;
+          const rect = c.getBoundingClientRect();
+          if (rect.left > window.innerWidth * 0.65 && rect.width < 320) continue;
+          const text = c.innerText || "";
+          if (text.includes("Owner") || text.includes("Price") || text.includes("when") || text.includes("rent") || text.includes("Mortgage") || text.includes("mortgage")) {
+            for (const t of BOARD_TILES) {
+              if (t.group && new RegExp(`\\b${t.name}\\b`, "i").test(text)) {
+                return { el: c, tile: t };
+              }
+            }
+          }
+        }
+        return null;
+      },
+      /**
+       * Finds the UP-ARROW [↑] button to build a house inside the property card popover
+       */
+      findModalUpgradeButton() {
+        const openCard = this.getOpenPropertyCard();
+        const searchContainers = openCard ? [openCard.el] : document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="popover" i]');
+        for (const c of searchContainers) {
+          if (hud && hud.contains(c)) continue;
+          const btns = c.querySelectorAll('button, [role="button"], [class*="button" i], [class*="btn" i]');
           for (let i = 0; i < btns.length; i++) {
             const btn = btns[i];
             if (!isVisibleAndEnabled(btn)) continue;
@@ -744,10 +765,11 @@
        * Finds the DOWN-ARROW [↓] button to sell a house inside the property card popover
        */
       findModalSellHouseButton() {
-        const containers = document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="popover" i], [class*="property" i]');
-        for (const c of containers) {
+        const openCard = this.getOpenPropertyCard();
+        const searchContainers = openCard ? [openCard.el] : document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="popover" i]');
+        for (const c of searchContainers) {
           if (hud && hud.contains(c)) continue;
-          const btns = c.querySelectorAll('button, [role="button"], div');
+          const btns = c.querySelectorAll('button, [role="button"], [class*="button" i], [class*="btn" i]');
           for (let i = 0; i < btns.length; i++) {
             const btn = btns[i];
             if (!isVisibleAndEnabled(btn)) continue;
@@ -767,26 +789,28 @@
         return null;
       },
       /**
-       * Finds the TRASH [🗑] button to mortgage a property inside the card popover
+       * Finds the Mortgage button inside the property card popover/modal
        */
       findModalMortgageButton() {
-        const containers = document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="popover" i], [class*="property" i]');
-        for (const c of containers) {
+        const openCard = this.getOpenPropertyCard();
+        const searchContainers = openCard ? [openCard.el] : document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="popover" i]');
+        for (const c of searchContainers) {
           if (hud && hud.contains(c)) continue;
-          const btns = c.querySelectorAll('button, [role="button"], div');
+          const btns = c.querySelectorAll('button, [role="button"], [class*="button" i], [class*="btn" i]');
           for (let i = 0; i < btns.length; i++) {
             const btn = btns[i];
             if (!isVisibleAndEnabled(btn)) continue;
-            const inner = btn.innerHTML || "";
+            const inner = (btn.innerHTML || "").toLowerCase();
             const text = normalizeText(btn);
-            if (inner.includes("\u{1F5D1}") || inner.includes("trash") || inner.includes("mortgage") || text.includes("mortgage")) {
+            if ((text.includes("mortgage") || inner.includes("mortgage")) && !text.includes("unmortgage") && !inner.includes("unmortgage")) {
               return btn;
             }
           }
         }
         for (const b of allButtons) {
-          const inner = b.el.innerHTML || "";
-          if (inner.includes("\u{1F5D1}") || inner.includes("trash") || b.text.includes("mortgage")) {
+          const text = b.text || "";
+          const inner = (b.el.innerHTML || "").toLowerCase();
+          if ((text.includes("mortgage") || inner.includes("mortgage")) && !text.includes("unmortgage") && !inner.includes("unmortgage")) {
             return b.el;
           }
         }
@@ -3758,15 +3782,36 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
               if (minHouses < 3) {
                 const candidates = DebtRecovery.findStrategicMortgageCandidates();
                 if (candidates.length > 0) {
+                  const modalMortgageBtn = snapshot.findModalMortgageButton();
+                  const openCard = snapshot.getOpenPropertyCard ? snapshot.getOpenPropertyCard() : null;
+                  if (modalMortgageBtn) {
+                    const matchingCandidate = candidates.find((c) => openCard && c.tile.id === openCard.tile.id);
+                    if (matchingCandidate || !openCard) {
+                      const tileToMortgage = matchingCandidate ? matchingCandidate.tile : candidates[0].tile;
+                      return executeOrAdvise({
+                        el: modalMortgageBtn,
+                        title: `MORTGAGE: ${tileToMortgage.name.toUpperCase()}`,
+                        reason: `Mortgaging dead asset (+$${matchingCandidate ? matchingCandidate.mortgageValue : candidates[0].mortgageValue}) to fund 3-house rush on ${groupName}`,
+                        onExecute: () => {
+                          if (GameMemory.ownership[tileToMortgage.id]) {
+                            GameMemory.ownership[tileToMortgage.id].mortgaged = true;
+                          }
+                          delayClick(modalMortgageBtn, `Mortgaging ${tileToMortgage.name} for strategic rush`);
+                        }
+                      });
+                    }
+                  }
                   const target = candidates[0];
-                  const sidebarProp = snapshot.findSidebarPropertyItem(target.tile.name);
-                  if (sidebarProp) {
-                    return executeOrAdvise({
-                      el: sidebarProp,
-                      title: `STRATEGIC MORTGAGE: ${target.tile.name.toUpperCase()}`,
-                      reason: `Mortgaging dead asset (+$${target.mortgageValue}) to fund 3-house rush on ${groupName}`,
-                      onExecute: () => delayClick(sidebarProp, `Opening ${target.tile.name} for strategic mortgage`)
-                    });
+                  if (!openCard || openCard.tile.id !== target.tile.id) {
+                    const sidebarProp = snapshot.findSidebarPropertyItem(target.tile.name);
+                    if (sidebarProp) {
+                      return executeOrAdvise({
+                        el: sidebarProp,
+                        title: `OPEN ${target.tile.name.toUpperCase()} TO MORTGAGE`,
+                        reason: `Mortgaging dead asset (+$${target.mortgageValue}) to fund 3-house rush on ${groupName}`,
+                        onExecute: () => delayClick(sidebarProp, `Opening ${target.tile.name} for strategic mortgage`)
+                      });
+                    }
                   }
                 }
               }
@@ -3794,11 +3839,18 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       const mortgageBtn = snapshot.findModalMortgageButton();
       const sellHouseBtn = snapshot.findModalSellHouseButton();
       if (mortgageBtn) {
+        const openCard = snapshot.getOpenPropertyCard ? snapshot.getOpenPropertyCard() : null;
+        const tileName = openCard ? openCard.tile.name : "PROPERTY";
         return executeOrAdvise({
           el: mortgageBtn,
-          title: "MORTGAGE PROPERTY [\u{1F5D1}]",
+          title: `MORTGAGE: ${tileName.toUpperCase()}`,
           reason: `Cash is negative ($${GameMemory.myCash})! Mortgaging asset to clear debt.`,
-          onExecute: () => delayClick(mortgageBtn, "Clicking [\u{1F5D1}] to mortgage property")
+          onExecute: () => {
+            if (openCard && GameMemory.ownership[openCard.tile.id]) {
+              GameMemory.ownership[openCard.tile.id].mortgaged = true;
+            }
+            delayClick(mortgageBtn, `Clicking Mortgage button to clear debt`);
+          }
         });
       }
       if (sellHouseBtn) {
@@ -3812,14 +3864,17 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       const targets = DebtRecovery.rankLiquidationTargets();
       if (targets.length > 0) {
         const bestTarget = targets[0];
-        const sidebarProp = snapshot.findSidebarPropertyItem(bestTarget.tile.name);
-        if (sidebarProp) {
-          return executeOrAdvise({
-            el: sidebarProp,
-            title: `OPEN ${bestTarget.tile.name.toUpperCase()} TO LIQUIDATE`,
-            reason: `Cash is negative ($${GameMemory.myCash}). Selecting lowest sacrifice asset to mortgage.`,
-            onExecute: () => delayClick(sidebarProp, `Opening ${bestTarget.tile.name} for debt recovery`)
-          });
+        const openCard = snapshot.getOpenPropertyCard ? snapshot.getOpenPropertyCard() : null;
+        if (!openCard || openCard.tile.id !== bestTarget.tile.id) {
+          const sidebarProp = snapshot.findSidebarPropertyItem(bestTarget.tile.name);
+          if (sidebarProp) {
+            return executeOrAdvise({
+              el: sidebarProp,
+              title: `OPEN ${bestTarget.tile.name.toUpperCase()} TO LIQUIDATE`,
+              reason: `Cash is negative ($${GameMemory.myCash}). Selecting lowest sacrifice asset to mortgage.`,
+              onExecute: () => delayClick(sidebarProp, `Opening ${bestTarget.tile.name} for debt recovery`)
+            });
+          }
         }
       }
       return false;

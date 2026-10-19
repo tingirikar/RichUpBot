@@ -5,6 +5,8 @@
  * Immune to React build hashes and class name changes.
  */
 
+import { BOARD_TILES } from '../data/boardTiles.js';
+
 export function isVisibleAndEnabled(el) {
     if (!el || el.disabled) return false;
 
@@ -244,14 +246,39 @@ export function createDOMSnapshot() {
         },
 
         /**
-         * Finds the UP-ARROW [↑] button to build a house inside the property card popover
-         * (Supports floating card popup without role="dialog" as shown in building-houses.png)
+         * Detects if a property card popover/modal is currently open and returns its DOM element & tile info
          */
-        findModalUpgradeButton() {
+        getOpenPropertyCard() {
             const containers = document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="popover" i], [class*="property" i]');
             for (const c of containers) {
                 if (hud && hud.contains(c)) continue;
-                const btns = c.querySelectorAll('button, [role="button"], div');
+                if (!isVisibleAndEnabled(c)) continue;
+                // Exclude the right-side properties sidebar (typically on right side > 65% width)
+                const rect = c.getBoundingClientRect();
+                if (rect.left > window.innerWidth * 0.65 && rect.width < 320) continue;
+
+                const text = c.innerText || '';
+                // Must look like an open property card (contains "Owner", "Price", "when", or "rent")
+                if (text.includes('Owner') || text.includes('Price') || text.includes('when') || text.includes('rent') || text.includes('Mortgage') || text.includes('mortgage')) {
+                    for (const t of BOARD_TILES) {
+                        if (t.group && new RegExp(`\\b${t.name}\\b`, 'i').test(text)) {
+                            return { el: c, tile: t };
+                        }
+                    }
+                }
+            }
+            return null;
+        },
+
+        /**
+         * Finds the UP-ARROW [↑] button to build a house inside the property card popover
+         */
+        findModalUpgradeButton() {
+            const openCard = this.getOpenPropertyCard();
+            const searchContainers = openCard ? [openCard.el] : document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="popover" i]');
+            for (const c of searchContainers) {
+                if (hud && hud.contains(c)) continue;
+                const btns = c.querySelectorAll('button, [role="button"], [class*="button" i], [class*="btn" i]');
                 for (let i = 0; i < btns.length; i++) {
                     const btn = btns[i];
                     if (!isVisibleAndEnabled(btn)) continue;
@@ -281,10 +308,11 @@ export function createDOMSnapshot() {
          * Finds the DOWN-ARROW [↓] button to sell a house inside the property card popover
          */
         findModalSellHouseButton() {
-            const containers = document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="popover" i], [class*="property" i]');
-            for (const c of containers) {
+            const openCard = this.getOpenPropertyCard();
+            const searchContainers = openCard ? [openCard.el] : document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="popover" i]');
+            for (const c of searchContainers) {
                 if (hud && hud.contains(c)) continue;
-                const btns = c.querySelectorAll('button, [role="button"], div');
+                const btns = c.querySelectorAll('button, [role="button"], [class*="button" i], [class*="btn" i]');
                 for (let i = 0; i < btns.length; i++) {
                     const btn = btns[i];
                     if (!isVisibleAndEnabled(btn)) continue;
@@ -311,30 +339,38 @@ export function createDOMSnapshot() {
         },
 
         /**
-         * Finds the TRASH [🗑] button to mortgage a property inside the card popover
+         * Finds the Mortgage button inside the property card popover/modal
          */
         findModalMortgageButton() {
-            const containers = document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="popover" i], [class*="property" i]');
-            for (const c of containers) {
+            const openCard = this.getOpenPropertyCard();
+            const searchContainers = openCard ? [openCard.el] : document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="popover" i]');
+            for (const c of searchContainers) {
                 if (hud && hud.contains(c)) continue;
-                const btns = c.querySelectorAll('button, [role="button"], div');
+                // Target real clickable button elements
+                const btns = c.querySelectorAll('button, [role="button"], [class*="button" i], [class*="btn" i]');
                 for (let i = 0; i < btns.length; i++) {
                     const btn = btns[i];
                     if (!isVisibleAndEnabled(btn)) continue;
-                    const inner = btn.innerHTML || '';
+                    const inner = (btn.innerHTML || '').toLowerCase();
                     const text = normalizeText(btn);
+
+                    // Strictly match "mortgage" and ignore "unmortgage"
                     if (
-                        inner.includes('🗑') || inner.includes('trash') || 
-                        inner.includes('mortgage') || text.includes('mortgage')
+                        (text.includes('mortgage') || inner.includes('mortgage')) &&
+                        !text.includes('unmortgage') && !inner.includes('unmortgage')
                     ) {
                         return btn;
                     }
                 }
             }
-            // Page-wide fallback
+            // Page-wide fallback for buttons
             for (const b of allButtons) {
-                const inner = b.el.innerHTML || '';
-                if (inner.includes('🗑') || inner.includes('trash') || b.text.includes('mortgage')) {
+                const text = b.text || '';
+                const inner = (b.el.innerHTML || '').toLowerCase();
+                if (
+                    (text.includes('mortgage') || inner.includes('mortgage')) &&
+                    !text.includes('unmortgage') && !inner.includes('unmortgage')
+                ) {
                     return b.el;
                 }
             }

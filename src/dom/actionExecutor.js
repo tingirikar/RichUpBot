@@ -400,15 +400,40 @@ export const ActionExecutor = {
                         if (minHouses < 3) {
                             const candidates = DebtRecovery.findStrategicMortgageCandidates();
                             if (candidates.length > 0) {
+                                // 1. If mortgage button is already visible in an open card modal, execute it!
+                                const modalMortgageBtn = snapshot.findModalMortgageButton();
+                                const openCard = snapshot.getOpenPropertyCard ? snapshot.getOpenPropertyCard() : null;
+
+                                if (modalMortgageBtn) {
+                                    const matchingCandidate = candidates.find(c => openCard && c.tile.id === openCard.tile.id);
+                                    if (matchingCandidate || !openCard) {
+                                        const tileToMortgage = matchingCandidate ? matchingCandidate.tile : candidates[0].tile;
+                                        return executeOrAdvise({
+                                            el: modalMortgageBtn,
+                                            title: `MORTGAGE: ${tileToMortgage.name.toUpperCase()}`,
+                                            reason: `Mortgaging dead asset (+$${matchingCandidate ? matchingCandidate.mortgageValue : candidates[0].mortgageValue}) to fund 3-house rush on ${groupName}`,
+                                            onExecute: () => {
+                                                if (GameMemory.ownership[tileToMortgage.id]) {
+                                                    GameMemory.ownership[tileToMortgage.id].mortgaged = true;
+                                                }
+                                                delayClick(modalMortgageBtn, `Mortgaging ${tileToMortgage.name} for strategic rush`);
+                                            }
+                                        });
+                                    }
+                                }
+
+                                // 2. If the modal is not open for target, open it from the sidebar
                                 const target = candidates[0];
-                                const sidebarProp = snapshot.findSidebarPropertyItem(target.tile.name);
-                                if (sidebarProp) {
-                                    return executeOrAdvise({
-                                        el: sidebarProp,
-                                        title: `STRATEGIC MORTGAGE: ${target.tile.name.toUpperCase()}`,
-                                        reason: `Mortgaging dead asset (+$${target.mortgageValue}) to fund 3-house rush on ${groupName}`,
-                                        onExecute: () => delayClick(sidebarProp, `Opening ${target.tile.name} for strategic mortgage`)
-                                    });
+                                if (!openCard || openCard.tile.id !== target.tile.id) {
+                                    const sidebarProp = snapshot.findSidebarPropertyItem(target.tile.name);
+                                    if (sidebarProp) {
+                                        return executeOrAdvise({
+                                            el: sidebarProp,
+                                            title: `OPEN ${target.tile.name.toUpperCase()} TO MORTGAGE`,
+                                            reason: `Mortgaging dead asset (+$${target.mortgageValue}) to fund 3-house rush on ${groupName}`,
+                                            onExecute: () => delayClick(sidebarProp, `Opening ${target.tile.name} for strategic mortgage`)
+                                        });
+                                    }
                                 }
                             }
                         }
@@ -446,11 +471,18 @@ export const ActionExecutor = {
         const sellHouseBtn = snapshot.findModalSellHouseButton();
 
         if (mortgageBtn) {
+            const openCard = snapshot.getOpenPropertyCard ? snapshot.getOpenPropertyCard() : null;
+            const tileName = openCard ? openCard.tile.name : 'PROPERTY';
             return executeOrAdvise({
                 el: mortgageBtn,
-                title: 'MORTGAGE PROPERTY [🗑]',
+                title: `MORTGAGE: ${tileName.toUpperCase()}`,
                 reason: `Cash is negative ($${GameMemory.myCash})! Mortgaging asset to clear debt.`,
-                onExecute: () => delayClick(mortgageBtn, 'Clicking [🗑] to mortgage property')
+                onExecute: () => {
+                    if (openCard && GameMemory.ownership[openCard.tile.id]) {
+                        GameMemory.ownership[openCard.tile.id].mortgaged = true;
+                    }
+                    delayClick(mortgageBtn, `Clicking Mortgage button to clear debt`);
+                }
             });
         }
 
@@ -467,14 +499,17 @@ export const ActionExecutor = {
         const targets = DebtRecovery.rankLiquidationTargets();
         if (targets.length > 0) {
             const bestTarget = targets[0];
-            const sidebarProp = snapshot.findSidebarPropertyItem(bestTarget.tile.name);
-            if (sidebarProp) {
-                return executeOrAdvise({
-                    el: sidebarProp,
-                    title: `OPEN ${bestTarget.tile.name.toUpperCase()} TO LIQUIDATE`,
-                    reason: `Cash is negative ($${GameMemory.myCash}). Selecting lowest sacrifice asset to mortgage.`,
-                    onExecute: () => delayClick(sidebarProp, `Opening ${bestTarget.tile.name} for debt recovery`)
-                });
+            const openCard = snapshot.getOpenPropertyCard ? snapshot.getOpenPropertyCard() : null;
+            if (!openCard || openCard.tile.id !== bestTarget.tile.id) {
+                const sidebarProp = snapshot.findSidebarPropertyItem(bestTarget.tile.name);
+                if (sidebarProp) {
+                    return executeOrAdvise({
+                        el: sidebarProp,
+                        title: `OPEN ${bestTarget.tile.name.toUpperCase()} TO LIQUIDATE`,
+                        reason: `Cash is negative ($${GameMemory.myCash}). Selecting lowest sacrifice asset to mortgage.`,
+                        onExecute: () => delayClick(sidebarProp, `Opening ${bestTarget.tile.name} for debt recovery`)
+                    });
+                }
             }
         }
 
