@@ -268,16 +268,20 @@
     isMyTurn: false,
     // Room Settings (Sniffed from match start or DOM)
     roomSettings: {
-      startingCash: 1e3,
-      // Default starting cash (e.g. $1000 or $1500)
+      startingCash: 1500,
+      // RichUp default starting cash ($1500 as seen in gameplay-rules.png)
       collectRentInJail: true,
-      // RichUp default: players can collect rent in jail
+      // RichUp default: players can collect rent in jail unless toggled off
       doubleOnStart: false,
       // Landing on Start gives $400?
       passStartBonus: 200,
       // Standard pass start bonus
-      auctionsEnabled: true
+      auctionsEnabled: true,
       // Auctions allowed?
+      evenBuild: true,
+      // Even build requirement
+      doubleRentOnFullSet: false
+      // x2 rent on full-set properties
     },
     // All active players: name -> { cash, pos, inJail, isMe, bankrupt }
     players: {},
@@ -888,10 +892,9 @@
     if (!wsHealthy || !GameMemory.myName) {
       detectLobbySettingsAndIdentity();
     }
-    if (!wsHealthy) {
-      detectLocalPlayerFromPlayerList();
-    }
-    syncBoardTilePricesFromDOM();
+    detectLocalPlayerFromPlayerList();
+    syncBoardTilePricesAndBadgesFromDOM();
+    syncPropertyCardModalFromDOM();
     syncMyPropertiesFromSidebar();
     if (!wsHealthy) {
       scanTextNodesAndActivityLogs();
@@ -905,15 +908,62 @@
     const isInGame = Boolean(
       pageText.includes("is playing") || pageText.includes("Roll the dice") || pageText.includes("End turn") || pageText.includes("Game started") || document.querySelector('[class*="bankrupt" i]')
     );
-    const cashMatch = /Starting cash[\s\S]*?\$(\d{2,5})/i.exec(pageText);
-    if (cashMatch) {
-      const startCash = parseInt(cashMatch[1], 10);
-      if (!isNaN(startCash) && startCash >= 100 && startCash <= 1e4) {
-        GameMemory.roomSettings.startingCash = startCash;
-        if (!GameMemory.cashVerified) {
-          GameMemory.myCash = startCash;
+    const startingCashRow = Array.from(document.querySelectorAll("div, li, p, section, tr")).find((el) => {
+      if (hud && hud.contains(el)) return false;
+      const t = (el.innerText || "").toLowerCase();
+      return t.includes("starting cash") && (t.includes("adjust how much money") || t.includes("$"));
+    });
+    let detectedStartCash = null;
+    if (startingCashRow) {
+      const trigger = startingCashRow.querySelector('button, [role="button"], [class*="select" i], [class*="dropdown" i]');
+      const targetText = trigger ? trigger.innerText : startingCashRow.innerText;
+      const cashMatch = /\$\s*(\d{2,5})|(\d{2,5})\s*\$/.exec(targetText);
+      if (cashMatch) {
+        detectedStartCash = parseInt(cashMatch[1] || cashMatch[2], 10);
+      }
+    }
+    if (!detectedStartCash) {
+      const fallbackMatch = /Starting cash[\s\S]*?\$(\d{2,5})/i.exec(pageText);
+      if (fallbackMatch) {
+        detectedStartCash = parseInt(fallbackMatch[1], 10);
+      }
+    }
+    if (detectedStartCash && !isNaN(detectedStartCash) && detectedStartCash >= 100 && detectedStartCash <= 1e4) {
+      GameMemory.roomSettings.startingCash = detectedStartCash;
+      if (!GameMemory.cashVerified) {
+        GameMemory.myCash = detectedStartCash;
+      }
+    }
+    try {
+      const candidateRows = Array.from(document.querySelectorAll("div, li, p, section, tr")).filter((el) => {
+        if (hud && hud.contains(el)) return false;
+        const text = (el.innerText || "").toLowerCase();
+        return text.includes("don't collect rent while in prison") || text.includes("x2 rent on full-set") || text.includes("vacation cash") || text.includes("even build") || text.includes("auction") && text.includes("skips purchasing");
+      });
+      for (const row of candidateRows) {
+        const text = (row.innerText || "").toLowerCase();
+        const toggle = row.querySelector('input[type="checkbox"], [role="switch"], [class*="toggle" i], [class*="switch" i]');
+        if (!toggle) continue;
+        let isChecked = false;
+        if (toggle.tagName === "INPUT") {
+          isChecked = toggle.checked;
+        } else if (toggle.getAttribute("aria-checked") != null) {
+          isChecked = toggle.getAttribute("aria-checked") === "true";
+        } else {
+          const cls = (toggle.className || "").toLowerCase();
+          isChecked = cls.includes("active") || cls.includes("checked") || cls.includes("on") || cls.includes("enabled");
+        }
+        if (text.includes("don't collect rent while in prison")) {
+          GameMemory.roomSettings.collectRentInJail = !isChecked;
+        } else if (text.includes("auction") && text.includes("skips purchasing")) {
+          GameMemory.roomSettings.auctionsEnabled = isChecked;
+        } else if (text.includes("x2 rent on full-set")) {
+          GameMemory.roomSettings.doubleRentOnFullSet = isChecked;
+        } else if (text.includes("even build")) {
+          GameMemory.roomSettings.evenBuild = isChecked;
         }
       }
+    } catch (_) {
     }
     if (isInGame) return;
     const allEls = Array.from(document.querySelectorAll("button, a, div, span"));
@@ -1069,26 +1119,89 @@
       GameMemory.cashVerified = true;
     }
   }
-  function syncBoardTilePricesFromDOM() {
+  function syncBoardTilePricesAndBadgesFromDOM() {
     const hud = document.getElementById("rubot-hud-panel");
     const allEls = document.querySelectorAll('div, [class*="tile"], [class*="cell"]');
     for (let i = 0; i < allEls.length; i++) {
       const el = allEls[i];
       if (hud && hud.contains(el)) continue;
       const text = el.innerText || "";
-      if (!text.includes("$") || text.length > 80) continue;
+      if (text.length > 100) continue;
       for (const tile of BOARD_TILES) {
         if (!tile.group) continue;
         if (new RegExp(`\\b${tile.name}\\b`, "i").test(text)) {
-          const m = /(\d{2,4})\s*\$|\$\s*(\d{2,4})/.exec(text);
-          if (m) {
-            const price = parseInt(m[1] || m[2], 10);
-            if (!isNaN(price) && price >= 50 && price <= 500) {
-              tile.price = price;
+          if (text.includes("$")) {
+            const m = /(\d{2,4})\s*\$|\$\s*(\d{2,4})/.exec(text);
+            if (m) {
+              const price = parseInt(m[1] || m[2], 10);
+              if (!isNaN(price) && price >= 50 && price <= 500) {
+                tile.price = price;
+              }
             }
+          }
+          const houseMatch = /(?:🏠\s*x?\s*|x\s*)(\d)/i.exec(text);
+          if (houseMatch && GameMemory.ownership[tile.id]) {
+            GameMemory.ownership[tile.id].houses = parseInt(houseMatch[1], 10);
+          } else if (/hotel/i.test(text) && GameMemory.ownership[tile.id]) {
+            GameMemory.ownership[tile.id].houses = 5;
           }
         }
       }
+    }
+  }
+  function syncPropertyCardModalFromDOM() {
+    const hud = document.getElementById("rubot-hud-panel");
+    const modals = document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], div[style*="z-index"]');
+    for (const modal of modals) {
+      if (hud && hud.contains(modal)) continue;
+      const text = modal.innerText || "";
+      if (!text.includes("with rent") && !text.includes("with one house") && !text.includes("with a hotel")) continue;
+      let matchedTile = null;
+      for (const t of BOARD_TILES) {
+        if (t.group && new RegExp(`\\b${t.name}\\b`, "i").test(text)) {
+          matchedTile = t;
+          break;
+        }
+      }
+      if (!matchedTile) continue;
+      const rBase = /with rent\s*\$?(\d+)/i.exec(text);
+      const r1 = /with one house\s*\$?(\d+)/i.exec(text);
+      const r2 = /with two houses\s*\$?(\d+)/i.exec(text);
+      const r3 = /with three houses\s*\$?(\d+)/i.exec(text);
+      const r4 = /with four houses\s*\$?(\d+)/i.exec(text);
+      const rHotel = /with a hotel\s*\$?(\d+)/i.exec(text);
+      if (rBase && r1 && r2 && r3 && r4 && rHotel) {
+        matchedTile.rent = [
+          parseInt(rBase[1], 10),
+          parseInt(r1[1], 10),
+          parseInt(r2[1], 10),
+          parseInt(r3[1], 10),
+          parseInt(r4[1], 10),
+          parseInt(rHotel[1], 10)
+        ];
+      }
+      const houseCostMatch = /🏠\s*\$?(\d+)|house\s*\$?(\d+)/i.exec(text);
+      if (houseCostMatch) {
+        const hc = parseInt(houseCostMatch[1] || houseCostMatch[2], 10);
+        if (!isNaN(hc) && hc >= 20 && hc <= 500) {
+          matchedTile.houseCost = hc;
+        }
+      }
+      const priceMatch = /Price\s*\$?(\d+)/i.exec(text);
+      if (priceMatch) {
+        const p = parseInt(priceMatch[1], 10);
+        if (!isNaN(p) && p >= 30 && p <= 1e3) {
+          matchedTile.price = p;
+        }
+      }
+      const ownerMatch = /Owner\s*([A-Za-z0-9_-]+)/i.exec(text);
+      if (ownerMatch && GameMemory.ownership[matchedTile.id]) {
+        const ownerName = ownerMatch[1].trim();
+        if (ownerName && !ownerName.toLowerCase().includes("price")) {
+          GameMemory.ownership[matchedTile.id].owner = ownerName;
+        }
+      }
+      break;
     }
   }
   function syncMyPropertiesFromSidebar() {
@@ -1359,48 +1472,80 @@
     }
   }
   function scrapeTradeModalDOM() {
-    const modal = document.querySelector('[role="dialog"], [class*="modal"], [class*="trade-modal"]');
-    const modalText = modal ? modal.innerText : "";
-    const mentionedTiles = BOARD_TILES.filter((t) => t.group && new RegExp(`\\b${t.name}\\b`, "i").test(modalText));
+    const modal = document.querySelector('[role="dialog"], [class*="modal" i], [class*="trade" i]');
+    if (!modal) {
+      return { partnerName: "Opponent", givenTiles: [], receivedTiles: [], givenCash: 0, receivedCash: 0 };
+    }
+    const modalRect = modal.getBoundingClientRect();
+    const modalMidX = modalRect.left + modalRect.width / 2;
+    let partnerName = "Opponent";
+    let givenCash = 0;
+    let receivedCash = 0;
     const givenTiles = [];
     const receivedTiles = [];
-    for (const t of mentionedTiles) {
-      const owner = GameMemory.ownership[t.id]?.owner;
-      if (GameMemory.isMe(owner)) givenTiles.push(t);
-      else receivedTiles.push(t);
-    }
-    let partnerName = "Opponent";
-    for (const t of receivedTiles) {
-      const owner = GameMemory.ownership[t.id]?.owner;
-      if (owner && !GameMemory.isMe(owner)) {
-        partnerName = owner;
-        break;
+    const inputs = Array.from(modal.querySelectorAll('input[type="range"], input[type="number"], input'));
+    for (const input of inputs) {
+      const rect = input.getBoundingClientRect();
+      const center = rect.left + rect.width / 2;
+      const val = parseInt(input.value, 10) || 0;
+      if (center < modalMidX) {
+        givenCash = val;
+      } else {
+        receivedCash = val;
       }
     }
-    if (partnerName === "Opponent") {
-      for (const pName of Object.keys(GameMemory.players)) {
-        if (!GameMemory.isMe(pName) && new RegExp(`\\b${pName}\\b`, "i").test(modalText)) {
-          partnerName = pName;
-          break;
-        }
+    if (givenCash === 0 && receivedCash === 0) {
+      const badges = Array.from(modal.querySelectorAll("div, span, button")).filter((el) => {
+        const t = (el.innerText || "").trim();
+        return /^\$?\d{1,5}\$?$/.test(t) && t.includes("$");
+      });
+      for (const badge of badges) {
+        const rect = badge.getBoundingClientRect();
+        const center = rect.left + rect.width / 2;
+        const val = parseInt((badge.innerText || "").replace(/\D/g, ""), 10) || 0;
+        if (center < modalMidX && givenCash === 0) givenCash = val;
+        else if (center >= modalMidX && receivedCash === 0) receivedCash = val;
       }
     }
-    if (partnerName === "Opponent") {
-      const allTradeRows = Array.from(document.querySelectorAll("*")).map((e) => e.innerText || "").filter((t) => (t.includes("\u2194") || t.includes("<->")) && t.length < 60);
-      for (const rowText of allTradeRows) {
-        for (const pName of Object.keys(GameMemory.players)) {
-          if (!GameMemory.isMe(pName) && rowText.toLowerCase().includes(pName.toLowerCase())) {
-            partnerName = pName;
-            break;
+    const cards = Array.from(modal.querySelectorAll('div, li, button, [class*="item" i], [class*="property" i], [class*="card" i]'));
+    const matchedTileIds = /* @__PURE__ */ new Set();
+    for (const card of cards) {
+      const text = (card.innerText || "").trim();
+      if (!text || text.length > 50) continue;
+      for (const tile of BOARD_TILES) {
+        if (!tile.group) continue;
+        if (matchedTileIds.has(tile.id)) continue;
+        if (new RegExp(`^${tile.name}\\b|\\b${tile.name}$`, "i").test(text)) {
+          matchedTileIds.add(tile.id);
+          const rect = card.getBoundingClientRect();
+          const center = rect.left + rect.width / 2;
+          if (center < modalMidX) {
+            givenTiles.push(tile);
+          } else {
+            receivedTiles.push(tile);
           }
         }
       }
     }
-    let givenCash = 0;
-    let receivedCash = 0;
-    const cashMatches = modalText.match(/\$\s*(\d{1,4})/g);
-    if (cashMatches && cashMatches.length >= 1) {
-      receivedCash = parseInt(cashMatches[0].replace(/\D/g, ""), 10) || 0;
+    const topCandidates = Array.from(modal.querySelectorAll("h1, h2, h3, h4, h5, div, span, strong, b")).filter((el) => {
+      const rect = el.getBoundingClientRect();
+      return rect.left + rect.width / 2 >= modalMidX && rect.top < modalRect.top + modalRect.height * 0.35;
+    });
+    for (const el of topCandidates) {
+      const t = (el.innerText || "").trim();
+      if (t.length >= 2 && t.length <= 24 && !t.includes("$") && !t.toLowerCase().includes("create") && !t.toLowerCase().includes("trade")) {
+        for (const pName of Object.keys(GameMemory.players)) {
+          if (!GameMemory.isMe(pName) && t.toLowerCase().includes(pName.toLowerCase())) {
+            partnerName = pName;
+            break;
+          }
+        }
+        if (partnerName !== "Opponent") break;
+        if (!GameMemory.isMe(t) && !BOARD_LABELS_BLACKLIST.has(t.toLowerCase())) {
+          partnerName = t;
+          break;
+        }
+      }
     }
     return {
       partnerName,

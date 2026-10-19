@@ -24,11 +24,13 @@ export const GameMemory = {
 
     // Room Settings (Sniffed from match start or DOM)
     roomSettings: {
-        startingCash: 1000,         // Default starting cash (e.g. $1000 or $1500)
-        collectRentInJail: true,    // RichUp default: players can collect rent in jail
+        startingCash: 1500,         // RichUp default starting cash ($1500 as seen in gameplay-rules.png)
+        collectRentInJail: true,    // RichUp default: players can collect rent in jail unless toggled off
         doubleOnStart: false,       // Landing on Start gives $400?
         passStartBonus: 200,        // Standard pass start bonus
-        auctionsEnabled: true       // Auctions allowed?
+        auctionsEnabled: true,      // Auctions allowed?
+        evenBuild: true,            // Even build requirement
+        doubleRentOnFullSet: false  // x2 rent on full-set properties
     },
 
     // All active players: name -> { cash, pos, inJail, isMe, bankrupt }
