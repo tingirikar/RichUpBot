@@ -34,98 +34,111 @@ export const TradeProposalExecutor = {
         this.skippedSwaps.set(summary, Date.now());
     },
 
-    executeProposal(swap, onComplete) {
+    async executeProposal(swap, onComplete) {
         if (this.isExecuting) return;
         this.isExecuting = true;
 
         logToBot(`[TRADE CREATOR] Starting automated proposal for ${swap.targetOwner}...`);
 
-        const snapshot = createDOMSnapshot();
-        const createBtn = snapshot.findCreateTradeButton();
+        const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+        const safetyTimer = setTimeout(() => {
+            if (this.isExecuting) {
+                logToBot('[TRADE CREATOR] Safety timeout triggered. Closing modal and resetting lock.');
+                this.closeTradeModal();
+                this.isExecuting = false;
+                if (onComplete) onComplete(false);
+            }
+        }, 12000);
 
-        if (!createBtn) {
-            logToBot('[TRADE CREATOR] Could not find [+ Create] trade button.');
-            this.isExecuting = false;
-            if (onComplete) onComplete(false);
-            return;
-        }
+        try {
+            // STEP 1: Click [+ Create] under Trades
+            const snap1 = createDOMSnapshot();
+            const createBtn = snap1.findCreateTradeButton();
+            if (!createBtn) {
+                logToBot('[TRADE CREATOR] Could not find [+ Create] trade button.');
+                return;
+            }
 
-        // STEP 1: Click [+ Create] under Trades
-        delayClick(createBtn, 'Opening Create Trade dialog');
+            createBtn.click();
+            await sleep(600);
 
-        // STEP 2: Wait for player selection modal and click target player
-        setTimeout(() => {
-            const snap2 = createDOMSnapshot();
-            const playerBtn = snap2.findPlayerSelectButton(swap.targetOwner);
+            // STEP 2: Wait for player selection modal and click target player
+            let playerBtn = null;
+            for (let i = 0; i < 6; i++) {
+                const snap2 = createDOMSnapshot();
+                playerBtn = snap2.findPlayerSelectButton(swap.targetOwner);
+                if (playerBtn) break;
+                await sleep(350);
+            }
 
             if (!playerBtn) {
                 logToBot(`[TRADE CREATOR] Could not find player button for "${swap.targetOwner}".`);
                 this.closeTradeModal();
-                this.isExecuting = false;
-                if (onComplete) onComplete(false);
                 return;
             }
 
-            delayClick(playerBtn, `Selecting trade partner: ${swap.targetOwner}`);
+            playerBtn.click();
+            await sleep(700);
 
             // STEP 3: Wait for 2-column trade configuration window
-            setTimeout(() => {
-                const snap3 = createDOMSnapshot();
+            const snap3 = createDOMSnapshot();
 
-                // Select our property to give (left column)
-                if (swap.myGivenTile) {
-                    const myPropCard = snap3.findTradePropertyCard(swap.myGivenTile.name, 'mine');
-                    if (myPropCard) {
-                        delayClick(myPropCard, `Selecting offer property: ${swap.myGivenTile.name}`);
-                    } else {
-                        logToBot(`[TRADE CREATOR] Could not find offer property: ${swap.myGivenTile.name}`);
-                    }
+            // Select our property to give (left column)
+            if (swap.myGivenTile) {
+                const myPropCard = snap3.findTradePropertyCard(swap.myGivenTile.name, 'mine');
+                if (myPropCard) {
+                    myPropCard.click();
+                    logToBot(`[TRADE CREATOR] Selected offer property: ${swap.myGivenTile.name}`);
+                    await sleep(400);
+                } else {
+                    logToBot(`[TRADE CREATOR] Could not find offer property: ${swap.myGivenTile.name}`);
                 }
+            }
 
-                // Select their property to request (right column)
-                setTimeout(() => {
-                    const snap4 = createDOMSnapshot();
-                    if (swap.myReceivedTile) {
-                        const theirPropCard = snap4.findTradePropertyCard(swap.myReceivedTile.name, 'theirs');
-                        if (theirPropCard) {
-                            delayClick(theirPropCard, `Selecting request property: ${swap.myReceivedTile.name}`);
-                        } else {
-                            logToBot(`[TRADE CREATOR] Could not find request property: ${swap.myReceivedTile.name}`);
-                        }
-                    }
+            // Select their property to request (right column)
+            const snap4 = createDOMSnapshot();
+            if (swap.myReceivedTile) {
+                const theirPropCard = snap4.findTradePropertyCard(swap.myReceivedTile.name, 'theirs');
+                if (theirPropCard) {
+                    theirPropCard.click();
+                    logToBot(`[TRADE CREATOR] Selected request property: ${swap.myReceivedTile.name}`);
+                    await sleep(400);
+                } else {
+                    logToBot(`[TRADE CREATOR] Could not find request property: ${swap.myReceivedTile.name}`);
+                }
+            }
 
-                    // STEP 4: Set cash if applicable (via range sliders)
-                    this.adjustCashInTradeModal(swap);
+            // STEP 4: Set cash if applicable (via range sliders)
+            this.adjustCashInTradeModal(swap);
+            await sleep(400);
 
-                    // STEP 5: Click "Send trade"
-                    setTimeout(() => {
-                        const snap5 = createDOMSnapshot();
-                        const sendBtn = snap5.findSendTradeButton();
+            // STEP 5: Click "Send trade"
+            const snap5 = createDOMSnapshot();
+            const sendBtn = snap5.findSendTradeButton();
 
-                        if (sendBtn) {
-                            delayClick(sendBtn, `Submitting trade proposal to ${swap.targetOwner}`);
-                            this.lastProposedTimes.set(swap.targetOwner, Date.now());
+            if (sendBtn) {
+                sendBtn.click();
+                logToBot(`[TRADE CREATOR] Trade proposal sent to ${swap.targetOwner}!`);
+                this.lastProposedTimes.set(swap.targetOwner, Date.now());
 
-                            // STEP 6: Send friendly chat line
-                            setTimeout(() => {
-                                ChatEngine.sendChatMessage('tradeOffer', swap.pitch);
-                            }, 500);
+                // STEP 6: Send friendly chat line
+                await sleep(600);
+                ChatEngine.sendChatMessage('tradeOffer', swap.pitch);
 
-                            this.isExecuting = false;
-                            if (onComplete) onComplete(true);
-                        } else {
-                            logToBot('[TRADE CREATOR] Could not find [Send trade] button.');
-                            this.closeTradeModal();
-                            this.isExecuting = false;
-                            if (onComplete) onComplete(false);
-                        }
-                    }, 450);
-
-                }, 400);
-
-            }, 500);
-
-        }, 450);
+                if (onComplete) onComplete(true);
+            } else {
+                logToBot('[TRADE CREATOR] Could not find [Send trade] button.');
+                this.closeTradeModal();
+                if (onComplete) onComplete(false);
+            }
+        } catch (err) {
+            logToBot(`[TRADE CREATOR Error] ${err}`);
+            this.closeTradeModal();
+            if (onComplete) onComplete(false);
+        } finally {
+            clearTimeout(safetyTimer);
+            this.isExecuting = false;
+        }
     },
 
     adjustCashInTradeModal(swap) {
@@ -188,10 +201,9 @@ export const TradeProposalExecutor = {
     },
 
     closeTradeModal() {
-        // Attempt to close modal if stuck
         const closeBtn = document.querySelector('[role="dialog"] button, [class*="modal" i] button, [class*="close" i], button[aria-label*="close" i]');
         if (closeBtn) {
-            delayClick(closeBtn, 'Closing trade modal');
+            closeBtn.click();
         }
     }
 };

@@ -5,7 +5,7 @@ import path from 'path';
 const banner = `// ==UserScript==
 // @name         RichUp.io Grandmaster AI Engine (Modular Edition)
 // @namespace    http://tampermonkey.net/
-// @version      3.0.0
+// @version      5.2.0
 // @description  Grandmaster-level autonomous AI for RichUp.io with full opponent tracking, auction sniping, Markov risk management, intelligent trading, and room-aware jail strategy.
 // @author       haxxor + Grandmaster AI
 // @license      GPL-3.0

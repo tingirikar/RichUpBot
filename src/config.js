@@ -16,7 +16,7 @@ export const CONFIG = {
     // AI Strategy Toggles
     ALWAYS_BUY_AFFORDABLE: true,     // Buy unowned lands when safe
     SMART_RESERVE_ENABLED: true,     // Maintain dynamic cash reserve against opponent monopolies
-    AMBUSH_BUILD_ONLY: true,         // Never build when facing enemy hotels; build when enemies enter strike zone
+    AMBUSH_BUILD_ONLY: false,        // Proactively build houses on monopolies whenever safe & affordable
     AUTO_TRADE_ENABLED: true,        // Evaluate and propose win-win trades
     AUTO_AUCTION_ENABLED: true,      // Intelligent auction bidding sniper
     AUTO_BUILD_ENABLED: true,        // Rush 3 houses on monopolies
@@ -25,9 +25,9 @@ export const CONFIG = {
 
     // Math & Game-Theory Parameters
     BASE_MIN_RESERVE: 60,            // Absolute cash floor on empty board
-    RISK_AVERSION_FACTOR: 1.75,      // Multiplier on 1-turn expected rent loss
-    WORST_CASE_WEIGHT: 0.30,         // Weight on worst-case single roll in 5-9 window
-    TRADE_MIN_ADVANTAGE_RATIO: 1.10, // Require at least 10% utility edge in trades
+    RISK_AVERSION_FACTOR: 1.5,       // Balanced multiplier on 1-turn expected rent loss
+    WORST_CASE_WEIGHT: 0.25,         // Weight on worst-case single roll
+    TRADE_MIN_ADVANTAGE_RATIO: 1.05, // Require at least 5% utility edge in trades
     AUCTION_MAX_OVERBID_RATIO: 1.40, // Max bid for critical blocker/completer
     CHAT_COOLDOWN_MS: 20000,         // Cooldown between trade negotiation messages
     AUTO_REPLY_CHAT: true,           // Natural AI replies to opponent in-game chat ("chat if not bot", etc.)
@@ -35,10 +35,10 @@ export const CONFIG = {
     DELIBERATE_BEFORE_END_TURN: true,// LLM strategic review right before ending turn
 
     // Hybrid Vision / LLM Brain Configuration (Local Ollama)
-    OLLAMA_ENABLED: localStorage.getItem('richup_ollama_enabled') === 'true',
+    OLLAMA_ENABLED: localStorage.getItem('richup_ollama_enabled') !== 'false', // Default to true!
     OLLAMA_HOST: localStorage.getItem('richup_ollama_host') || 'http://localhost:11434',
-    OLLAMA_MODEL: localStorage.getItem('richup_ollama_model') || 'llama3.2-vision',
-    OLLAMA_TIMEOUT_MS: 5500          // 5.5s cap to allow local LLMs to reason without early timeout
+    OLLAMA_MODEL: localStorage.getItem('richup_ollama_model') || 'llama3.2-vision:latest',
+    OLLAMA_TIMEOUT_MS: 6000          // Cap to allow local LLMs to reason without early timeout
 };
 
 export const STATES = Object.freeze({

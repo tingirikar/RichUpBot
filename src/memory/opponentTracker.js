@@ -165,20 +165,25 @@ export const OpponentTracker = {
      */
     getSafeTradeSacrifices() {
         const blockers = new Set(this.getCriticalBlockers().map(b => b.tile.id));
-        const sacrifices = [];
+        const safe = [];
+        const tradable = [];
 
         for (const tile of BOARD_TILES) {
             if (!tile.group) continue;
             const info = GameMemory.ownership[tile.id];
-            if (info && GameMemory.isMe(info.owner) && info.houses === 0 && !blockers.has(tile.id)) {
+            if (info && GameMemory.isMe(info.owner) && info.houses === 0) {
                 const { owned, total } = GameMemory.getGroupCount(tile.group, '__ME__');
-                // Only sacrifice if we don't already have 2/3 of this set
+                // Do not trade away complete monopolies or sets where we own total - 1
                 if (owned < total - 1) {
-                    sacrifices.push(tile);
+                    if (!blockers.has(tile.id)) {
+                        safe.push(tile);
+                    }
+                    tradable.push(tile);
                 }
             }
         }
-        return sacrifices;
+        // Prefer safe non-blockers, but fallback to any singleton if needed to secure a monopoly!
+        return safe.length > 0 ? safe : tradable;
     },
 
     isBlockerAgainstAnyOpponent(tile) {

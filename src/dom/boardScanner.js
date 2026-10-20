@@ -252,14 +252,22 @@ function detectLocalPlayerFromPlayerList() {
             // Strictly filter out any row that contains activity log words
             if (/paid|bought|rolled|landed|rent|tax|pardon|jail|prison|bankrupt|joined|left|game started|is playing/i.test(rowText)) continue;
 
-            const cashMatch = /\$\s*(-?\d{1,5})|(-?\d{1,5})\s*\$|(-\s*\$?\d{1,5})/.exec(rowText);
-            if (!cashMatch) continue;
+            // Normalize Unicode minus (U+2212) and dashes to ASCII hyphen
+            const normalizedRow = rowText.replace(/[−–—]/g, '-');
 
-            const rawCash = (cashMatch[1] || cashMatch[2] || cashMatch[3] || '').replace(/[\$\s]/g, '');
-            const parsedCash = parseInt(rawCash, 10);
+            // 1. High priority check for negative cash (e.g. "$-205", "$- 205", "-$205", "- $205")
+            const negCashMatch = /\$\s*-\s*(\d{1,6})|-\s*\$\s*(\d{1,6})/.exec(normalizedRow);
+            let parsedCash;
+            if (negCashMatch) {
+                parsedCash = -parseInt(negCashMatch[1] || negCashMatch[2], 10);
+            } else {
+                const posCashMatch = /\$\s*(\d{1,6})|(\d{1,6})\s*\$/.exec(normalizedRow);
+                if (!posCashMatch) continue;
+                parsedCash = parseInt(posCashMatch[1] || posCashMatch[2], 10);
+            }
             if (isNaN(parsedCash)) continue;
 
-            const beforeDollar = rowText.split('$')[0].trim();
+            const beforeDollar = normalizedRow.split('$')[0].trim();
             const candidateLines = beforeDollar.split('\n').map(l => l.trim()).filter(Boolean);
 
             let candidateName = null;
@@ -328,18 +336,23 @@ function detectLocalPlayerFromPlayerList() {
             }
 
             if (text.toLowerCase().includes(currentLower) && text.includes('$') && text.length <= 150) {
-                const cashMatch = /\$\s*(-?\d{1,5})|(-?\d{1,5})\s*\$|(-\s*\$?\d{1,5})/.exec(text);
-                if (cashMatch) {
-                    const rawCash = (cashMatch[1] || cashMatch[2] || cashMatch[3] || '').replace(/[\$\s]/g, '');
-                    const parsedCash = parseInt(rawCash, 10);
-                    if (!isNaN(parsedCash)) {
-                        GameMemory.myCash = parsedCash;
-                        GameMemory.cashVerified = true;
-                        GameMemory.players[currentName] = GameMemory.players[currentName] || { cash: parsedCash, pos: GameMemory.myPos, isMe: true };
-                        GameMemory.players[currentName].cash = parsedCash;
-                        GameMemory.players[currentName].isMe = true;
-                        break;
-                    }
+                const normText = text.replace(/[−–—]/g, '-');
+                const negMatch = /\$\s*-\s*(\d{1,6})|-\s*\$\s*(\d{1,6})/.exec(normText);
+                let parsedCash;
+                if (negMatch) {
+                    parsedCash = -parseInt(negMatch[1] || negMatch[2], 10);
+                } else {
+                    const posMatch = /\$\s*(\d{1,6})|(\d{1,6})\s*\$/.exec(normText);
+                    if (posMatch) parsedCash = parseInt(posMatch[1] || posMatch[2], 10);
+                }
+
+                if (typeof parsedCash === 'number' && !isNaN(parsedCash)) {
+                    GameMemory.myCash = parsedCash;
+                    GameMemory.cashVerified = true;
+                    GameMemory.players[currentName] = GameMemory.players[currentName] || { cash: parsedCash, pos: GameMemory.myPos, isMe: true };
+                    GameMemory.players[currentName].cash = parsedCash;
+                    GameMemory.players[currentName].isMe = true;
+                    break;
                 }
             }
         }
@@ -732,9 +745,9 @@ function parseActivityLogLine(line) {
 
 /**
  * Scrapes trade data scoped strictly to the trade dialog modal
- * Uses geometric 2-column boundary detection (as shown in assets/trade-properties.png):
- * Left column = Given items & cash slider
- * Right column = Received items & cash slider + Partner name
+ * Correctly identifies which column belongs to the local player vs partner:
+ * - If local player is on the RIGHT: Left = Partner (Received), Right = Local (Given)
+ * - If local player is on the LEFT: Left = Local (Given), Right = Partner (Received)
  */
 export function scrapeTradeModalDOM() {
     const modal = document.querySelector('[role="dialog"], [class*="modal" i], [class*="trade" i]');
@@ -745,7 +758,57 @@ export function scrapeTradeModalDOM() {
     const modalRect = modal.getBoundingClientRect();
     const modalMidX = modalRect.left + modalRect.width / 2;
 
+    let leftPlayerName = null;
+    let rightPlayerName = null;
+
+    // Detect player names in the top headers of left vs right columns
+    const headerCandidates = Array.from(modal.querySelectorAll('h1, h2, h3, h4, h5, div, span, strong, b, p')).filter(el => {
+        const rect = el.getBoundingClientRect();
+        return rect.top < (modalRect.top + modalRect.height * 0.40) && rect.height > 10;
+    });
+
+    for (const el of headerCandidates) {
+        const t = (el.innerText || '').trim();
+        if (t.length >= 2 && t.length <= 25 && !t.includes('$') && !t.toLowerCase().includes('trade') && !t.toLowerCase().includes('create') && !BOARD_LABELS_BLACKLIST.has(t.toLowerCase())) {
+            const rect = el.getBoundingClientRect();
+            const center = rect.left + rect.width / 2;
+
+            for (const pName of Object.keys(GameMemory.players)) {
+                if (t.toLowerCase().includes(pName.toLowerCase()) || pName.toLowerCase().includes(t.toLowerCase())) {
+                    if (center < modalMidX && !leftPlayerName) leftPlayerName = pName;
+                    else if (center >= modalMidX && !rightPlayerName) rightPlayerName = pName;
+                }
+            }
+            if (GameMemory.isMe(t)) {
+                if (center < modalMidX && !leftPlayerName) leftPlayerName = t;
+                else if (center >= modalMidX && !rightPlayerName) rightPlayerName = t;
+            }
+        }
+    }
+
+    // Determine which side is the local player
+    // In RichUp: Proposer is on Left, Target (Receiver) is on Right!
+    let meIsOnLeft = false;
     let partnerName = 'Opponent';
+
+    if (leftPlayerName && GameMemory.isMe(leftPlayerName)) {
+        meIsOnLeft = true;
+        partnerName = rightPlayerName || 'Opponent';
+    } else if (rightPlayerName && GameMemory.isMe(rightPlayerName)) {
+        meIsOnLeft = false;
+        partnerName = leftPlayerName || 'Opponent';
+    } else if (leftPlayerName && !GameMemory.isMe(leftPlayerName)) {
+        meIsOnLeft = false;
+        partnerName = leftPlayerName;
+    } else if (rightPlayerName && !GameMemory.isMe(rightPlayerName)) {
+        meIsOnLeft = true;
+        partnerName = rightPlayerName;
+    } else {
+        // Default incoming trade: Opponent is proposer on left, we are receiver on right
+        meIsOnLeft = false;
+        partnerName = 'Opponent';
+    }
+
     let givenCash = 0;
     let receivedCash = 0;
     const givenTiles = [];
@@ -758,9 +821,11 @@ export function scrapeTradeModalDOM() {
         const center = rect.left + rect.width / 2;
         const val = parseInt(input.value, 10) || 0;
         if (center < modalMidX) {
-            givenCash = val;
+            if (meIsOnLeft) givenCash = val;
+            else receivedCash = val;
         } else {
-            receivedCash = val;
+            if (meIsOnLeft) receivedCash = val;
+            else givenCash = val;
         }
     }
 
@@ -774,12 +839,17 @@ export function scrapeTradeModalDOM() {
             const rect = badge.getBoundingClientRect();
             const center = rect.left + rect.width / 2;
             const val = parseInt((badge.innerText || '').replace(/\D/g, ''), 10) || 0;
-            if (center < modalMidX && givenCash === 0) givenCash = val;
-            else if (center >= modalMidX && receivedCash === 0) receivedCash = val;
+            if (center < modalMidX) {
+                if (meIsOnLeft && givenCash === 0) givenCash = val;
+                else if (!meIsOnLeft && receivedCash === 0) receivedCash = val;
+            } else {
+                if (meIsOnLeft && receivedCash === 0) receivedCash = val;
+                else if (!meIsOnLeft && givenCash === 0) givenCash = val;
+            }
         }
     }
 
-    // 2. Dynamic property tiles extraction scoped by column geometry (Left = Given, Right = Received)
+    // 2. Dynamic property tiles extraction scoped by column geometry & orientation
     const cards = Array.from(modal.querySelectorAll('div, li, button, [class*="item" i], [class*="property" i], [class*="card" i]'));
     const matchedTileIds = new Set();
 
@@ -796,33 +866,12 @@ export function scrapeTradeModalDOM() {
                 const rect = card.getBoundingClientRect();
                 const center = rect.left + rect.width / 2;
                 if (center < modalMidX) {
-                    givenTiles.push(tile);
+                    if (meIsOnLeft) givenTiles.push(tile);
+                    else receivedTiles.push(tile);
                 } else {
-                    receivedTiles.push(tile);
+                    if (meIsOnLeft) receivedTiles.push(tile);
+                    else givenTiles.push(tile);
                 }
-            }
-        }
-    }
-
-    // 3. Dynamic partner name extraction from the right column header
-    const topCandidates = Array.from(modal.querySelectorAll('h1, h2, h3, h4, h5, div, span, strong, b')).filter(el => {
-        const rect = el.getBoundingClientRect();
-        return rect.left + rect.width / 2 >= modalMidX && rect.top < (modalRect.top + modalRect.height * 0.35);
-    });
-
-    for (const el of topCandidates) {
-        const t = (el.innerText || '').trim();
-        if (t.length >= 2 && t.length <= 24 && !t.includes('$') && !t.toLowerCase().includes('create') && !t.toLowerCase().includes('trade')) {
-            for (const pName of Object.keys(GameMemory.players)) {
-                if (!GameMemory.isMe(pName) && t.toLowerCase().includes(pName.toLowerCase())) {
-                    partnerName = pName;
-                    break;
-                }
-            }
-            if (partnerName !== 'Opponent') break;
-            if (!GameMemory.isMe(t) && !BOARD_LABELS_BLACKLIST.has(t.toLowerCase())) {
-                partnerName = t;
-                break;
             }
         }
     }

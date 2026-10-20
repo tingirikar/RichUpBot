@@ -65,7 +65,7 @@ export const MarkovRisk = {
 
     /**
      * Evaluates property purchase when landing on unowned tile.
-     * Enforces strict buy preference: Always secure airports, utilities, and properties!
+     * PROPERTIES ARE #1 PRIORITY: Always secure properties, airports, and utilities!
      */
     shouldBuyProperty(tile, price, myCash) {
         // 1. Physical cash check
@@ -76,15 +76,7 @@ export const MarkovRisk = {
             };
         }
 
-        // 2. CRITICAL BLOCKER CHECK: Always buy if it stops an opponent monopoly!
-        if (tile && OpponentTracker.isBlockerAgainstAnyOpponent(tile)) {
-            return {
-                buy: true,
-                reason: `DEFENSIVE BLOCK: Prevents opponent from completing ${tile.group}!`
-            };
-        }
-
-        // 3. MONOPOLY COMPLETER CHECK: Always buy if it completes our set!
+        // 2. CRITICAL MONOPOLY COMPLETER: Always buy if it completes our set!
         const mySet = tile?.group ? GameMemory.getGroupCount(tile.group, '__ME__') : null;
         if (mySet && (mySet.owned === mySet.total - 1 || tile.group === 'USA' || tile.group === 'Brazil')) {
             return {
@@ -93,36 +85,51 @@ export const MarkovRisk = {
             };
         }
 
-        // 4. INTELLIGENT SKIP / HOTEL DANGER VETO:
-        // If we are facing enemy houses/hotels ahead and buying leaves us with less than our danger reserve,
-        // SKIP buying this non-critical property to avoid bankruptcy!
-        const danger = this.analyzeDangerAhead(GameMemory.myPos);
-        const dynamicReserve = this.computeDynamicReserve(GameMemory.myPos);
-        const postCash = myCash - price;
-
-        if (danger.maxDangerWindowLoss >= 250 && postCash < dynamicReserve) {
+        // 3. SET ADVANCER: Buy if we already own 1 card in this set (aiming for monopoly!)
+        if (mySet && mySet.owned >= 1) {
             return {
-                buy: false,
-                reason: `INTELLIGENT SKIP: Facing dangerous opponent territory ($${danger.maxDangerWindowLoss} rent) ahead. Preserving $${myCash} cash to survive roll.`
+                buy: true,
+                reason: `MONOPOLY BUILDER: Secures ${mySet.owned + 1}/${mySet.total} for ${tile.group} set!`
             };
         }
 
-        // 5. AIRPORTS & UTILITIES: High-yield cashflow assets
-        if (tile && (tile.group === 'Airport' || tile.group === 'Airports')) {
+        // 4. CRITICAL BLOCKER CHECK: Always buy if it stops an opponent monopoly!
+        if (tile && OpponentTracker.isBlockerAgainstAnyOpponent(tile)) {
+            return {
+                buy: true,
+                reason: `DEFENSIVE BLOCK: Prevents opponent from completing ${tile.group}!`
+            };
+        }
+
+        // 5. AIRPORTS & UTILITIES: High-yield cashflow assets (always buy!)
+        if (tile && (tile.group === 'Airport' || tile.group === 'Airports' || tile.type === 'airport')) {
             return { buy: true, reason: `Essential High-Yield Asset: ${tile.name} (Airport)` };
         }
-        if (tile && (tile.group === 'Utility' || tile.group === 'Utilities')) {
+        if (tile && (tile.group === 'Utility' || tile.group === 'Utilities' || tile.type === 'utility')) {
             return { buy: true, reason: `Cashflow Asset: ${tile.name} (Utility)` };
         }
 
-        // 6. High-traffic groups & standard lands
-        if (tile && HIGH_TRAFFIC_GROUPS.has(tile.group)) {
-            return { buy: true, reason: `High-Traffic Strategic Asset: ${tile.name} (${tile.group})` };
+        // 6. FINALE END GAME CHECK:
+        // Only consider skipping non-set singletons in the deep late game if buying leaves us with
+        // less than $60 cash while directly facing a 3-house or hotel tile within 1 to 6 steps.
+        const unownedRemaining = BOARD_TILES.filter(t => t.group && (!GameMemory.ownership[t.id] || !GameMemory.ownership[t.id].owner)).length;
+        const isFinaleEndGame = unownedRemaining === 0 || (GameMemory.turnCount > 30 && myCash < 300);
+
+        if (isFinaleEndGame) {
+            const danger = this.analyzeDangerAhead(GameMemory.myPos);
+            const postCash = myCash - price;
+            if (danger.maxDangerWindowLoss >= 300 && postCash < 60) {
+                return {
+                    buy: false,
+                    reason: `FINALE END-GAME SKIP: Facing lethal hotel ($${danger.maxDangerWindowLoss}) directly ahead. Preserving $${myCash} survival cash.`
+                };
+            }
         }
 
+        // 7. Standard purchase in Start and Mid Game: ALWAYS BUY!
         return {
             buy: true,
-            reason: `EV+ Buy: ${tile ? tile.name : 'property'} ($${price})`
+            reason: `PRIORITY ACQUISITION: ${tile ? tile.name : 'Property'} ($${price}) [Set Progress / Net Worth]`
         };
     }
 };

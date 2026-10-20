@@ -248,18 +248,27 @@ export function createDOMSnapshot() {
         /**
          * Detects if a property card popover/modal is currently open and returns its DOM element & tile info
          */
+        /**
+         * Detects if a property card popover/modal is currently open and returns its DOM element & tile info
+         */
         getOpenPropertyCard() {
-            const containers = document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="popover" i], [class*="property" i]');
-            for (const c of containers) {
+            const containers = document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="popover" i], div');
+            for (let i = 0; i < containers.length; i++) {
+                const c = containers[i];
                 if (hud && hud.contains(c)) continue;
                 if (!isVisibleAndEnabled(c)) continue;
-                // Exclude the right-side properties sidebar (typically on right side > 65% width)
+
+                // Exclude the right-side properties sidebar (typically on right side > 65% width and fixed)
                 const rect = c.getBoundingClientRect();
+                if (rect.width < 160 || rect.height < 160) continue;
                 if (rect.left > window.innerWidth * 0.65 && rect.width < 320) continue;
 
                 const text = c.innerText || '';
-                // Must look like an open property card (contains "Owner", "Price", "when", or "rent")
-                if (text.includes('Owner') || text.includes('Price') || text.includes('when') || text.includes('rent') || text.includes('Mortgage') || text.includes('mortgage')) {
+                // Must look like an open property card (contains "Owner", "Price", "with rent", "when")
+                if (
+                    (text.includes('Owner') || text.includes('Price') || text.includes('with rent') || text.includes('when')) &&
+                    !text.toLowerCase().includes('trades')
+                ) {
                     for (const t of BOARD_TILES) {
                         if (t.group && new RegExp(`\\b${t.name}\\b`, 'i').test(text)) {
                             return { el: c, tile: t };
@@ -271,30 +280,48 @@ export function createDOMSnapshot() {
         },
 
         /**
+         * Helper to get the action buttons row inside the open property card:
+         * Button 0: Upgrade [↑]
+         * Button 1: Sell / Downgrade [↓]
+         * Button 2: Mortgage [🗑️]
+         */
+        getPropertyCardActionButtons() {
+            const card = this.getOpenPropertyCard();
+            if (!card) return [];
+
+            const allCardBtns = Array.from(card.el.querySelectorAll('button, [role="button"], [class*="button" i]')).filter(b => {
+                if (hud && hud.contains(b)) return false;
+                if (!isVisibleAndEnabled(b)) return false;
+                const txt = (b.innerText || '').trim().toLowerCase();
+                // Filter out turn completion or modal close buttons
+                if (txt.includes('end turn') || txt.includes('roll') || txt.includes('bankrupt') || txt === 'x') return false;
+                return true;
+            });
+
+            return allCardBtns;
+        },
+
+        /**
          * Finds the UP-ARROW [↑] button to build a house inside the property card popover
          */
         findModalUpgradeButton() {
-            const openCard = this.getOpenPropertyCard();
-            const searchContainers = openCard ? [openCard.el] : document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="popover" i]');
-            for (const c of searchContainers) {
-                if (hud && hud.contains(c)) continue;
-                const btns = c.querySelectorAll('button, [role="button"], [class*="button" i], [class*="btn" i]');
-                for (let i = 0; i < btns.length; i++) {
-                    const btn = btns[i];
-                    if (!isVisibleAndEnabled(btn)) continue;
-                    const inner = btn.innerHTML || '';
-                    const text = normalizeText(btn);
-                    if (
-                        inner.includes('↑') || inner.includes('⭡') ||
-                        inner.includes('arrow-up') || 
-                        inner.includes('M5 10l7-7m0 0l7 7m-7-7v18') ||
-                        text.includes('upgrade') || text.includes('build')
-                    ) {
-                        return btn;
-                    }
+            const actionBtns = this.getPropertyCardActionButtons();
+            for (const btn of actionBtns) {
+                const inner = btn.innerHTML || '';
+                const text = normalizeText(btn);
+                if (
+                    inner.includes('↑') || inner.includes('⭡') ||
+                    inner.includes('arrow-up') || text.includes('upgrade') || text.includes('build')
+                ) {
+                    return btn;
                 }
             }
-            // Page-wide fallback
+            // RichUp position-based action: 1st button in the 3-button action group
+            if (actionBtns.length >= 2) {
+                return actionBtns[0];
+            }
+
+            // Fallback: search all buttons on screen
             for (const b of allButtons) {
                 const inner = b.el.innerHTML || '';
                 if (inner.includes('↑') || inner.includes('⭡') || b.text === '↑' || b.text.includes('upgrade') || b.text.includes('build')) {
@@ -308,27 +335,22 @@ export function createDOMSnapshot() {
          * Finds the DOWN-ARROW [↓] button to sell a house inside the property card popover
          */
         findModalSellHouseButton() {
-            const openCard = this.getOpenPropertyCard();
-            const searchContainers = openCard ? [openCard.el] : document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="popover" i]');
-            for (const c of searchContainers) {
-                if (hud && hud.contains(c)) continue;
-                const btns = c.querySelectorAll('button, [role="button"], [class*="button" i], [class*="btn" i]');
-                for (let i = 0; i < btns.length; i++) {
-                    const btn = btns[i];
-                    if (!isVisibleAndEnabled(btn)) continue;
-                    const inner = btn.innerHTML || '';
-                    const text = normalizeText(btn);
-                    if (
-                        inner.includes('↓') || inner.includes('⭣') ||
-                        inner.includes('arrow-down') || 
-                        inner.includes('M19 14l-7 7m0 0l-7-7m7 7V3') ||
-                        text.includes('sell') || text.includes('downgrade')
-                    ) {
-                        return btn;
-                    }
+            const actionBtns = this.getPropertyCardActionButtons();
+            for (const btn of actionBtns) {
+                const inner = btn.innerHTML || '';
+                const text = normalizeText(btn);
+                if (
+                    inner.includes('↓') || inner.includes('⭣') ||
+                    inner.includes('arrow-down') || text.includes('sell') || text.includes('downgrade')
+                ) {
+                    return btn;
                 }
             }
-            // Page-wide fallback
+            // RichUp position-based action: 2nd button in the 3-button action group
+            if (actionBtns.length >= 3) {
+                return actionBtns[1];
+            }
+
             for (const b of allButtons) {
                 const inner = b.el.innerHTML || '';
                 if (inner.includes('↓') || inner.includes('⭣') || b.text === '↓' || b.text.includes('sell') || b.text.includes('downgrade')) {
@@ -339,31 +361,28 @@ export function createDOMSnapshot() {
         },
 
         /**
-         * Finds the Mortgage button inside the property card popover/modal
+         * Finds the Mortgage [🗑️] button inside the property card popover/modal
          */
         findModalMortgageButton() {
-            const openCard = this.getOpenPropertyCard();
-            const searchContainers = openCard ? [openCard.el] : document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="popover" i]');
-            for (const c of searchContainers) {
-                if (hud && hud.contains(c)) continue;
-                // Target real clickable button elements
-                const btns = c.querySelectorAll('button, [role="button"], [class*="button" i], [class*="btn" i]');
-                for (let i = 0; i < btns.length; i++) {
-                    const btn = btns[i];
-                    if (!isVisibleAndEnabled(btn)) continue;
-                    const inner = (btn.innerHTML || '').toLowerCase();
-                    const text = normalizeText(btn);
-
-                    // Strictly match "mortgage" and ignore "unmortgage"
-                    if (
-                        (text.includes('mortgage') || inner.includes('mortgage')) &&
-                        !text.includes('unmortgage') && !inner.includes('unmortgage')
-                    ) {
-                        return btn;
-                    }
+            const actionBtns = this.getPropertyCardActionButtons();
+            for (const btn of actionBtns) {
+                const inner = (btn.innerHTML || '').toLowerCase();
+                const text = normalizeText(btn);
+                if (
+                    text.includes('mortgage') || inner.includes('mortgage') ||
+                    inner.includes('trash') || inner.includes('bin') ||
+                    inner.includes('m19 7') || inner.includes('svg')
+                ) {
+                    // Check if it's the 3rd button or contains mortgage/trash
+                    if (actionBtns.length >= 3 && btn === actionBtns[2]) return btn;
+                    if (text.includes('mortgage') && !text.includes('unmortgage')) return btn;
                 }
             }
-            // Page-wide fallback for buttons
+            // RichUp position-based action: 3rd button in the 3-button action group is ALWAYS Mortgage!
+            if (actionBtns.length >= 3) {
+                return actionBtns[2];
+            }
+
             for (const b of allButtons) {
                 const text = b.text || '';
                 const inner = (b.el.innerHTML || '').toLowerCase();
@@ -378,17 +397,21 @@ export function createDOMSnapshot() {
         },
 
         /**
-         * Finds a property item in the "My properties" sidebar to open its management modal
+         * Finds a property item specifically in the right-side "My properties" sidebar
          */
         findSidebarPropertyItem(propertyName) {
             if (!propertyName) return null;
             const lowerTarget = propertyName.toLowerCase();
 
-            // Find all elements under My properties sidebar
-            const allItems = document.querySelectorAll('div, li, button, [class*="property"]');
+            // Locate right sidebar elements (x > 60% viewport width) to prevent hitting board tiles
+            const allItems = document.querySelectorAll('div, li, button, [class*="property"], [class*="item"]');
             for (let i = 0; i < allItems.length; i++) {
                 const el = allItems[i];
+                if (hud && hud.contains(el)) continue;
                 if (!isVisibleAndEnabled(el)) continue;
+
+                const rect = el.getBoundingClientRect();
+                if (rect.left < window.innerWidth * 0.55) continue; // Must be in the right panel!
 
                 const text = normalizeText(el);
                 if (text === lowerTarget || (text.includes(lowerTarget) && text.length < lowerTarget.length + 15)) {
@@ -431,6 +454,29 @@ export function createDOMSnapshot() {
                     text.endsWith(lowerName) ||
                     (text.includes(lowerName) && text.length < lowerName.length + 35)
                 ) {
+                    return el;
+                }
+            }
+            return null;
+        },
+
+        /**
+         * Detects the red/orange [Bankrupt] button that appears when the player is in debt
+         */
+        findBankruptButton() {
+            for (const b of allButtons) {
+                const txt = (b.text || '').toLowerCase();
+                if (txt === 'bankrupt' || txt.includes('bankrupt')) {
+                    return b.el;
+                }
+            }
+            const candidates = document.querySelectorAll('button, [role="button"], a, div');
+            for (let i = 0; i < candidates.length; i++) {
+                const el = candidates[i];
+                if (hud && hud.contains(el)) continue;
+                if (!isVisibleAndEnabled(el)) continue;
+                const txt = normalizeText(el);
+                if (txt === 'bankrupt' || (txt.includes('bankrupt') && txt.length <= 20)) {
                     return el;
                 }
             }

@@ -318,9 +318,9 @@ export const ActionExecutor = {
             const price = priceMatch ? parseInt(priceMatch[1] || priceMatch[2], 10) : (tile?.price || 60);
 
             // Re-sync verified scoreboard cash for local player if available
-            if (GameMemory.myName && GameMemory.players[GameMemory.myName]?.cash) {
+            if (GameMemory.myName && GameMemory.players[GameMemory.myName]?.cash !== undefined) {
                 const sbCash = GameMemory.players[GameMemory.myName].cash;
-                if (typeof sbCash === 'number' && sbCash > GameMemory.myCash) {
+                if (typeof sbCash === 'number') {
                     GameMemory.myCash = sbCash;
                 }
             }
@@ -508,9 +508,12 @@ export const ActionExecutor = {
     },
 
     handleDebtRecovery(snapshot) {
-        // Player is in debt ONLY when cash is strictly below 0
+        if (!CONFIG.AUTO_MORTGAGE_ENABLED) return false;
+
+        // Debt is strictly when player cash is negative (GameMemory.myCash < 0)
+        // or an explicit debt modal/warning is visible
         const isDebt = GameMemory.myCash < 0;
-        if (!CONFIG.AUTO_MORTGAGE_ENABLED || !isDebt) return false;
+        if (!isDebt) return false;
 
         logToBot(`[DEBT RECOVERY] Negative balance ($${GameMemory.myCash}). Liquidating assets to survive...`);
 
@@ -524,7 +527,7 @@ export const ActionExecutor = {
             return executeOrAdvise({
                 el: mortgageBtn,
                 title: `MORTGAGE: ${tileName.toUpperCase()}`,
-                reason: `Cash is negative ($${GameMemory.myCash})! Mortgaging asset to clear debt.`,
+                reason: `In debt ($${GameMemory.myCash})! Mortgaging asset to clear debt immediately.`,
                 onExecute: () => {
                     if (openCard && GameMemory.ownership[openCard.tile.id]) {
                         GameMemory.ownership[openCard.tile.id].mortgaged = true;
@@ -538,7 +541,7 @@ export const ActionExecutor = {
             return executeOrAdvise({
                 el: sellHouseBtn,
                 title: 'SELL HOUSE [↓]',
-                reason: `Cash is negative ($${GameMemory.myCash})! Selling house to clear debt.`,
+                reason: `In debt ($${GameMemory.myCash})! Selling house to clear debt immediately.`,
                 onExecute: () => delayClick(sellHouseBtn, 'Clicking [↓] to sell house')
             });
         }
@@ -554,8 +557,28 @@ export const ActionExecutor = {
                     return executeOrAdvise({
                         el: sidebarProp,
                         title: `OPEN ${bestTarget.tile.name.toUpperCase()} TO LIQUIDATE`,
-                        reason: `Cash is negative ($${GameMemory.myCash}). Selecting lowest sacrifice asset to mortgage.`,
+                        reason: `In debt ($${GameMemory.myCash}). Selecting lowest sacrifice asset to mortgage.`,
                         onExecute: () => delayClick(sidebarProp, `Opening ${bestTarget.tile.name} for debt recovery`)
+                    });
+                }
+            }
+        }
+
+        // Fallback: Click the first available property in "My properties" sidebar
+        const sidebarItems = document.querySelectorAll('div, li, button, [class*="property"]');
+        for (let i = 0; i < sidebarItems.length; i++) {
+            const el = sidebarItems[i];
+            const hud = document.getElementById('rubot-hud-panel');
+            if (hud && hud.contains(el)) continue;
+            const rect = el.getBoundingClientRect();
+            if (rect.left > window.innerWidth * 0.6) {
+                const t = (el.innerText || '').trim();
+                if (t.length >= 3 && t.length <= 25 && !t.includes('$') && !t.toLowerCase().includes('properties') && !t.toLowerCase().includes('trades')) {
+                    return executeOrAdvise({
+                        el,
+                        title: `EMERGENCY LIQUIDATE: ${t.toUpperCase()}`,
+                        reason: `In debt ($${GameMemory.myCash}). Emergency opening sidebar property to mortgage.`,
+                        onExecute: () => delayClick(el, `Emergency clicking ${t} to liquidate`)
                     });
                 }
             }

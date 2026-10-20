@@ -250,17 +250,36 @@ export const TradeEngine = {
             };
         }
 
-        // MUTUAL MONOPOLY CHECK: Both get a monopoly, but can opponent rush hotels while we cannot?
-        if (givesOppMonopoly && completesMyMonopoly) {
-            const oppCash = GameMemory.players[partnerName]?.cash ?? 500;
-            const myCash = GameMemory.myCash + receivedCash - givenCash;
-            if (oppCash >= 500 && myCash < 250) {
-                const neededCash = Math.round(300 - myCash);
+        // MONOPOLY EVALUATION: Securing completed monopolies is the #1 winning condition!
+        if (completesMyMonopoly) {
+            const myCashAfter = GameMemory.myCash + receivedCash - givenCash;
+            if (myCashAfter < 30) {
+                // Only decline if the cash terms literally leave us bankrupt
                 return {
                     accept: false,
-                    counterSwap: null,
-                    reason: `HOTEL RUSH DANGER: ${partnerName} has $${oppCash} cash to rush hotels, while we have only $${myCash}!`,
-                    chatReply: `Decline: You can build hotels immediately while I'm short on cash. Add +$${neededCash} cash or no deal.`
+                    counterSwap: this.findCounterTrade(tradeData),
+                    reason: `MONOPOLY BLOCKED BY DEBT: Trade completes ${myCompletedGroup} but leaves only $${myCashAfter} cash!`,
+                    chatReply: `Decline: That set is great but leaves me with zero cash. Add +$100 cash and I'll accept!`
+                };
+            }
+
+            if (givesOppMonopoly) {
+                // BOTH PLAYERS GET A SET! Classic Grandmaster Mutual Monopoly Swap!
+                return {
+                    accept: true,
+                    myGain: 3500,
+                    oppGain: 3500,
+                    reason: `MUTUAL MONOPOLY SWAP: Both players secure completed color sets (${myCompletedGroup})!`,
+                    chatReply: `Deal! Both get sets. Let's see who builds faster!`
+                };
+            } else {
+                // WE GET A MONOPOLY, OPPONENT GETS NONE! Overwhelming advantage!
+                return {
+                    accept: true,
+                    myGain: 5000,
+                    oppGain: 500,
+                    reason: `MONOPOLY COMPLETER: Completes our ${myCompletedGroup} monopoly without giving opponent a set!`,
+                    chatReply: `Deal accepted! Thanks for the trade.`
                 };
             }
         }
@@ -292,12 +311,31 @@ export const TradeEngine = {
 
         // UNFAIR DEFICIT CHECK: Never accept a trade in the opponent's favor!
         if (oppGain > myGain && !completesMyMonopoly) {
-            const cashDeficit = Math.round(oppGain - myGain) + 30;
+            const counter = this.findCounterTrade(tradeData);
+            if (counter) {
+                return {
+                    accept: false,
+                    counterSwap: counter,
+                    reason: `UNFAIR DEFICIT: Trade favors ${partnerName}. Countering for set completer.`,
+                    chatReply: counter.pitch
+                };
+            }
+
+            const reasonableCash = Math.min(250, Math.max(50, Math.round(givenTiles.reduce((s, t) => s + (t.price || 100), 0) * 0.4)));
+            const givenName = givenTiles[0]?.name || 'that property';
+            const naturalReplies = [
+                `No deal on ${givenName}, I'm building toward that set.`,
+                `That offer is too low for ${givenName}. Need at least +$${reasonableCash} or a better card.`,
+                `Can't trade ${givenName} without getting a property I need for my monopoly.`,
+                `Not looking to give up ${givenName} right now. Offer a property from my missing sets.`
+            ];
+            const chatReply = naturalReplies[Math.floor(Math.random() * naturalReplies.length)];
+
             return {
                 accept: false,
-                counterSwap: this.findCounterTrade(tradeData),
+                counterSwap: null,
                 reason: `UNFAIR DEFICIT: Trade favors ${partnerName} by +$${Math.round(oppGain - myGain)}.`,
-                chatReply: `Decline: Net value is short by $${cashDeficit}. Add cash and re-offer.`
+                chatReply
             };
         }
 
@@ -305,6 +343,7 @@ export const TradeEngine = {
 
         GameMemory.lastTradeVerdict = acceptable ? 'ACCEPTABLE' : 'UNFAVORABLE';
 
+        const givenName = givenTiles[0]?.name || 'property';
         return {
             accept: acceptable,
             myGain: Math.round(myGain),
@@ -316,7 +355,7 @@ export const TradeEngine = {
                 : `Unfavorable utility: Net gain $${Math.round(myGain)} < requirement`,
             chatReply: acceptable
                 ? "Deal accepted! Win-win."
-                : `Decline: Value doesn't work out for me. Re-offer with better terms.`
+                : `Decline: Value doesn't work for ${givenName}. Need better terms or missing set pieces.`
         };
     },
 

@@ -23,7 +23,7 @@ export const OllamaClient = {
     /**
      * Universal HTTP helper using GM_xmlhttpRequest if present, else fetch
      */
-    httpRequest({ method = 'POST', url, data = null, timeout = 2800 }) {
+    httpRequest({ method = 'POST', url, data = null, timeout = (CONFIG.OLLAMA_TIMEOUT_MS || 6000) }) {
         return new Promise((resolve, reject) => {
             // Check for Tampermonkey GM_xmlhttpRequest
             const gmReq = (typeof GM_xmlhttpRequest !== 'undefined') ? GM_xmlhttpRequest
@@ -47,7 +47,7 @@ export const OllamaClient = {
                             reject(new Error(`Ollama HTTP ${res.status}: ${res.statusText || ''}`));
                         }
                     },
-                    ontimeout: () => reject(new Error('Ollama request timed out (>2.8s)')),
+                    ontimeout: () => reject(new Error('Ollama request timed out')),
                     onerror: (err) => reject(new Error(`Ollama connection error: ${err.message || 'Host unreachable'}`))
                 });
                 return;
@@ -103,7 +103,62 @@ export const OllamaClient = {
     },
 
     /**
-     * Evaluates incoming trade with local LLM or falls back to Minimax Markov
+     * Executes chat completion with multi-tier model priority:
+     * 1st priority: Primary configured model (e.g. llama3.2-vision:latest)
+     * 2nd priority: qwen2.5:7b (automatic fallback if primary fails)
+     */
+    async sendChatCompletion(messages, options = { temperature: 0.1, num_predict: 120 }) {
+        const primaryModel = CONFIG.OLLAMA_MODEL || 'llama3.2-vision:latest';
+        const fallbackModel = 'qwen2.5:7b';
+
+        // 1st Priority Attempt
+        try {
+            const data = await this.httpRequest({
+                method: 'POST',
+                url: `${CONFIG.OLLAMA_HOST}/api/chat`,
+                data: {
+                    model: primaryModel,
+                    messages,
+                    stream: false,
+                    options
+                },
+                timeout: CONFIG.OLLAMA_TIMEOUT_MS || 6000
+            });
+            if (data?.message?.content) {
+                return { content: data.message.content, modelUsed: primaryModel };
+            }
+            if (data?.error && primaryModel !== fallbackModel) {
+                throw new Error(data.error);
+            }
+        } catch (primaryErr) {
+            // 2nd Priority Attempt (qwen2.5:7b)
+            if (primaryModel !== fallbackModel) {
+                try {
+                    const fallbackData = await this.httpRequest({
+                        method: 'POST',
+                        url: `${CONFIG.OLLAMA_HOST}/api/chat`,
+                        data: {
+                            model: fallbackModel,
+                            messages,
+                            stream: false,
+                            options
+                        },
+                        timeout: CONFIG.OLLAMA_TIMEOUT_MS || 6000
+                    });
+                    if (fallbackData?.message?.content) {
+                        return { content: fallbackData.message.content, modelUsed: fallbackModel };
+                    }
+                } catch (fallbackErr) {
+                    throw new Error(`Both ${primaryModel} and ${fallbackModel} failed: ${fallbackErr.message}`);
+                }
+            }
+            throw primaryErr;
+        }
+        return null;
+    },
+
+    /**
+     * Evaluates incoming trade with local LLM (1st priority: llama3.2-vision, 2nd: qwen2.5:7b, 3rd: Minimax)
      */
     async evaluateTradeWithLLM(tradeData) {
         // ALWAYS evaluate with the game-theoretic rule engine first to establish baseline constraints
@@ -116,33 +171,19 @@ export const OllamaClient = {
         const prompt = this.buildPrompt(tradeData);
 
         try {
-            const payload = {
-                model: CONFIG.OLLAMA_MODEL,
-                messages: [
-                    {
-                        role: 'system',
-                        content: 'You are a Grandmaster Monopoly / RichUp AI player whose primary goal is to WIN. Never trade in the enemy\'s favor. If enemy completes a monopoly and we do not, you MUST DECLINE. Output ONLY valid JSON in format: {"decision": "CONFIRM" | "DECLINE" | "NEGOTIATE", "reason": "concise rationale under 15 words", "chatReply": "short casual in-game message under 15 words"}'
-                    },
-                    {
-                        role: 'user',
-                        content: prompt
-                    }
-                ],
-                stream: false,
-                options: {
-                    temperature: 0.1,
-                    num_predict: 120
+            const messages = [
+                {
+                    role: 'system',
+                    content: 'You are a Grandmaster Monopoly / RichUp AI player whose primary goal is to WIN. Never trade in the enemy\'s favor. If enemy completes a monopoly and we do not, you MUST DECLINE. Output ONLY valid JSON in format: {"decision": "CONFIRM" | "DECLINE" | "NEGOTIATE", "reason": "concise rationale under 15 words", "chatReply": "short casual in-game message under 15 words"}'
+                },
+                {
+                    role: 'user',
+                    content: prompt
                 }
-            };
+            ];
 
-            const data = await this.httpRequest({
-                method: 'POST',
-                url: `${CONFIG.OLLAMA_HOST}/api/chat`,
-                data: payload,
-                timeout: CONFIG.OLLAMA_TIMEOUT_MS || 5500
-            });
-
-            const rawContent = data?.message?.content || '';
+            const result = await this.sendChatCompletion(messages, { temperature: 0.1, num_predict: 120 });
+            const rawContent = result?.content || '';
             const parsed = this.parseJsonSafely(rawContent);
 
             if (parsed && (parsed.decision === 'CONFIRM' || parsed.decision === 'DECLINE' || parsed.decision === 'NEGOTIATE')) {
@@ -160,8 +201,8 @@ export const OllamaClient = {
                     accept: isAccept,
                     negotiate: !isAccept && isNegotiate,
                     reason: isAccept 
-                        ? `[Ollama ${CONFIG.OLLAMA_MODEL}] ${parsed.reason}` 
-                        : (ruleVerdict.accept ? `[Ollama ${CONFIG.OLLAMA_MODEL}] ${parsed.reason}` : ruleVerdict.reason),
+                        ? `[Ollama ${result.modelUsed}] ${parsed.reason}` 
+                        : (ruleVerdict.accept ? `[Ollama ${result.modelUsed}] ${parsed.reason}` : ruleVerdict.reason),
                     chatReply: chatReply,
                     counterSwap: ruleVerdict.counterSwap
                 };
@@ -405,22 +446,12 @@ Guidelines:
 - Output ONLY the message text. No quotes.`;
 
         try {
-            const data = await this.httpRequest({
-                method: 'POST',
-                url: `${CONFIG.OLLAMA_HOST}/api/chat`,
-                data: {
-                    model: CONFIG.OLLAMA_MODEL,
-                    messages: [
-                        { role: 'system', content: 'You are an authentic online multiplayer gamer. Output ONLY a casual, friendly chat message under 8 words. No quotation marks.' },
-                        { role: 'user', content: prompt }
-                    ],
-                    stream: false,
-                    options: { temperature: 0.6, num_predict: 25 }
-                },
-                timeout: 1800
-            });
-
-            const content = (data?.message?.content || '').replace(/^["']|["']$/g, '').trim();
+            const messages = [
+                { role: 'system', content: 'You are an authentic online multiplayer gamer. Output ONLY a casual, friendly chat message under 8 words. No quotation marks.' },
+                { role: 'user', content: prompt }
+            ];
+            const result = await this.sendChatCompletion(messages, { temperature: 0.6, num_predict: 25 });
+            const content = (result?.content || '').replace(/^["']|["']$/g, '').trim();
             if (content && content.length <= 80) {
                 return content;
             }
@@ -465,27 +496,23 @@ Guidelines:
             if (ownsAll) monopolies.push(groupName);
         }
 
-        const prompt = `Player ${GameMemory.myName}: Cash $${GameMemory.myCash}, Monopolies: [${monopolies.join(', ') || 'None'}]. Next turn danger: $${GameMemory.lastDangerEV}.
+        const oppSummaries = Object.entries(GameMemory.players)
+            .filter(([pName]) => !GameMemory.isMe(pName))
+            .map(([pName, p]) => `${pName}: $${p.cash} (Pos #${p.pos || 0})`)
+            .join(', ') || 'None';
+
+        const prompt = `Player ${GameMemory.myName || 'Me'}: Cash $${GameMemory.myCash}, Monopolies: [${monopolies.join(', ') || 'None'}], Next turn danger: $${GameMemory.lastDangerEV}, Opponents: [${oppSummaries}].
 Is it optimal to END_TURN now or UPGRADE_HOUSES?
 Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "under 10 words"}`;
 
         try {
-            const data = await this.httpRequest({
-                method: 'POST',
-                url: `${CONFIG.OLLAMA_HOST}/api/chat`,
-                data: {
-                    model: CONFIG.OLLAMA_MODEL,
-                    messages: [
-                        { role: 'system', content: 'You are a Grandmaster Monopoly AI. Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "..."}' },
-                        { role: 'user', content: prompt }
-                    ],
-                    stream: false,
-                    options: { temperature: 0.1, num_predict: 40 }
-                },
-                timeout: 1800
-            });
+            const messages = [
+                { role: 'system', content: 'You are a Grandmaster Monopoly AI. Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "..."}' },
+                { role: 'user', content: prompt }
+            ];
 
-            const parsed = this.parseJsonSafely(data?.message?.content || '');
+            const result = await this.sendChatCompletion(messages, { temperature: 0.1, num_predict: 40 });
+            const parsed = this.parseJsonSafely(result?.content || '');
             if (parsed && (parsed.action === 'END_TURN' || parsed.action === 'UPGRADE')) {
                 return parsed;
             }

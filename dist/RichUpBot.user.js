@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RichUp.io Grandmaster AI Engine (Modular Edition)
 // @namespace    http://tampermonkey.net/
-// @version      3.0.0
+// @version      5.2.0
 // @description  Grandmaster-level autonomous AI for RichUp.io with full opponent tracking, auction sniping, Markov risk management, intelligent trading, and room-aware jail strategy.
 // @author       haxxor + Grandmaster AI
 // @license      GPL-3.0
@@ -31,8 +31,8 @@
     // Buy unowned lands when safe
     SMART_RESERVE_ENABLED: true,
     // Maintain dynamic cash reserve against opponent monopolies
-    AMBUSH_BUILD_ONLY: true,
-    // Never build when facing enemy hotels; build when enemies enter strike zone
+    AMBUSH_BUILD_ONLY: false,
+    // Proactively build houses on monopolies whenever safe & affordable
     AUTO_TRADE_ENABLED: true,
     // Evaluate and propose win-win trades
     AUTO_AUCTION_ENABLED: true,
@@ -46,12 +46,12 @@
     // Math & Game-Theory Parameters
     BASE_MIN_RESERVE: 60,
     // Absolute cash floor on empty board
-    RISK_AVERSION_FACTOR: 1.75,
-    // Multiplier on 1-turn expected rent loss
-    WORST_CASE_WEIGHT: 0.3,
-    // Weight on worst-case single roll in 5-9 window
-    TRADE_MIN_ADVANTAGE_RATIO: 1.1,
-    // Require at least 10% utility edge in trades
+    RISK_AVERSION_FACTOR: 1.5,
+    // Balanced multiplier on 1-turn expected rent loss
+    WORST_CASE_WEIGHT: 0.25,
+    // Weight on worst-case single roll
+    TRADE_MIN_ADVANTAGE_RATIO: 1.05,
+    // Require at least 5% utility edge in trades
     AUCTION_MAX_OVERBID_RATIO: 1.4,
     // Max bid for critical blocker/completer
     CHAT_COOLDOWN_MS: 2e4,
@@ -63,11 +63,12 @@
     DELIBERATE_BEFORE_END_TURN: true,
     // LLM strategic review right before ending turn
     // Hybrid Vision / LLM Brain Configuration (Local Ollama)
-    OLLAMA_ENABLED: localStorage.getItem("richup_ollama_enabled") === "true",
+    OLLAMA_ENABLED: localStorage.getItem("richup_ollama_enabled") !== "false",
+    // Default to true!
     OLLAMA_HOST: localStorage.getItem("richup_ollama_host") || "http://localhost:11434",
-    OLLAMA_MODEL: localStorage.getItem("richup_ollama_model") || "llama3.2-vision",
-    OLLAMA_TIMEOUT_MS: 5500
-    // 5.5s cap to allow local LLMs to reason without early timeout
+    OLLAMA_MODEL: localStorage.getItem("richup_ollama_model") || "llama3.2-vision:latest",
+    OLLAMA_TIMEOUT_MS: 6e3
+    // Cap to allow local LLMs to reason without early timeout
   };
   var STATES = Object.freeze({
     IDLE: "idle",
@@ -720,15 +721,20 @@
       /**
        * Detects if a property card popover/modal is currently open and returns its DOM element & tile info
        */
+      /**
+       * Detects if a property card popover/modal is currently open and returns its DOM element & tile info
+       */
       getOpenPropertyCard() {
-        const containers = document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="popover" i], [class*="property" i]');
-        for (const c of containers) {
+        const containers = document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="popover" i], div');
+        for (let i = 0; i < containers.length; i++) {
+          const c = containers[i];
           if (hud && hud.contains(c)) continue;
           if (!isVisibleAndEnabled(c)) continue;
           const rect = c.getBoundingClientRect();
+          if (rect.width < 160 || rect.height < 160) continue;
           if (rect.left > window.innerWidth * 0.65 && rect.width < 320) continue;
           const text = c.innerText || "";
-          if (text.includes("Owner") || text.includes("Price") || text.includes("when") || text.includes("rent") || text.includes("Mortgage") || text.includes("mortgage")) {
+          if ((text.includes("Owner") || text.includes("Price") || text.includes("with rent") || text.includes("when")) && !text.toLowerCase().includes("trades")) {
             for (const t of BOARD_TILES) {
               if (t.group && new RegExp(`\\b${t.name}\\b`, "i").test(text)) {
                 return { el: c, tile: t };
@@ -739,23 +745,37 @@
         return null;
       },
       /**
+       * Helper to get the action buttons row inside the open property card:
+       * Button 0: Upgrade [↑]
+       * Button 1: Sell / Downgrade [↓]
+       * Button 2: Mortgage [🗑️]
+       */
+      getPropertyCardActionButtons() {
+        const card = this.getOpenPropertyCard();
+        if (!card) return [];
+        const allCardBtns = Array.from(card.el.querySelectorAll('button, [role="button"], [class*="button" i]')).filter((b) => {
+          if (hud && hud.contains(b)) return false;
+          if (!isVisibleAndEnabled(b)) return false;
+          const txt = (b.innerText || "").trim().toLowerCase();
+          if (txt.includes("end turn") || txt.includes("roll") || txt.includes("bankrupt") || txt === "x") return false;
+          return true;
+        });
+        return allCardBtns;
+      },
+      /**
        * Finds the UP-ARROW [↑] button to build a house inside the property card popover
        */
       findModalUpgradeButton() {
-        const openCard = this.getOpenPropertyCard();
-        const searchContainers = openCard ? [openCard.el] : document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="popover" i]');
-        for (const c of searchContainers) {
-          if (hud && hud.contains(c)) continue;
-          const btns = c.querySelectorAll('button, [role="button"], [class*="button" i], [class*="btn" i]');
-          for (let i = 0; i < btns.length; i++) {
-            const btn = btns[i];
-            if (!isVisibleAndEnabled(btn)) continue;
-            const inner = btn.innerHTML || "";
-            const text = normalizeText(btn);
-            if (inner.includes("\u2191") || inner.includes("\u2B61") || inner.includes("arrow-up") || inner.includes("M5 10l7-7m0 0l7 7m-7-7v18") || text.includes("upgrade") || text.includes("build")) {
-              return btn;
-            }
+        const actionBtns = this.getPropertyCardActionButtons();
+        for (const btn of actionBtns) {
+          const inner = btn.innerHTML || "";
+          const text = normalizeText(btn);
+          if (inner.includes("\u2191") || inner.includes("\u2B61") || inner.includes("arrow-up") || text.includes("upgrade") || text.includes("build")) {
+            return btn;
           }
+        }
+        if (actionBtns.length >= 2) {
+          return actionBtns[0];
         }
         for (const b of allButtons) {
           const inner = b.el.innerHTML || "";
@@ -769,20 +789,16 @@
        * Finds the DOWN-ARROW [↓] button to sell a house inside the property card popover
        */
       findModalSellHouseButton() {
-        const openCard = this.getOpenPropertyCard();
-        const searchContainers = openCard ? [openCard.el] : document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="popover" i]');
-        for (const c of searchContainers) {
-          if (hud && hud.contains(c)) continue;
-          const btns = c.querySelectorAll('button, [role="button"], [class*="button" i], [class*="btn" i]');
-          for (let i = 0; i < btns.length; i++) {
-            const btn = btns[i];
-            if (!isVisibleAndEnabled(btn)) continue;
-            const inner = btn.innerHTML || "";
-            const text = normalizeText(btn);
-            if (inner.includes("\u2193") || inner.includes("\u2B63") || inner.includes("arrow-down") || inner.includes("M19 14l-7 7m0 0l-7-7m7 7V3") || text.includes("sell") || text.includes("downgrade")) {
-              return btn;
-            }
+        const actionBtns = this.getPropertyCardActionButtons();
+        for (const btn of actionBtns) {
+          const inner = btn.innerHTML || "";
+          const text = normalizeText(btn);
+          if (inner.includes("\u2193") || inner.includes("\u2B63") || inner.includes("arrow-down") || text.includes("sell") || text.includes("downgrade")) {
+            return btn;
           }
+        }
+        if (actionBtns.length >= 3) {
+          return actionBtns[1];
         }
         for (const b of allButtons) {
           const inner = b.el.innerHTML || "";
@@ -793,23 +809,20 @@
         return null;
       },
       /**
-       * Finds the Mortgage button inside the property card popover/modal
+       * Finds the Mortgage [🗑️] button inside the property card popover/modal
        */
       findModalMortgageButton() {
-        const openCard = this.getOpenPropertyCard();
-        const searchContainers = openCard ? [openCard.el] : document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="popover" i]');
-        for (const c of searchContainers) {
-          if (hud && hud.contains(c)) continue;
-          const btns = c.querySelectorAll('button, [role="button"], [class*="button" i], [class*="btn" i]');
-          for (let i = 0; i < btns.length; i++) {
-            const btn = btns[i];
-            if (!isVisibleAndEnabled(btn)) continue;
-            const inner = (btn.innerHTML || "").toLowerCase();
-            const text = normalizeText(btn);
-            if ((text.includes("mortgage") || inner.includes("mortgage")) && !text.includes("unmortgage") && !inner.includes("unmortgage")) {
-              return btn;
-            }
+        const actionBtns = this.getPropertyCardActionButtons();
+        for (const btn of actionBtns) {
+          const inner = (btn.innerHTML || "").toLowerCase();
+          const text = normalizeText(btn);
+          if (text.includes("mortgage") || inner.includes("mortgage") || inner.includes("trash") || inner.includes("bin") || inner.includes("m19 7") || inner.includes("svg")) {
+            if (actionBtns.length >= 3 && btn === actionBtns[2]) return btn;
+            if (text.includes("mortgage") && !text.includes("unmortgage")) return btn;
           }
+        }
+        if (actionBtns.length >= 3) {
+          return actionBtns[2];
         }
         for (const b of allButtons) {
           const text = b.text || "";
@@ -821,15 +834,18 @@
         return null;
       },
       /**
-       * Finds a property item in the "My properties" sidebar to open its management modal
+       * Finds a property item specifically in the right-side "My properties" sidebar
        */
       findSidebarPropertyItem(propertyName) {
         if (!propertyName) return null;
         const lowerTarget = propertyName.toLowerCase();
-        const allItems = document.querySelectorAll('div, li, button, [class*="property"]');
+        const allItems = document.querySelectorAll('div, li, button, [class*="property"], [class*="item"]');
         for (let i = 0; i < allItems.length; i++) {
           const el = allItems[i];
+          if (hud && hud.contains(el)) continue;
           if (!isVisibleAndEnabled(el)) continue;
+          const rect = el.getBoundingClientRect();
+          if (rect.left < window.innerWidth * 0.55) continue;
           const text = normalizeText(el);
           if (text === lowerTarget || text.includes(lowerTarget) && text.length < lowerTarget.length + 15) {
             return el;
@@ -860,6 +876,28 @@
           }
           const text = normalizeText(el);
           if (text === lowerName || text.startsWith(lowerName) || text.endsWith(lowerName) || text.includes(lowerName) && text.length < lowerName.length + 35) {
+            return el;
+          }
+        }
+        return null;
+      },
+      /**
+       * Detects the red/orange [Bankrupt] button that appears when the player is in debt
+       */
+      findBankruptButton() {
+        for (const b of allButtons) {
+          const txt = (b.text || "").toLowerCase();
+          if (txt === "bankrupt" || txt.includes("bankrupt")) {
+            return b.el;
+          }
+        }
+        const candidates = document.querySelectorAll('button, [role="button"], a, div');
+        for (let i = 0; i < candidates.length; i++) {
+          const el = candidates[i];
+          if (hud && hud.contains(el)) continue;
+          if (!isVisibleAndEnabled(el)) continue;
+          const txt = normalizeText(el);
+          if (txt === "bankrupt" || txt.includes("bankrupt") && txt.length <= 20) {
             return el;
           }
         }
@@ -1048,12 +1086,18 @@
         const rowText = row.innerText || "";
         if (!rowText.includes("$") || rowText.length > 160) continue;
         if (/paid|bought|rolled|landed|rent|tax|pardon|jail|prison|bankrupt|joined|left|game started|is playing/i.test(rowText)) continue;
-        const cashMatch = /\$\s*(-?\d{1,5})|(-?\d{1,5})\s*\$|(-\s*\$?\d{1,5})/.exec(rowText);
-        if (!cashMatch) continue;
-        const rawCash = (cashMatch[1] || cashMatch[2] || cashMatch[3] || "").replace(/[\$\s]/g, "");
-        const parsedCash = parseInt(rawCash, 10);
+        const normalizedRow = rowText.replace(/[−–—]/g, "-");
+        const negCashMatch = /\$\s*-\s*(\d{1,6})|-\s*\$\s*(\d{1,6})/.exec(normalizedRow);
+        let parsedCash;
+        if (negCashMatch) {
+          parsedCash = -parseInt(negCashMatch[1] || negCashMatch[2], 10);
+        } else {
+          const posCashMatch = /\$\s*(\d{1,6})|(\d{1,6})\s*\$/.exec(normalizedRow);
+          if (!posCashMatch) continue;
+          parsedCash = parseInt(posCashMatch[1] || posCashMatch[2], 10);
+        }
         if (isNaN(parsedCash)) continue;
-        const beforeDollar = rowText.split("$")[0].trim();
+        const beforeDollar = normalizedRow.split("$")[0].trim();
         const candidateLines = beforeDollar.split("\n").map((l) => l.trim()).filter(Boolean);
         let candidateName = null;
         for (const line of candidateLines) {
@@ -1101,18 +1145,22 @@
           continue;
         }
         if (text.toLowerCase().includes(currentLower) && text.includes("$") && text.length <= 150) {
-          const cashMatch = /\$\s*(-?\d{1,5})|(-?\d{1,5})\s*\$|(-\s*\$?\d{1,5})/.exec(text);
-          if (cashMatch) {
-            const rawCash = (cashMatch[1] || cashMatch[2] || cashMatch[3] || "").replace(/[\$\s]/g, "");
-            const parsedCash = parseInt(rawCash, 10);
-            if (!isNaN(parsedCash)) {
-              GameMemory.myCash = parsedCash;
-              GameMemory.cashVerified = true;
-              GameMemory.players[currentName] = GameMemory.players[currentName] || { cash: parsedCash, pos: GameMemory.myPos, isMe: true };
-              GameMemory.players[currentName].cash = parsedCash;
-              GameMemory.players[currentName].isMe = true;
-              break;
-            }
+          const normText = text.replace(/[−–—]/g, "-");
+          const negMatch = /\$\s*-\s*(\d{1,6})|-\s*\$\s*(\d{1,6})/.exec(normText);
+          let parsedCash;
+          if (negMatch) {
+            parsedCash = -parseInt(negMatch[1] || negMatch[2], 10);
+          } else {
+            const posMatch = /\$\s*(\d{1,6})|(\d{1,6})\s*\$/.exec(normText);
+            if (posMatch) parsedCash = parseInt(posMatch[1] || posMatch[2], 10);
+          }
+          if (typeof parsedCash === "number" && !isNaN(parsedCash)) {
+            GameMemory.myCash = parsedCash;
+            GameMemory.cashVerified = true;
+            GameMemory.players[currentName] = GameMemory.players[currentName] || { cash: parsedCash, pos: GameMemory.myPos, isMe: true };
+            GameMemory.players[currentName].cash = parsedCash;
+            GameMemory.players[currentName].isMe = true;
+            break;
           }
         }
       }
@@ -1432,7 +1480,47 @@
     }
     const modalRect = modal.getBoundingClientRect();
     const modalMidX = modalRect.left + modalRect.width / 2;
+    let leftPlayerName = null;
+    let rightPlayerName = null;
+    const headerCandidates = Array.from(modal.querySelectorAll("h1, h2, h3, h4, h5, div, span, strong, b, p")).filter((el) => {
+      const rect = el.getBoundingClientRect();
+      return rect.top < modalRect.top + modalRect.height * 0.4 && rect.height > 10;
+    });
+    for (const el of headerCandidates) {
+      const t = (el.innerText || "").trim();
+      if (t.length >= 2 && t.length <= 25 && !t.includes("$") && !t.toLowerCase().includes("trade") && !t.toLowerCase().includes("create") && !BOARD_LABELS_BLACKLIST.has(t.toLowerCase())) {
+        const rect = el.getBoundingClientRect();
+        const center = rect.left + rect.width / 2;
+        for (const pName of Object.keys(GameMemory.players)) {
+          if (t.toLowerCase().includes(pName.toLowerCase()) || pName.toLowerCase().includes(t.toLowerCase())) {
+            if (center < modalMidX && !leftPlayerName) leftPlayerName = pName;
+            else if (center >= modalMidX && !rightPlayerName) rightPlayerName = pName;
+          }
+        }
+        if (GameMemory.isMe(t)) {
+          if (center < modalMidX && !leftPlayerName) leftPlayerName = t;
+          else if (center >= modalMidX && !rightPlayerName) rightPlayerName = t;
+        }
+      }
+    }
+    let meIsOnLeft = false;
     let partnerName = "Opponent";
+    if (leftPlayerName && GameMemory.isMe(leftPlayerName)) {
+      meIsOnLeft = true;
+      partnerName = rightPlayerName || "Opponent";
+    } else if (rightPlayerName && GameMemory.isMe(rightPlayerName)) {
+      meIsOnLeft = false;
+      partnerName = leftPlayerName || "Opponent";
+    } else if (leftPlayerName && !GameMemory.isMe(leftPlayerName)) {
+      meIsOnLeft = false;
+      partnerName = leftPlayerName;
+    } else if (rightPlayerName && !GameMemory.isMe(rightPlayerName)) {
+      meIsOnLeft = true;
+      partnerName = rightPlayerName;
+    } else {
+      meIsOnLeft = false;
+      partnerName = "Opponent";
+    }
     let givenCash = 0;
     let receivedCash = 0;
     const givenTiles = [];
@@ -1443,9 +1531,11 @@
       const center = rect.left + rect.width / 2;
       const val = parseInt(input.value, 10) || 0;
       if (center < modalMidX) {
-        givenCash = val;
+        if (meIsOnLeft) givenCash = val;
+        else receivedCash = val;
       } else {
-        receivedCash = val;
+        if (meIsOnLeft) receivedCash = val;
+        else givenCash = val;
       }
     }
     if (givenCash === 0 && receivedCash === 0) {
@@ -1457,8 +1547,13 @@
         const rect = badge.getBoundingClientRect();
         const center = rect.left + rect.width / 2;
         const val = parseInt((badge.innerText || "").replace(/\D/g, ""), 10) || 0;
-        if (center < modalMidX && givenCash === 0) givenCash = val;
-        else if (center >= modalMidX && receivedCash === 0) receivedCash = val;
+        if (center < modalMidX) {
+          if (meIsOnLeft && givenCash === 0) givenCash = val;
+          else if (!meIsOnLeft && receivedCash === 0) receivedCash = val;
+        } else {
+          if (meIsOnLeft && receivedCash === 0) receivedCash = val;
+          else if (!meIsOnLeft && givenCash === 0) givenCash = val;
+        }
       }
     }
     const cards = Array.from(modal.querySelectorAll('div, li, button, [class*="item" i], [class*="property" i], [class*="card" i]'));
@@ -1474,30 +1569,12 @@
           const rect = card.getBoundingClientRect();
           const center = rect.left + rect.width / 2;
           if (center < modalMidX) {
-            givenTiles.push(tile);
+            if (meIsOnLeft) givenTiles.push(tile);
+            else receivedTiles.push(tile);
           } else {
-            receivedTiles.push(tile);
+            if (meIsOnLeft) receivedTiles.push(tile);
+            else givenTiles.push(tile);
           }
-        }
-      }
-    }
-    const topCandidates = Array.from(modal.querySelectorAll("h1, h2, h3, h4, h5, div, span, strong, b")).filter((el) => {
-      const rect = el.getBoundingClientRect();
-      return rect.left + rect.width / 2 >= modalMidX && rect.top < modalRect.top + modalRect.height * 0.35;
-    });
-    for (const el of topCandidates) {
-      const t = (el.innerText || "").trim();
-      if (t.length >= 2 && t.length <= 24 && !t.includes("$") && !t.toLowerCase().includes("create") && !t.toLowerCase().includes("trade")) {
-        for (const pName of Object.keys(GameMemory.players)) {
-          if (!GameMemory.isMe(pName) && t.toLowerCase().includes(pName.toLowerCase())) {
-            partnerName = pName;
-            break;
-          }
-        }
-        if (partnerName !== "Opponent") break;
-        if (!GameMemory.isMe(t) && !BOARD_LABELS_BLACKLIST.has(t.toLowerCase())) {
-          partnerName = t;
-          break;
         }
       }
     }
@@ -1664,18 +1741,22 @@
      */
     getSafeTradeSacrifices() {
       const blockers = new Set(this.getCriticalBlockers().map((b) => b.tile.id));
-      const sacrifices = [];
+      const safe = [];
+      const tradable = [];
       for (const tile of BOARD_TILES) {
         if (!tile.group) continue;
         const info = GameMemory.ownership[tile.id];
-        if (info && GameMemory.isMe(info.owner) && info.houses === 0 && !blockers.has(tile.id)) {
+        if (info && GameMemory.isMe(info.owner) && info.houses === 0) {
           const { owned, total } = GameMemory.getGroupCount(tile.group, "__ME__");
           if (owned < total - 1) {
-            sacrifices.push(tile);
+            if (!blockers.has(tile.id)) {
+              safe.push(tile);
+            }
+            tradable.push(tile);
           }
         }
       }
-      return sacrifices;
+      return safe.length > 0 ? safe : tradable;
     },
     isBlockerAgainstAnyOpponent(tile) {
       if (!tile || !tile.group) return false;
@@ -1734,19 +1815,13 @@
     },
     /**
      * Evaluates property purchase when landing on unowned tile.
-     * Enforces strict buy preference: Always secure airports, utilities, and properties!
+     * PROPERTIES ARE #1 PRIORITY: Always secure properties, airports, and utilities!
      */
     shouldBuyProperty(tile, price, myCash) {
       if (myCash < price) {
         return {
           buy: false,
           reason: `Cannot afford ${tile ? tile.name : "property"} ($${price} > $${myCash})`
-        };
-      }
-      if (tile && OpponentTracker.isBlockerAgainstAnyOpponent(tile)) {
-        return {
-          buy: true,
-          reason: `DEFENSIVE BLOCK: Prevents opponent from completing ${tile.group}!`
         };
       }
       const mySet = tile?.group ? GameMemory.getGroupCount(tile.group, "__ME__") : null;
@@ -1756,27 +1831,39 @@
           reason: `CRITICAL: Completes ${tile.group} Monopoly!`
         };
       }
-      const danger = this.analyzeDangerAhead(GameMemory.myPos);
-      const dynamicReserve = this.computeDynamicReserve(GameMemory.myPos);
-      const postCash = myCash - price;
-      if (danger.maxDangerWindowLoss >= 250 && postCash < dynamicReserve) {
+      if (mySet && mySet.owned >= 1) {
         return {
-          buy: false,
-          reason: `INTELLIGENT SKIP: Facing dangerous opponent territory ($${danger.maxDangerWindowLoss} rent) ahead. Preserving $${myCash} cash to survive roll.`
+          buy: true,
+          reason: `MONOPOLY BUILDER: Secures ${mySet.owned + 1}/${mySet.total} for ${tile.group} set!`
         };
       }
-      if (tile && (tile.group === "Airport" || tile.group === "Airports")) {
+      if (tile && OpponentTracker.isBlockerAgainstAnyOpponent(tile)) {
+        return {
+          buy: true,
+          reason: `DEFENSIVE BLOCK: Prevents opponent from completing ${tile.group}!`
+        };
+      }
+      if (tile && (tile.group === "Airport" || tile.group === "Airports" || tile.type === "airport")) {
         return { buy: true, reason: `Essential High-Yield Asset: ${tile.name} (Airport)` };
       }
-      if (tile && (tile.group === "Utility" || tile.group === "Utilities")) {
+      if (tile && (tile.group === "Utility" || tile.group === "Utilities" || tile.type === "utility")) {
         return { buy: true, reason: `Cashflow Asset: ${tile.name} (Utility)` };
       }
-      if (tile && HIGH_TRAFFIC_GROUPS.has(tile.group)) {
-        return { buy: true, reason: `High-Traffic Strategic Asset: ${tile.name} (${tile.group})` };
+      const unownedRemaining = BOARD_TILES.filter((t) => t.group && (!GameMemory.ownership[t.id] || !GameMemory.ownership[t.id].owner)).length;
+      const isFinaleEndGame = unownedRemaining === 0 || GameMemory.turnCount > 30 && myCash < 300;
+      if (isFinaleEndGame) {
+        const danger = this.analyzeDangerAhead(GameMemory.myPos);
+        const postCash = myCash - price;
+        if (danger.maxDangerWindowLoss >= 300 && postCash < 60) {
+          return {
+            buy: false,
+            reason: `FINALE END-GAME SKIP: Facing lethal hotel ($${danger.maxDangerWindowLoss}) directly ahead. Preserving $${myCash} survival cash.`
+          };
+        }
       }
       return {
         buy: true,
-        reason: `EV+ Buy: ${tile ? tile.name : "property"} ($${price})`
+        reason: `PRIORITY ACQUISITION: ${tile ? tile.name : "Property"} ($${price}) [Set Progress / Net Worth]`
       };
     }
   };
@@ -2146,16 +2233,31 @@
           chatReply: `Decline: That completes your ${oppGroupName} set and puts me in danger. No deal.`
         };
       }
-      if (givesOppMonopoly && completesMyMonopoly) {
-        const oppCash = GameMemory.players[partnerName]?.cash ?? 500;
-        const myCash = GameMemory.myCash + receivedCash - givenCash;
-        if (oppCash >= 500 && myCash < 250) {
-          const neededCash = Math.round(300 - myCash);
+      if (completesMyMonopoly) {
+        const myCashAfter = GameMemory.myCash + receivedCash - givenCash;
+        if (myCashAfter < 30) {
           return {
             accept: false,
-            counterSwap: null,
-            reason: `HOTEL RUSH DANGER: ${partnerName} has $${oppCash} cash to rush hotels, while we have only $${myCash}!`,
-            chatReply: `Decline: You can build hotels immediately while I'm short on cash. Add +$${neededCash} cash or no deal.`
+            counterSwap: this.findCounterTrade(tradeData),
+            reason: `MONOPOLY BLOCKED BY DEBT: Trade completes ${myCompletedGroup} but leaves only $${myCashAfter} cash!`,
+            chatReply: `Decline: That set is great but leaves me with zero cash. Add +$100 cash and I'll accept!`
+          };
+        }
+        if (givesOppMonopoly) {
+          return {
+            accept: true,
+            myGain: 3500,
+            oppGain: 3500,
+            reason: `MUTUAL MONOPOLY SWAP: Both players secure completed color sets (${myCompletedGroup})!`,
+            chatReply: `Deal! Both get sets. Let's see who builds faster!`
+          };
+        } else {
+          return {
+            accept: true,
+            myGain: 5e3,
+            oppGain: 500,
+            reason: `MONOPOLY COMPLETER: Completes our ${myCompletedGroup} monopoly without giving opponent a set!`,
+            chatReply: `Deal accepted! Thanks for the trade.`
           };
         }
       }
@@ -2178,16 +2280,34 @@
         };
       }
       if (oppGain > myGain && !completesMyMonopoly) {
-        const cashDeficit = Math.round(oppGain - myGain) + 30;
+        const counter = this.findCounterTrade(tradeData);
+        if (counter) {
+          return {
+            accept: false,
+            counterSwap: counter,
+            reason: `UNFAIR DEFICIT: Trade favors ${partnerName}. Countering for set completer.`,
+            chatReply: counter.pitch
+          };
+        }
+        const reasonableCash = Math.min(250, Math.max(50, Math.round(givenTiles.reduce((s, t) => s + (t.price || 100), 0) * 0.4)));
+        const givenName2 = givenTiles[0]?.name || "that property";
+        const naturalReplies = [
+          `No deal on ${givenName2}, I'm building toward that set.`,
+          `That offer is too low for ${givenName2}. Need at least +$${reasonableCash} or a better card.`,
+          `Can't trade ${givenName2} without getting a property I need for my monopoly.`,
+          `Not looking to give up ${givenName2} right now. Offer a property from my missing sets.`
+        ];
+        const chatReply = naturalReplies[Math.floor(Math.random() * naturalReplies.length)];
         return {
           accept: false,
-          counterSwap: this.findCounterTrade(tradeData),
+          counterSwap: null,
           reason: `UNFAIR DEFICIT: Trade favors ${partnerName} by +$${Math.round(oppGain - myGain)}.`,
-          chatReply: `Decline: Net value is short by $${cashDeficit}. Add cash and re-offer.`
+          chatReply
         };
       }
       const acceptable = myGain > 0 && (myGain >= oppGain * CONFIG.TRADE_MIN_ADVANTAGE_RATIO || completesMyMonopoly) && sim.isSimulationEVPlus;
       GameMemory.lastTradeVerdict = acceptable ? "ACCEPTABLE" : "UNFAVORABLE";
+      const givenName = givenTiles[0]?.name || "property";
       return {
         accept: acceptable,
         myGain: Math.round(myGain),
@@ -2195,7 +2315,7 @@
         sim20Rounds: sim,
         counterSwap: acceptable ? null : this.findCounterTrade(tradeData),
         reason: acceptable ? `GRANDMASTER EV+ TRADE: Net gain +$${Math.round(myGain)} vs Opp +$${Math.round(oppGain)} (20-turn Sim: +EV)` : `Unfavorable utility: Net gain $${Math.round(myGain)} < requirement`,
-        chatReply: acceptable ? "Deal accepted! Win-win." : `Decline: Value doesn't work out for me. Re-offer with better terms.`
+        chatReply: acceptable ? "Deal accepted! Win-win." : `Decline: Value doesn't work for ${givenName}. Need better terms or missing set pieces.`
       };
     },
     /**
@@ -2327,7 +2447,7 @@
     /**
      * Universal HTTP helper using GM_xmlhttpRequest if present, else fetch
      */
-    httpRequest({ method = "POST", url, data = null, timeout = 2800 }) {
+    httpRequest({ method = "POST", url, data = null, timeout = CONFIG.OLLAMA_TIMEOUT_MS || 6e3 }) {
       return new Promise((resolve, reject) => {
         const gmReq = typeof GM_xmlhttpRequest !== "undefined" ? GM_xmlhttpRequest : typeof GM !== "undefined" && GM && GM.xmlHttpRequest ? GM.xmlHttpRequest : null;
         if (gmReq) {
@@ -2348,7 +2468,7 @@
                 reject(new Error(`Ollama HTTP ${res.status}: ${res.statusText || ""}`));
               }
             },
-            ontimeout: () => reject(new Error("Ollama request timed out (>2.8s)")),
+            ontimeout: () => reject(new Error("Ollama request timed out")),
             onerror: (err) => reject(new Error(`Ollama connection error: ${err.message || "Host unreachable"}`))
           });
           return;
@@ -2396,7 +2516,58 @@
       }
     },
     /**
-     * Evaluates incoming trade with local LLM or falls back to Minimax Markov
+     * Executes chat completion with multi-tier model priority:
+     * 1st priority: Primary configured model (e.g. llama3.2-vision:latest)
+     * 2nd priority: qwen2.5:7b (automatic fallback if primary fails)
+     */
+    async sendChatCompletion(messages, options = { temperature: 0.1, num_predict: 120 }) {
+      const primaryModel = CONFIG.OLLAMA_MODEL || "llama3.2-vision:latest";
+      const fallbackModel = "qwen2.5:7b";
+      try {
+        const data = await this.httpRequest({
+          method: "POST",
+          url: `${CONFIG.OLLAMA_HOST}/api/chat`,
+          data: {
+            model: primaryModel,
+            messages,
+            stream: false,
+            options
+          },
+          timeout: CONFIG.OLLAMA_TIMEOUT_MS || 6e3
+        });
+        if (data?.message?.content) {
+          return { content: data.message.content, modelUsed: primaryModel };
+        }
+        if (data?.error && primaryModel !== fallbackModel) {
+          throw new Error(data.error);
+        }
+      } catch (primaryErr) {
+        if (primaryModel !== fallbackModel) {
+          try {
+            const fallbackData = await this.httpRequest({
+              method: "POST",
+              url: `${CONFIG.OLLAMA_HOST}/api/chat`,
+              data: {
+                model: fallbackModel,
+                messages,
+                stream: false,
+                options
+              },
+              timeout: CONFIG.OLLAMA_TIMEOUT_MS || 6e3
+            });
+            if (fallbackData?.message?.content) {
+              return { content: fallbackData.message.content, modelUsed: fallbackModel };
+            }
+          } catch (fallbackErr) {
+            throw new Error(`Both ${primaryModel} and ${fallbackModel} failed: ${fallbackErr.message}`);
+          }
+        }
+        throw primaryErr;
+      }
+      return null;
+    },
+    /**
+     * Evaluates incoming trade with local LLM (1st priority: llama3.2-vision, 2nd: qwen2.5:7b, 3rd: Minimax)
      */
     async evaluateTradeWithLLM(tradeData) {
       const ruleVerdict = TradeEngine.evaluateIncomingTrade(tradeData);
@@ -2405,31 +2576,18 @@
       }
       const prompt = this.buildPrompt(tradeData);
       try {
-        const payload = {
-          model: CONFIG.OLLAMA_MODEL,
-          messages: [
-            {
-              role: "system",
-              content: `You are a Grandmaster Monopoly / RichUp AI player whose primary goal is to WIN. Never trade in the enemy's favor. If enemy completes a monopoly and we do not, you MUST DECLINE. Output ONLY valid JSON in format: {"decision": "CONFIRM" | "DECLINE" | "NEGOTIATE", "reason": "concise rationale under 15 words", "chatReply": "short casual in-game message under 15 words"}`
-            },
-            {
-              role: "user",
-              content: prompt
-            }
-          ],
-          stream: false,
-          options: {
-            temperature: 0.1,
-            num_predict: 120
+        const messages = [
+          {
+            role: "system",
+            content: `You are a Grandmaster Monopoly / RichUp AI player whose primary goal is to WIN. Never trade in the enemy's favor. If enemy completes a monopoly and we do not, you MUST DECLINE. Output ONLY valid JSON in format: {"decision": "CONFIRM" | "DECLINE" | "NEGOTIATE", "reason": "concise rationale under 15 words", "chatReply": "short casual in-game message under 15 words"}`
+          },
+          {
+            role: "user",
+            content: prompt
           }
-        };
-        const data = await this.httpRequest({
-          method: "POST",
-          url: `${CONFIG.OLLAMA_HOST}/api/chat`,
-          data: payload,
-          timeout: CONFIG.OLLAMA_TIMEOUT_MS || 5500
-        });
-        const rawContent = data?.message?.content || "";
+        ];
+        const result = await this.sendChatCompletion(messages, { temperature: 0.1, num_predict: 120 });
+        const rawContent = result?.content || "";
         const parsed = this.parseJsonSafely(rawContent);
         if (parsed && (parsed.decision === "CONFIRM" || parsed.decision === "DECLINE" || parsed.decision === "NEGOTIATE")) {
           const isAccept = parsed.decision === "CONFIRM" && ruleVerdict.accept;
@@ -2438,7 +2596,7 @@
           return {
             accept: isAccept,
             negotiate: !isAccept && isNegotiate,
-            reason: isAccept ? `[Ollama ${CONFIG.OLLAMA_MODEL}] ${parsed.reason}` : ruleVerdict.accept ? `[Ollama ${CONFIG.OLLAMA_MODEL}] ${parsed.reason}` : ruleVerdict.reason,
+            reason: isAccept ? `[Ollama ${result.modelUsed}] ${parsed.reason}` : ruleVerdict.accept ? `[Ollama ${result.modelUsed}] ${parsed.reason}` : ruleVerdict.reason,
             chatReply,
             counterSwap: ruleVerdict.counterSwap
           };
@@ -2645,21 +2803,12 @@ Guidelines:
 - If they ask someone to start/ready: say "lets go" or "ready".
 - Output ONLY the message text. No quotes.`;
       try {
-        const data = await this.httpRequest({
-          method: "POST",
-          url: `${CONFIG.OLLAMA_HOST}/api/chat`,
-          data: {
-            model: CONFIG.OLLAMA_MODEL,
-            messages: [
-              { role: "system", content: "You are an authentic online multiplayer gamer. Output ONLY a casual, friendly chat message under 8 words. No quotation marks." },
-              { role: "user", content: prompt }
-            ],
-            stream: false,
-            options: { temperature: 0.6, num_predict: 25 }
-          },
-          timeout: 1800
-        });
-        const content = (data?.message?.content || "").replace(/^["']|["']$/g, "").trim();
+        const messages = [
+          { role: "system", content: "You are an authentic online multiplayer gamer. Output ONLY a casual, friendly chat message under 8 words. No quotation marks." },
+          { role: "user", content: prompt }
+        ];
+        const result = await this.sendChatCompletion(messages, { temperature: 0.6, num_predict: 25 });
+        const content = (result?.content || "").replace(/^["']|["']$/g, "").trim();
         if (content && content.length <= 80) {
           return content;
         }
@@ -2700,25 +2849,17 @@ Guidelines:
         const ownsAll = groupTiles.every((t) => GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
         if (ownsAll) monopolies.push(groupName);
       }
-      const prompt = `Player ${GameMemory.myName}: Cash $${GameMemory.myCash}, Monopolies: [${monopolies.join(", ") || "None"}]. Next turn danger: $${GameMemory.lastDangerEV}.
+      const oppSummaries = Object.entries(GameMemory.players).filter(([pName]) => !GameMemory.isMe(pName)).map(([pName, p]) => `${pName}: $${p.cash} (Pos #${p.pos || 0})`).join(", ") || "None";
+      const prompt = `Player ${GameMemory.myName || "Me"}: Cash $${GameMemory.myCash}, Monopolies: [${monopolies.join(", ") || "None"}], Next turn danger: $${GameMemory.lastDangerEV}, Opponents: [${oppSummaries}].
 Is it optimal to END_TURN now or UPGRADE_HOUSES?
 Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "under 10 words"}`;
       try {
-        const data = await this.httpRequest({
-          method: "POST",
-          url: `${CONFIG.OLLAMA_HOST}/api/chat`,
-          data: {
-            model: CONFIG.OLLAMA_MODEL,
-            messages: [
-              { role: "system", content: 'You are a Grandmaster Monopoly AI. Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "..."}' },
-              { role: "user", content: prompt }
-            ],
-            stream: false,
-            options: { temperature: 0.1, num_predict: 40 }
-          },
-          timeout: 1800
-        });
-        const parsed = this.parseJsonSafely(data?.message?.content || "");
+        const messages = [
+          { role: "system", content: 'You are a Grandmaster Monopoly AI. Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "..."}' },
+          { role: "user", content: prompt }
+        ];
+        const result = await this.sendChatCompletion(messages, { temperature: 0.1, num_predict: 40 });
+        const parsed = this.parseJsonSafely(result?.content || "");
         if (parsed && (parsed.action === "END_TURN" || parsed.action === "UPGRADE")) {
           return parsed;
         }
@@ -2854,72 +2995,88 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     recordSkipped(summary) {
       this.skippedSwaps.set(summary, Date.now());
     },
-    executeProposal(swap, onComplete) {
+    async executeProposal(swap, onComplete) {
       if (this.isExecuting) return;
       this.isExecuting = true;
       logToBot(`[TRADE CREATOR] Starting automated proposal for ${swap.targetOwner}...`);
-      const snapshot = createDOMSnapshot();
-      const createBtn = snapshot.findCreateTradeButton();
-      if (!createBtn) {
-        logToBot("[TRADE CREATOR] Could not find [+ Create] trade button.");
-        this.isExecuting = false;
-        if (onComplete) onComplete(false);
-        return;
-      }
-      delayClick(createBtn, "Opening Create Trade dialog");
-      setTimeout(() => {
-        const snap2 = createDOMSnapshot();
-        const playerBtn = snap2.findPlayerSelectButton(swap.targetOwner);
-        if (!playerBtn) {
-          logToBot(`[TRADE CREATOR] Could not find player button for "${swap.targetOwner}".`);
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const safetyTimer = setTimeout(() => {
+        if (this.isExecuting) {
+          logToBot("[TRADE CREATOR] Safety timeout triggered. Closing modal and resetting lock.");
           this.closeTradeModal();
           this.isExecuting = false;
           if (onComplete) onComplete(false);
+        }
+      }, 12e3);
+      try {
+        const snap1 = createDOMSnapshot();
+        const createBtn = snap1.findCreateTradeButton();
+        if (!createBtn) {
+          logToBot("[TRADE CREATOR] Could not find [+ Create] trade button.");
           return;
         }
-        delayClick(playerBtn, `Selecting trade partner: ${swap.targetOwner}`);
-        setTimeout(() => {
-          const snap3 = createDOMSnapshot();
-          if (swap.myGivenTile) {
-            const myPropCard = snap3.findTradePropertyCard(swap.myGivenTile.name, "mine");
-            if (myPropCard) {
-              delayClick(myPropCard, `Selecting offer property: ${swap.myGivenTile.name}`);
-            } else {
-              logToBot(`[TRADE CREATOR] Could not find offer property: ${swap.myGivenTile.name}`);
-            }
+        createBtn.click();
+        await sleep(600);
+        let playerBtn = null;
+        for (let i = 0; i < 6; i++) {
+          const snap2 = createDOMSnapshot();
+          playerBtn = snap2.findPlayerSelectButton(swap.targetOwner);
+          if (playerBtn) break;
+          await sleep(350);
+        }
+        if (!playerBtn) {
+          logToBot(`[TRADE CREATOR] Could not find player button for "${swap.targetOwner}".`);
+          this.closeTradeModal();
+          return;
+        }
+        playerBtn.click();
+        await sleep(700);
+        const snap3 = createDOMSnapshot();
+        if (swap.myGivenTile) {
+          const myPropCard = snap3.findTradePropertyCard(swap.myGivenTile.name, "mine");
+          if (myPropCard) {
+            myPropCard.click();
+            logToBot(`[TRADE CREATOR] Selected offer property: ${swap.myGivenTile.name}`);
+            await sleep(400);
+          } else {
+            logToBot(`[TRADE CREATOR] Could not find offer property: ${swap.myGivenTile.name}`);
           }
-          setTimeout(() => {
-            const snap4 = createDOMSnapshot();
-            if (swap.myReceivedTile) {
-              const theirPropCard = snap4.findTradePropertyCard(swap.myReceivedTile.name, "theirs");
-              if (theirPropCard) {
-                delayClick(theirPropCard, `Selecting request property: ${swap.myReceivedTile.name}`);
-              } else {
-                logToBot(`[TRADE CREATOR] Could not find request property: ${swap.myReceivedTile.name}`);
-              }
-            }
-            this.adjustCashInTradeModal(swap);
-            setTimeout(() => {
-              const snap5 = createDOMSnapshot();
-              const sendBtn = snap5.findSendTradeButton();
-              if (sendBtn) {
-                delayClick(sendBtn, `Submitting trade proposal to ${swap.targetOwner}`);
-                this.lastProposedTimes.set(swap.targetOwner, Date.now());
-                setTimeout(() => {
-                  ChatEngine.sendChatMessage("tradeOffer", swap.pitch);
-                }, 500);
-                this.isExecuting = false;
-                if (onComplete) onComplete(true);
-              } else {
-                logToBot("[TRADE CREATOR] Could not find [Send trade] button.");
-                this.closeTradeModal();
-                this.isExecuting = false;
-                if (onComplete) onComplete(false);
-              }
-            }, 450);
-          }, 400);
-        }, 500);
-      }, 450);
+        }
+        const snap4 = createDOMSnapshot();
+        if (swap.myReceivedTile) {
+          const theirPropCard = snap4.findTradePropertyCard(swap.myReceivedTile.name, "theirs");
+          if (theirPropCard) {
+            theirPropCard.click();
+            logToBot(`[TRADE CREATOR] Selected request property: ${swap.myReceivedTile.name}`);
+            await sleep(400);
+          } else {
+            logToBot(`[TRADE CREATOR] Could not find request property: ${swap.myReceivedTile.name}`);
+          }
+        }
+        this.adjustCashInTradeModal(swap);
+        await sleep(400);
+        const snap5 = createDOMSnapshot();
+        const sendBtn = snap5.findSendTradeButton();
+        if (sendBtn) {
+          sendBtn.click();
+          logToBot(`[TRADE CREATOR] Trade proposal sent to ${swap.targetOwner}!`);
+          this.lastProposedTimes.set(swap.targetOwner, Date.now());
+          await sleep(600);
+          ChatEngine.sendChatMessage("tradeOffer", swap.pitch);
+          if (onComplete) onComplete(true);
+        } else {
+          logToBot("[TRADE CREATOR] Could not find [Send trade] button.");
+          this.closeTradeModal();
+          if (onComplete) onComplete(false);
+        }
+      } catch (err) {
+        logToBot(`[TRADE CREATOR Error] ${err}`);
+        this.closeTradeModal();
+        if (onComplete) onComplete(false);
+      } finally {
+        clearTimeout(safetyTimer);
+        this.isExecuting = false;
+      }
     },
     adjustCashInTradeModal(swap) {
       try {
@@ -2975,7 +3132,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     closeTradeModal() {
       const closeBtn = document.querySelector('[role="dialog"] button, [class*="modal" i] button, [class*="close" i], button[aria-label*="close" i]');
       if (closeBtn) {
-        delayClick(closeBtn, "Closing trade modal");
+        closeBtn.click();
       }
     }
   };
@@ -3119,8 +3276,9 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
   // src/ui/hudPanel.js
   var HUDPanel = {
     elements: {},
-    maxLogs: 60,
+    maxLogs: 120,
     pendingAdvisorAction: null,
+    activeTab: "brain",
     drag: {
       active: false,
       startX: 0,
@@ -3130,7 +3288,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     },
     inject(onToggleMaster, onExecuteAdvisor, onSkipAdvisor) {
       if (document.getElementById("rubot-hud-panel")) return;
-      let savedGeom = { left: 20, top: 20, width: 340, height: 560 };
+      let savedGeom = { left: 20, top: 20, width: 340, height: 460 };
       try {
         const raw = localStorage.getItem("richup_hud_geometry");
         if (raw) savedGeom = Object.assign(savedGeom, JSON.parse(raw));
@@ -3140,7 +3298,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         const link = document.createElement("link");
         link.id = "rubot-font-link";
         link.rel = "stylesheet";
-        link.href = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap";
+        link.href = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap";
         document.head.appendChild(link);
       }
       const style = document.createElement("style");
@@ -3152,258 +3310,210 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
                 left: ${savedGeom.left}px;
                 width: ${savedGeom.width}px;
                 height: ${savedGeom.height}px;
-                min-width: 300px; min-height: 420px;
-                max-width: 560px; max-height: 840px;
+                min-width: 310px; min-height: 380px;
+                max-width: 520px; max-height: 780px;
                 resize: both; overflow: hidden;
-                background: linear-gradient(160deg, rgba(10,7,22,0.97) 0%, rgba(18,10,38,0.97) 100%);
+                background: linear-gradient(165deg, rgba(13,10,26,0.96) 0%, rgba(20,13,40,0.98) 100%);
                 backdrop-filter: blur(20px) saturate(180%);
-                border: 1px solid rgba(139,92,246,0.35);
-                border-radius: 16px;
-                box-shadow: 0 0 0 1px rgba(139,92,246,0.08), 0 8px 32px rgba(0,0,0,0.7), 0 0 60px rgba(109,40,217,0.12), inset 0 1px 0 rgba(255,255,255,0.06);
+                border: 1px solid rgba(139,92,246,0.3);
+                border-radius: 14px;
+                box-shadow: 0 10px 40px rgba(0,0,0,0.7), 0 0 50px rgba(109,40,217,0.15), inset 0 1px 0 rgba(255,255,255,0.06);
                 color: #f3e8ff;
-                font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-                font-size: 11.5px; z-index: 9999999;
+                font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+                font-size: 11px; z-index: 9999999;
                 display: flex; flex-direction: column; user-select: none;
             }
             .rubot-header {
                 display: flex; justify-content: space-between; align-items: center;
-                padding: 13px 16px 12px;
-                background: linear-gradient(90deg, rgba(109,40,217,0.6) 0%, rgba(76,29,149,0.5) 60%, rgba(139,92,246,0.3) 100%);
-                border-bottom: 1px solid rgba(139,92,246,0.25);
-                border-radius: 16px 16px 0 0; cursor: grab; flex-shrink: 0;
+                padding: 10px 14px;
+                background: linear-gradient(90deg, rgba(109,40,217,0.5) 0%, rgba(76,29,149,0.4) 100%);
+                border-bottom: 1px solid rgba(139,92,246,0.2);
+                border-radius: 14px 14px 0 0; cursor: grab; flex-shrink: 0;
             }
-            .rubot-title-wrap { display: flex; align-items: center; gap: 9px; }
+            .rubot-title-wrap { display: flex; align-items: center; gap: 8px; }
             .rubot-logo {
-                width: 28px; height: 28px; border-radius: 8px;
+                width: 24px; height: 24px; border-radius: 6px;
                 background: linear-gradient(135deg, #8b5cf6, #6d28d9);
                 display: flex; align-items: center; justify-content: center;
-                font-size: 14px; flex-shrink: 0;
-                box-shadow: 0 2px 8px rgba(109,40,217,0.6), inset 0 1px 0 rgba(255,255,255,0.15);
+                font-size: 12px; flex-shrink: 0;
             }
-            .rubot-title-text { display: flex; flex-direction: column; line-height: 1; }
-            .rubot-title-main { font-size: 12px; font-weight: 800; color: #fff; letter-spacing: 1.5px; text-shadow: 0 0 12px rgba(167,139,250,0.8); }
-            .rubot-title-sub { font-size: 8.5px; font-weight: 500; color: rgba(196,181,253,0.7); letter-spacing: 0.5px; margin-top: 2px; }
+            .rubot-title-main { font-size: 11.5px; font-weight: 800; color: #fff; letter-spacing: 1px; }
             .rubot-badge {
-                font-size: 8.5px; font-weight: 700; padding: 3px 9px;
-                border-radius: 20px; letter-spacing: 0.8px;
+                font-size: 8px; font-weight: 700; padding: 2px 7px;
+                border-radius: 12px; letter-spacing: 0.6px;
                 background: rgba(255,255,255,0.08); color: rgba(196,181,253,0.8);
                 border: 1px solid rgba(139,92,246,0.2); transition: all 0.3s ease;
             }
             .rubot-badge.active {
-                background: linear-gradient(90deg, #10b981, #059669); color: #fff;
-                border-color: transparent; box-shadow: 0 0 10px rgba(16,185,129,0.5);
-                animation: rubot-badge-glow 2s ease-in-out infinite;
+                background: #10b981; color: #fff; border-color: transparent;
+                box-shadow: 0 0 10px rgba(16,185,129,0.5);
             }
-            @keyframes rubot-badge-glow {
-                0%, 100% { box-shadow: 0 0 8px rgba(16,185,129,0.4); }
-                50% { box-shadow: 0 0 18px rgba(16,185,129,0.7); }
+            .rubot-top-controls {
+                padding: 10px 12px 6px; display: flex; flex-direction: column; gap: 8px; flex-shrink: 0;
             }
-            .rubot-body {
-                padding: 12px; display: flex; flex-direction: column;
-                gap: 10px; flex: 1; overflow-y: auto;
-                scrollbar-width: thin; scrollbar-color: rgba(139,92,246,0.4) transparent;
+            .rubot-master-btn {
+                background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%);
+                border: none; color: #fff; padding: 9px 14px;
+                font-family: 'Inter', sans-serif; font-weight: 800; font-size: 11px;
+                letter-spacing: 1px; border-radius: 8px; cursor: pointer;
+                box-shadow: 0 3px 12px rgba(109,40,217,0.4); transition: all 0.2s ease;
             }
-            .rubot-body::-webkit-scrollbar { width: 4px; }
-            .rubot-body::-webkit-scrollbar-track { background: transparent; }
-            .rubot-body::-webkit-scrollbar-thumb { background: rgba(139,92,246,0.4); border-radius: 2px; }
-            .rubot-section-label {
-                font-size: 8px; font-weight: 700; letter-spacing: 1.5px;
-                color: rgba(139,92,246,0.7); text-transform: uppercase; margin-bottom: -4px;
+            .rubot-master-btn:hover { box-shadow: 0 4px 16px rgba(109,40,217,0.6); transform: translateY(-1px); }
+            .rubot-master-btn.active {
+                background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+                box-shadow: 0 3px 12px rgba(16,185,129,0.45);
             }
-            .rubot-identity-row {
-                display: flex; align-items: center; gap: 8px;
-                background: rgba(255,255,255,0.03);
-                border: 1px solid rgba(139,92,246,0.18);
-                border-radius: 10px; padding: 8px 10px;
-            }
-            .rubot-identity-icon { font-size: 14px; flex-shrink: 0; }
-            .rubot-name-input {
-                flex: 1; background: transparent; border: none; color: #fff;
-                font-family: 'Inter', sans-serif; font-size: 11.5px; font-weight: 600;
-                outline: none; min-width: 0;
-            }
-            .rubot-name-input::placeholder { color: rgba(167,139,250,0.4); }
-            .rubot-stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
-            .rubot-stat-card {
-                background: rgba(255,255,255,0.03);
-                border: 1px solid rgba(139,92,246,0.15);
-                border-radius: 10px; padding: 9px 10px;
-                display: flex; flex-direction: column; gap: 4px;
-                transition: border-color 0.2s, box-shadow 0.2s;
-            }
-            .rubot-stat-card:hover { border-color: rgba(139,92,246,0.35); box-shadow: 0 0 12px rgba(109,40,217,0.1); }
-            .rubot-stat-label { font-size: 8.5px; font-weight: 600; color: rgba(167,139,250,0.6); text-transform: uppercase; letter-spacing: 0.8px; }
-            .rubot-stat-val {
-                font-size: 17px; font-weight: 800; line-height: 1;
-                background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-            }
-            .rubot-stat-val.green { background-image: linear-gradient(135deg, #34d399, #10b981); }
-            .rubot-stat-val.violet { background-image: linear-gradient(135deg, #c084fc, #a78bfa); }
-            .rubot-stat-val.amber { background-image: linear-gradient(135deg, #fbbf24, #f59e0b); }
-            .rubot-stat-val.blue { background-image: linear-gradient(135deg, #60a5fa, #3b82f6); }
-            .rubot-stat-val.red { background-image: linear-gradient(135deg, #f87171, #ef4444); }
             .rubot-mode-wrap {
-                display: flex; background: rgba(0,0,0,0.35);
-                border-radius: 10px; padding: 3px;
-                border: 1px solid rgba(139,92,246,0.2); gap: 3px;
+                display: flex; background: rgba(0,0,0,0.3);
+                border-radius: 8px; padding: 2px;
+                border: 1px solid rgba(139,92,246,0.18); gap: 2px;
             }
             .rubot-mode-btn {
                 flex: 1; background: transparent; border: none;
                 color: rgba(196,181,253,0.6); font-family: 'Inter', sans-serif;
-                font-weight: 700; font-size: 10px; letter-spacing: 0.5px;
-                padding: 6px 4px; border-radius: 7px; cursor: pointer; transition: all 0.2s ease;
+                font-weight: 700; font-size: 9.5px; padding: 5px 4px;
+                border-radius: 6px; cursor: pointer; transition: all 0.15s ease;
             }
-            .rubot-mode-btn:hover { color: #c4b5fd; }
             .rubot-mode-btn.active {
                 background: linear-gradient(135deg, #7c3aed, #6d28d9); color: #fff;
-                box-shadow: 0 2px 8px rgba(109,40,217,0.45), inset 0 1px 0 rgba(255,255,255,0.1);
+                box-shadow: 0 1px 6px rgba(109,40,217,0.4);
             }
-            .rubot-advisor-box {
-                background: linear-gradient(135deg, rgba(124,58,237,0.15) 0%, rgba(76,29,149,0.2) 100%);
-                border: 1px solid rgba(167,139,250,0.5);
-                border-radius: 10px; padding: 11px 12px;
-                display: flex; flex-direction: column; gap: 9px;
-                animation: rubot-adv-pulse 2.5s ease-in-out infinite;
-                position: relative; overflow: hidden;
+            .rubot-tab-bar {
+                display: flex; background: rgba(0,0,0,0.25);
+                border-bottom: 1px solid rgba(139,92,246,0.18);
+                padding: 0 10px; gap: 4px; flex-shrink: 0;
             }
-            .rubot-advisor-box::before {
-                content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px;
-                background: linear-gradient(90deg, transparent, rgba(167,139,250,0.7), transparent);
+            .rubot-tab-btn {
+                background: transparent; border: none;
+                color: rgba(196,181,253,0.6); font-family: 'Inter', sans-serif;
+                font-weight: 700; font-size: 10px; padding: 8px 10px;
+                cursor: pointer; border-bottom: 2px solid transparent;
+                transition: all 0.2s; display: flex; align-items: center; gap: 5px;
             }
-            @keyframes rubot-adv-pulse {
-                0%, 100% { box-shadow: 0 0 10px rgba(124,58,237,0.2); }
-                50% { box-shadow: 0 0 22px rgba(167,139,250,0.35); }
+            .rubot-tab-btn:hover { color: #e9d5ff; }
+            .rubot-tab-btn.active {
+                color: #fff; border-bottom-color: #8b5cf6;
+                text-shadow: 0 0 10px rgba(167,139,250,0.5);
             }
-            .rubot-adv-header { display: flex; align-items: center; gap: 7px; }
-            .rubot-adv-dot {
-                width: 7px; height: 7px; border-radius: 50%; background: #a78bfa; flex-shrink: 0;
-                box-shadow: 0 0 6px rgba(167,139,250,0.8);
-                animation: rubot-dot-blink 1.2s ease-in-out infinite;
+            .rubot-tab-content {
+                padding: 10px 12px; display: flex; flex-direction: column;
+                flex: 1; overflow-y: auto; gap: 8px;
             }
-            @keyframes rubot-dot-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-            .rubot-advisor-title { font-weight: 700; font-size: 10.5px; color: #e9d5ff; letter-spacing: 0.3px; }
-            .rubot-advisor-desc { font-size: 10.5px; color: #ddd6fe; line-height: 1.45; }
-            .rubot-advisor-btns { display: flex; gap: 7px; }
-            .rubot-adv-btn {
-                flex: 1; padding: 7px; border: none; border-radius: 8px;
-                font-family: 'Inter', sans-serif; font-weight: 700; font-size: 10.5px;
-                letter-spacing: 0.3px; cursor: pointer; transition: all 0.15s ease;
+            .rubot-tab-page { display: none; flex-direction: column; gap: 8px; flex: 1; }
+            .rubot-tab-page.active { display: flex; }
+
+            /* Ollama Tab */
+            .rubot-status-card {
+                display: flex; align-items: center; justify-content: space-between;
+                padding: 7px 10px; border-radius: 8px;
+                background: rgba(255,255,255,0.02); border: 1px solid rgba(139,92,246,0.15);
             }
-            .rubot-adv-btn.exec {
-                background: linear-gradient(135deg, #10b981, #059669); color: #fff;
-                box-shadow: 0 3px 10px rgba(16,185,129,0.35);
+            .rubot-status-indicator { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 10px; }
+            .rubot-status-dot { width: 7px; height: 7px; border-radius: 50%; background: #9ca3af; }
+            .rubot-status-dot.online { background: #34d399; box-shadow: 0 0 8px rgba(52,211,153,0.8); }
+            .rubot-status-dot.offline { background: #ef4444; }
+            .rubot-field-group { display: flex; flex-direction: column; gap: 4px; }
+            .rubot-field-label { font-size: 9px; font-weight: 600; color: rgba(167,139,250,0.7); text-transform: uppercase; letter-spacing: 0.5px; }
+            .rubot-input {
+                background: rgba(0,0,0,0.35); border: 1px solid rgba(139,92,246,0.22);
+                border-radius: 6px; color: #fff; padding: 6px 8px;
+                font-family: 'JetBrains Mono', monospace; font-size: 10px; outline: none;
             }
-            .rubot-adv-btn.exec:hover { box-shadow: 0 4px 15px rgba(16,185,129,0.55); transform: translateY(-1px); }
-            .rubot-adv-btn.skip {
-                background: rgba(255,255,255,0.07); color: #c4b5fd;
-                border: 1px solid rgba(139,92,246,0.25);
+            .rubot-input:focus { border-color: rgba(139,92,246,0.6); }
+            .rubot-select {
+                background: #191230; border: 1px solid rgba(139,92,246,0.25);
+                border-radius: 6px; color: #fff; padding: 6px 8px;
+                font-family: 'Inter', sans-serif; font-size: 10px; outline: none;
             }
-            .rubot-adv-btn.skip:hover { background: rgba(255,255,255,0.12); }
-            .rubot-master-btn {
-                background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 50%, #5b21b6 100%);
-                border: none; color: #fff; padding: 11px 16px;
-                font-family: 'Inter', sans-serif; font-weight: 800; font-size: 12px;
-                letter-spacing: 1px; border-radius: 10px; cursor: pointer;
-                box-shadow: 0 4px 15px rgba(109,40,217,0.45), inset 0 1px 0 rgba(255,255,255,0.12);
-                transition: all 0.2s ease; position: relative; overflow: hidden;
+            .rubot-btn-test {
+                background: linear-gradient(135deg, rgba(124,58,237,0.3) 0%, rgba(109,40,217,0.4) 100%);
+                border: 1px solid rgba(139,92,246,0.4); color: #e9d5ff;
+                padding: 7px; border-radius: 7px; font-weight: 700; font-size: 10px;
+                cursor: pointer; transition: all 0.2s; text-align: center; margin-top: 2px;
             }
-            .rubot-master-btn::after {
-                content: ''; position: absolute; top: 0; left: -100%; width: 50%; height: 100%;
-                background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent);
-                transition: left 0.5s ease;
+            .rubot-btn-test:hover { background: rgba(139,92,246,0.45); color: #fff; }
+            .rubot-info-box {
+                font-size: 9.5px; color: rgba(196,181,253,0.65); line-height: 1.4;
+                padding: 6px 8px; border-radius: 6px; background: rgba(139,92,246,0.06);
+                border: 1px dashed rgba(139,92,246,0.2);
             }
-            .rubot-master-btn:hover::after { left: 150%; }
-            .rubot-master-btn:hover { box-shadow: 0 6px 22px rgba(109,40,217,0.6); transform: translateY(-1px); }
-            .rubot-master-btn:active { transform: translateY(0); }
-            .rubot-master-btn.active {
-                background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-                box-shadow: 0 4px 15px rgba(16,185,129,0.45), inset 0 1px 0 rgba(255,255,255,0.12);
+
+            /* Toggles Tab */
+            .rubot-toggles-list { display: flex; flex-direction: column; gap: 5px; }
+            .rubot-toggle-item {
+                display: flex; align-items: center; justify-content: space-between;
+                padding: 6px 9px; background: rgba(255,255,255,0.02);
+                border: 1px solid rgba(139,92,246,0.12); border-radius: 8px;
+                cursor: pointer; transition: border-color 0.2s;
             }
-            .rubot-master-btn.active:hover { box-shadow: 0 6px 22px rgba(16,185,129,0.6); }
-            .rubot-ollama-section {
-                background: rgba(109,40,217,0.06);
-                border: 1px solid rgba(139,92,246,0.2);
-                border-radius: 10px; padding: 9px 11px;
-                display: flex; flex-direction: column; gap: 7px;
-            }
-            .rubot-ollama-header { display: flex; align-items: center; gap: 8px; }
-            .rubot-toggle-pill { position: relative; width: 34px; height: 18px; flex-shrink: 0; }
+            .rubot-toggle-item:hover { border-color: rgba(139,92,246,0.3); }
+            .rubot-toggle-info { display: flex; flex-direction: column; gap: 1px; }
+            .rubot-toggle-name { font-size: 10px; font-weight: 700; color: #e9d5ff; }
+            .rubot-toggle-desc { font-size: 8.5px; color: rgba(196,181,253,0.55); }
+            .rubot-toggle-pill { position: relative; width: 30px; height: 16px; flex-shrink: 0; }
             .rubot-toggle-pill input { opacity: 0; width: 0; height: 0; position: absolute; }
             .rubot-pill-track {
                 position: absolute; inset: 0; background: rgba(255,255,255,0.1);
                 border-radius: 20px; border: 1px solid rgba(139,92,246,0.3);
-                cursor: pointer; transition: all 0.25s ease;
+                transition: all 0.2s ease;
             }
             .rubot-pill-track::after {
                 content: ''; position: absolute; left: 2px; top: 50%; transform: translateY(-50%);
-                width: 12px; height: 12px; border-radius: 50%;
-                background: rgba(196,181,253,0.5); transition: all 0.25s ease;
+                width: 10px; height: 10px; border-radius: 50%;
+                background: rgba(196,181,253,0.5); transition: all 0.2s ease;
             }
             .rubot-toggle-pill input:checked + .rubot-pill-track {
-                background: linear-gradient(135deg, #7c3aed, #6d28d9);
-                border-color: #8b5cf6; box-shadow: 0 0 8px rgba(124,58,237,0.5);
+                background: #8b5cf6; border-color: #a78bfa;
             }
-            .rubot-toggle-pill input:checked + .rubot-pill-track::after { left: calc(100% - 14px); background: #fff; }
-            .rubot-ollama-label { font-size: 11px; font-weight: 700; color: #c4b5fd; flex: 1; }
-            .rubot-btn-ping {
-                background: rgba(139,92,246,0.15); border: 1px solid rgba(139,92,246,0.35);
-                color: #c4b5fd; padding: 3px 9px; border-radius: 6px;
-                font-family: 'Inter', sans-serif; font-size: 9.5px; font-weight: 600;
-                cursor: pointer; transition: all 0.15s; letter-spacing: 0.3px;
+            .rubot-toggle-pill input:checked + .rubot-pill-track::after {
+                left: calc(100% - 12px); background: #fff;
             }
-            .rubot-btn-ping:hover { background: rgba(139,92,246,0.3); color: #e9d5ff; border-color: rgba(139,92,246,0.55); }
-            .rubot-ollama-fields { display: flex; flex-direction: column; gap: 5px; }
-            .rubot-field-row { display: flex; align-items: center; gap: 7px; }
-            .rubot-field-label { font-size: 9.5px; font-weight: 600; color: rgba(167,139,250,0.6); min-width: 38px; }
-            .rubot-mini-input {
-                flex: 1; background: rgba(0,0,0,0.3);
-                border: 1px solid rgba(139,92,246,0.2); border-radius: 6px;
-                color: #e9d5ff; padding: 3px 7px;
-                font-family: 'JetBrains Mono', monospace; font-size: 9.5px;
-                outline: none; transition: border-color 0.2s;
+
+            /* Activity Log Tab */
+            .rubot-log-page { display: flex; flex-direction: column; height: 100%; flex: 1; }
+            .rubot-log-toolbar {
+                display: flex; justify-content: space-between; align-items: center;
+                padding-bottom: 5px; border-bottom: 1px solid rgba(139,92,246,0.12); margin-bottom: 6px;
             }
-            .rubot-mini-input:focus { border-color: rgba(139,92,246,0.6); }
-            .rubot-ollama-status { font-size: 9px; color: rgba(167,139,250,0.5); font-style: italic; letter-spacing: 0.2px; }
-            .rubot-toggles-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-            .rubot-toggle-row {
-                display: flex; align-items: center; gap: 7px;
-                background: rgba(255,255,255,0.02);
-                border: 1px solid rgba(139,92,246,0.1); border-radius: 8px;
-                padding: 6px 8px; cursor: pointer; transition: border-color 0.2s;
+            .rubot-log-title { font-size: 9px; font-weight: 700; color: rgba(167,139,250,0.7); text-transform: uppercase; }
+            .rubot-btn-clear {
+                background: transparent; border: 1px solid rgba(139,92,246,0.25);
+                color: rgba(196,181,253,0.7); padding: 2px 7px; border-radius: 5px;
+                font-size: 8.5px; cursor: pointer; transition: all 0.15s;
             }
-            .rubot-toggle-row:hover { border-color: rgba(139,92,246,0.25); }
-            .rubot-toggle-row-label { font-size: 10px; font-weight: 600; color: rgba(196,181,253,0.75); flex: 1; line-height: 1.2; }
-            .rubot-terminal-wrap {
-                flex: 1; display: flex; flex-direction: column;
-                min-height: 80px; background: rgba(0,0,0,0.45);
-                border: 1px solid rgba(139,92,246,0.15); border-radius: 10px; overflow: hidden;
-            }
-            .rubot-terminal-header {
-                display: flex; align-items: center; justify-content: space-between;
-                padding: 5px 9px; background: rgba(139,92,246,0.07);
-                border-bottom: 1px solid rgba(139,92,246,0.12);
-            }
-            .rubot-terminal-title { font-size: 8px; font-weight: 700; color: rgba(139,92,246,0.7); letter-spacing: 1.5px; text-transform: uppercase; }
-            .rubot-terminal-dots { display: flex; gap: 4px; }
-            .rubot-terminal-dots span { width: 6px; height: 6px; border-radius: 50%; }
-            .rubot-terminal-dots span:nth-child(1) { background: rgba(239,68,68,0.5); }
-            .rubot-terminal-dots span:nth-child(2) { background: rgba(251,191,36,0.5); }
-            .rubot-terminal-dots span:nth-child(3) { background: rgba(52,211,153,0.5); }
+            .rubot-btn-clear:hover { background: rgba(139,92,246,0.2); color: #fff; }
             .rubot-terminal {
-                flex: 1; overflow-y: auto; padding: 7px 9px;
-                font-family: 'JetBrains Mono', Consolas, monospace;
-                font-size: 9.5px; color: rgba(196,181,253,0.75);
-                display: flex; flex-direction: column-reverse; gap: 1px;
+                flex: 1; overflow-y: auto; padding: 6px 8px;
+                background: rgba(0,0,0,0.4); border: 1px solid rgba(139,92,246,0.15);
+                border-radius: 8px; font-family: 'JetBrains Mono', Consolas, monospace;
+                font-size: 9.5px; color: rgba(196,181,253,0.8);
+                display: flex; flex-direction: column-reverse; gap: 2px;
                 scrollbar-width: thin; scrollbar-color: rgba(139,92,246,0.3) transparent;
             }
-            .rubot-terminal::-webkit-scrollbar { width: 3px; }
-            .rubot-terminal::-webkit-scrollbar-thumb { background: rgba(139,92,246,0.3); border-radius: 2px; }
-            .rubot-terminal .log-line { padding: 1.5px 0; word-break: break-word; line-height: 1.4; display: flex; gap: 5px; }
-            .rubot-terminal .log-ts { color: rgba(109,40,217,0.5); flex-shrink: 0; font-size: 8.5px; }
-            .rubot-terminal .log-line.green .log-msg { color: #34d399; }
-            .rubot-terminal .log-line.violet .log-msg { color: #c084fc; }
-            .rubot-terminal .log-line.amber .log-msg { color: #fbbf24; }
-            .rubot-terminal .log-line.red .log-msg { color: #f87171; }
+            .log-line { display: flex; gap: 6px; line-height: 1.35; word-break: break-word; }
+            .log-ts { color: rgba(139,92,246,0.6); flex-shrink: 0; font-size: 8.5px; }
+            .log-msg { flex: 1; }
+            .log-line.green .log-msg { color: #34d399; }
+            .log-line.violet .log-msg { color: #c084fc; }
+            .log-line.amber .log-msg { color: #fbbf24; }
+            .log-line.red .log-msg { color: #f87171; }
+
+            /* Advisor Box Overlay */
+            .rubot-advisor-box {
+                background: linear-gradient(135deg, rgba(124,58,237,0.2) 0%, rgba(76,29,149,0.25) 100%);
+                border: 1px solid rgba(167,139,250,0.5); border-radius: 8px;
+                padding: 9px 10px; display: none; flex-direction: column; gap: 7px; margin-bottom: 6px;
+            }
+            .rubot-adv-title { font-weight: 700; font-size: 10px; color: #e9d5ff; }
+            .rubot-adv-desc { font-size: 9.5px; color: #ddd6fe; line-height: 1.35; }
+            .rubot-adv-btns { display: flex; gap: 6px; }
+            .rubot-adv-btn {
+                flex: 1; padding: 6px; border: none; border-radius: 6px;
+                font-family: 'Inter', sans-serif; font-weight: 700; font-size: 10px;
+                cursor: pointer; transition: all 0.15s ease;
+            }
+            .rubot-adv-btn.exec { background: #10b981; color: #fff; }
+            .rubot-adv-btn.skip { background: rgba(255,255,255,0.08); color: #c4b5fd; border: 1px solid rgba(139,92,246,0.2); }
         `;
       document.head.appendChild(style);
       const panel = document.createElement("div");
@@ -3412,214 +3522,265 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
             <div class="rubot-header" id="rubot-hud-drag">
                 <div class="rubot-title-wrap">
                     <div class="rubot-logo">\u{1F3B2}</div>
-                    <div class="rubot-title-text">
-                        <span class="rubot-title-main">RICHUP BOT</span>
-                        <span class="rubot-title-sub">AI-POWERED MONOPOLY ENGINE</span>
-                    </div>
+                    <span class="rubot-title-main">RICHUP BOT</span>
                 </div>
-                <span class="rubot-badge" id="rubot-phase-badge">STANDBY</span>
+                <div class="rubot-badge" id="rubot-badge-status">STANDBY</div>
             </div>
 
-            <div class="rubot-body">
-
-                <div class="rubot-identity-row">
-                    <span class="rubot-identity-icon">\u{1F464}</span>
-                    <input type="text" id="rubot-input-myname" class="rubot-name-input" placeholder="Your in-game username\u2026" value="${GameMemory.myName || ""}">
-                </div>
-
-                <div class="rubot-stat-grid">
-                    <div class="rubot-stat-card">
-                        <div class="rubot-stat-label">\u{1F4B0} My Cash</div>
-                        <div class="rubot-stat-val green" id="rubot-val-cash">$${GameMemory.myCash}</div>
-                    </div>
-                    <div class="rubot-stat-card">
-                        <div class="rubot-stat-label">\u{1F4CD} Position</div>
-                        <div class="rubot-stat-val violet" id="rubot-val-pos">Tile #${GameMemory.myPos}</div>
-                    </div>
-                    <div class="rubot-stat-card">
-                        <div class="rubot-stat-label">\u26A0\uFE0F Danger EV</div>
-                        <div class="rubot-stat-val amber" id="rubot-val-ev">$0</div>
-                    </div>
-                    <div class="rubot-stat-card">
-                        <div class="rubot-stat-label">\u{1F6E1}\uFE0F Reserve</div>
-                        <div class="rubot-stat-val blue" id="rubot-val-rsv">$${CONFIG.BASE_MIN_RESERVE}</div>
-                    </div>
-                </div>
-
+            <div class="rubot-top-controls">
+                <button class="rubot-master-btn" id="rubot-btn-master">\u25B6 START BOT  [=]</button>
                 <div class="rubot-mode-wrap">
-                    <button class="rubot-mode-btn active" id="rubot-btn-mode-auto">\u{1F916} AUTO-PILOT</button>
-                    <button class="rubot-mode-btn" id="rubot-btn-mode-advisor">\u{1F9E0} ADVISOR</button>
+                    <button class="rubot-mode-btn ${!CONFIG.ADVISOR_MODE ? "active" : ""}" id="rubot-mode-auto">\u26A1 AUTO-PILOT</button>
+                    <button class="rubot-mode-btn ${CONFIG.ADVISOR_MODE ? "active" : ""}" id="rubot-mode-adv">\u{1F4AC} ADVISOR</button>
                 </div>
-
-                <div id="rubot-advisor-box" class="rubot-advisor-box" style="display: none;">
-                    <div class="rubot-adv-header">
-                        <div class="rubot-adv-dot"></div>
-                        <div class="rubot-advisor-title" id="rubot-adv-title">ADVISOR RECOMMENDATION</div>
-                    </div>
-                    <div class="rubot-advisor-desc" id="rubot-adv-desc">Waiting for next turn\u2026</div>
-                    <div class="rubot-advisor-btns">
-                        <button class="rubot-adv-btn exec" id="rubot-adv-exec">\u2713 EXECUTE</button>
-                        <button class="rubot-adv-btn skip" id="rubot-adv-skip">\u2715 SKIP</button>
+                <div class="rubot-advisor-box" id="rubot-advisor-box">
+                    <div class="rubot-adv-title" id="rubot-adv-title">Proposal</div>
+                    <div class="rubot-adv-desc" id="rubot-adv-desc">Advisor action pending.</div>
+                    <div class="rubot-adv-btns">
+                        <button class="rubot-adv-btn exec" id="rubot-adv-exec">EXECUTE</button>
+                        <button class="rubot-adv-btn skip" id="rubot-adv-skip">SKIP</button>
                     </div>
                 </div>
+            </div>
 
-                <button class="rubot-master-btn" id="rubot-master-btn">\u25B6 START BOT  [=]</button>
+            <div class="rubot-tab-bar">
+                <button class="rubot-tab-btn active" data-tab="brain">\u{1F9E0} Brain</button>
+                <button class="rubot-tab-btn" data-tab="toggles">\u2699\uFE0F Features</button>
+                <button class="rubot-tab-btn" data-tab="logs">\u{1F4CB} Activity Log</button>
+            </div>
 
-                <div class="rubot-ollama-section">
-                    <div class="rubot-ollama-header">
-                        <label class="rubot-toggle-pill">
-                            <input type="checkbox" id="rubot-chk-ollama" ${CONFIG.OLLAMA_ENABLED ? "checked" : ""}>
-                            <span class="rubot-pill-track"></span>
+            <div class="rubot-tab-content">
+                <!-- TAB 1: OLLAMA BRAIN (Initial View) -->
+                <div class="rubot-tab-page active" id="rubot-page-brain">
+                    <div class="rubot-status-card">
+                        <div class="rubot-status-indicator">
+                            <span class="rubot-status-dot offline" id="rubot-dot-ollama"></span>
+                            <span id="rubot-status-ollama">Testing connection...</span>
+                        </div>
+                    </div>
+
+                    <div class="rubot-field-group">
+                        <label class="rubot-field-label">Ollama Host</label>
+                        <input type="text" class="rubot-input" id="rubot-host-ollama" value="${CONFIG.OLLAMA_HOST}" />
+                    </div>
+
+                    <div class="rubot-field-group">
+                        <label class="rubot-field-label">Model Selection (Auto-Fallback Hierarchy)</label>
+                        <select class="rubot-select" id="rubot-select-model">
+                            <option value="llama3.2-vision:latest" ${CONFIG.OLLAMA_MODEL === "llama3.2-vision:latest" ? "selected" : ""}>llama3.2-vision:latest (1st Priority Vision)</option>
+                            <option value="qwen2.5:7b" ${CONFIG.OLLAMA_MODEL === "qwen2.5:7b" ? "selected" : ""}>qwen2.5:7b (2nd Priority Reasoning)</option>
+                            <option value="llama3.2:3b" ${CONFIG.OLLAMA_MODEL === "llama3.2:3b" ? "selected" : ""}>llama3.2:3b (Fastest 3B)</option>
+                            <option value="llama3.1:8b" ${CONFIG.OLLAMA_MODEL === "llama3.1:8b" ? "selected" : ""}>llama3.1:8b (Deep Valuation)</option>
+                            <option value="qwen3.5:4b" ${CONFIG.OLLAMA_MODEL === "qwen3.5:4b" ? "selected" : ""}>qwen3.5:4b (Vision & Thinking)</option>
+                            <option value="custom">Custom model...</option>
+                        </select>
+                        <input type="text" class="rubot-input" id="rubot-custom-model" style="display:none; margin-top: 4px;" placeholder="Model tag (e.g. llama3.2-vision:latest)" value="${CONFIG.OLLAMA_MODEL}" />
+                    </div>
+
+                    <button class="rubot-btn-test" id="rubot-btn-ping">\u26A1 Test & Connect Ollama</button>
+
+                    <div class="rubot-info-box">
+                        Ollama LLM acts as the master brain: evaluates trades, prevents unfair deficits, secures monopolies, plans building, and negotiates with players.
+                    </div>
+                </div>
+
+                <!-- TAB 2: FEATURE TOGGLES -->
+                <div class="rubot-tab-page" id="rubot-page-toggles">
+                    <div class="rubot-toggles-list">
+                        <label class="rubot-toggle-item">
+                            <div class="rubot-toggle-info">
+                                <span class="rubot-toggle-name">Auto Buy Land</span>
+                                <span class="rubot-toggle-desc">Acquire unowned properties & utility investments</span>
+                            </div>
+                            <div class="rubot-toggle-pill">
+                                <input type="checkbox" id="rubot-chk-buy" ${CONFIG.ALWAYS_BUY_AFFORDABLE ? "checked" : ""}>
+                                <div class="rubot-pill-track"></div>
+                            </div>
                         </label>
-                        <span class="rubot-ollama-label">\u26A1 Hybrid Ollama Brain</span>
-                        <button class="rubot-btn-ping" id="rubot-btn-ollama-ping">Test</button>
+
+                        <label class="rubot-toggle-item">
+                            <div class="rubot-toggle-info">
+                                <span class="rubot-toggle-name">Win-Win Trading</span>
+                                <span class="rubot-toggle-desc">Always accept monopoly completers & propose swaps</span>
+                            </div>
+                            <div class="rubot-toggle-pill">
+                                <input type="checkbox" id="rubot-chk-trade" ${CONFIG.AUTO_TRADE_ENABLED ? "checked" : ""}>
+                                <div class="rubot-pill-track"></div>
+                            </div>
+                        </label>
+
+                        <label class="rubot-toggle-item">
+                            <div class="rubot-toggle-info">
+                                <span class="rubot-toggle-name">Auto Build Houses</span>
+                                <span class="rubot-toggle-desc">Proactively build houses & rush 3-house monopolies</span>
+                            </div>
+                            <div class="rubot-toggle-pill">
+                                <input type="checkbox" id="rubot-chk-build" ${CONFIG.AUTO_BUILD_ENABLED ? "checked" : ""}>
+                                <div class="rubot-pill-track"></div>
+                            </div>
+                        </label>
+
+                        <label class="rubot-toggle-item">
+                            <div class="rubot-toggle-info">
+                                <span class="rubot-toggle-name">Auto Mortgage / Debt</span>
+                                <span class="rubot-toggle-desc">Liquidate dead assets to clear debt and avoid bankruptcy</span>
+                            </div>
+                            <div class="rubot-toggle-pill">
+                                <input type="checkbox" id="rubot-chk-mortgage" ${CONFIG.AUTO_MORTGAGE_ENABLED ? "checked" : ""}>
+                                <div class="rubot-pill-track"></div>
+                            </div>
+                        </label>
+
+                        <label class="rubot-toggle-item">
+                            <div class="rubot-toggle-info">
+                                <span class="rubot-toggle-name">Auto Auction Sniping</span>
+                                <span class="rubot-toggle-desc">Snipe underpriced auctions & block enemy sets</span>
+                            </div>
+                            <div class="rubot-toggle-pill">
+                                <input type="checkbox" id="rubot-chk-auction" ${CONFIG.AUTO_AUCTION_ENABLED ? "checked" : ""}>
+                                <div class="rubot-pill-track"></div>
+                            </div>
+                        </label>
+
+                        <label class="rubot-toggle-item">
+                            <div class="rubot-toggle-info">
+                                <span class="rubot-toggle-name">Smart Cash Reserve</span>
+                                <span class="rubot-toggle-desc">Reserve cash dynamically against enemy landing zones</span>
+                            </div>
+                            <div class="rubot-toggle-pill">
+                                <input type="checkbox" id="rubot-chk-reserve" ${CONFIG.SMART_RESERVE_ENABLED ? "checked" : ""}>
+                                <div class="rubot-pill-track"></div>
+                            </div>
+                        </label>
+
+                        <label class="rubot-toggle-item">
+                            <div class="rubot-toggle-info">
+                                <span class="rubot-toggle-name">Natural AI Chat</span>
+                                <span class="rubot-toggle-desc">Converses naturally with opponents during match</span>
+                            </div>
+                            <div class="rubot-toggle-pill">
+                                <input type="checkbox" id="rubot-chk-chat" ${CONFIG.CHAT_ENABLED ? "checked" : ""}>
+                                <div class="rubot-pill-track"></div>
+                            </div>
+                        </label>
                     </div>
-                    <div class="rubot-ollama-fields" id="rubot-ollama-fields" style="${CONFIG.OLLAMA_ENABLED ? "" : "display:none;"}">
-                        <div class="rubot-field-row">
-                            <span class="rubot-field-label">Host</span>
-                            <input type="text" id="rubot-input-ollama-host" class="rubot-mini-input" value="${CONFIG.OLLAMA_HOST}">
+                </div>
+
+                <!-- TAB 3: ACTIVITY LOG (Dedicated) -->
+                <div class="rubot-tab-page" id="rubot-page-logs">
+                    <div class="rubot-log-page">
+                        <div class="rubot-log-toolbar">
+                            <span class="rubot-log-title">Live Action Stream</span>
+                            <button class="rubot-btn-clear" id="rubot-btn-clear-log">Clear</button>
                         </div>
-                        <div class="rubot-field-row">
-                            <span class="rubot-field-label">Model</span>
-                            <input type="text" id="rubot-input-ollama-model" class="rubot-mini-input" value="${CONFIG.OLLAMA_MODEL}">
-                        </div>
-                        <div class="rubot-ollama-status" id="rubot-ollama-status">\u25CF Standby \u2014 Minimax Math Fallback Active</div>
+                        <div class="rubot-terminal" id="rubot-terminal"></div>
                     </div>
                 </div>
-
-                <div class="rubot-section-label">Feature Toggles</div>
-                <div class="rubot-toggles-grid">
-                    <label class="rubot-toggle-row">
-                        <label class="rubot-toggle-pill"><input type="checkbox" id="rubot-chk-alwaysbuy" checked><span class="rubot-pill-track"></span></label>
-                        <span class="rubot-toggle-row-label">Buy Land</span>
-                    </label>
-                    <label class="rubot-toggle-row">
-                        <label class="rubot-toggle-pill"><input type="checkbox" id="rubot-chk-ambush" checked><span class="rubot-pill-track"></span></label>
-                        <span class="rubot-toggle-row-label">Hotel Ambush</span>
-                    </label>
-                    <label class="rubot-toggle-row">
-                        <label class="rubot-toggle-pill"><input type="checkbox" id="rubot-chk-auction" checked><span class="rubot-pill-track"></span></label>
-                        <span class="rubot-toggle-row-label">Auto-Auction</span>
-                    </label>
-                    <label class="rubot-toggle-row">
-                        <label class="rubot-toggle-pill"><input type="checkbox" id="rubot-chk-trade" checked><span class="rubot-pill-track"></span></label>
-                        <span class="rubot-toggle-row-label">Auto-Trade</span>
-                    </label>
-                    <label class="rubot-toggle-row">
-                        <label class="rubot-toggle-pill"><input type="checkbox" id="rubot-chk-build" checked><span class="rubot-pill-track"></span></label>
-                        <span class="rubot-toggle-row-label">Auto-Build</span>
-                    </label>
-                    <label class="rubot-toggle-row">
-                        <label class="rubot-toggle-pill"><input type="checkbox" id="rubot-chk-reserve" checked><span class="rubot-pill-track"></span></label>
-                        <span class="rubot-toggle-row-label">Smart Reserve</span>
-                    </label>
-                </div>
-
-                <div class="rubot-terminal-wrap">
-                    <div class="rubot-terminal-header">
-                        <span class="rubot-terminal-title">Activity Log</span>
-                        <div class="rubot-terminal-dots"><span></span><span></span><span></span></div>
-                    </div>
-                    <div class="rubot-terminal" id="rubot-terminal"></div>
-                </div>
-
             </div>
         `;
       document.body.appendChild(panel);
-      this.elements.panel = panel;
-      this.elements.masterBtn = document.getElementById("rubot-master-btn");
-      this.elements.phaseBadge = document.getElementById("rubot-phase-badge");
-      this.elements.valCash = document.getElementById("rubot-val-cash");
-      this.elements.valPos = document.getElementById("rubot-val-pos");
-      this.elements.valEV = document.getElementById("rubot-val-ev");
-      this.elements.valRsv = document.getElementById("rubot-val-rsv");
-      this.elements.terminal = document.getElementById("rubot-terminal");
-      this.elements.nameInput = document.getElementById("rubot-input-myname");
-      this.elements.advisorBox = document.getElementById("rubot-advisor-box");
-      this.elements.advTitle = document.getElementById("rubot-adv-title");
-      this.elements.advDesc = document.getElementById("rubot-adv-desc");
-      this.elements.advExec = document.getElementById("rubot-adv-exec");
-      this.elements.advSkip = document.getElementById("rubot-adv-skip");
-      this.elements.btnModeAuto = document.getElementById("rubot-btn-mode-auto");
-      this.elements.btnModeAdv = document.getElementById("rubot-btn-mode-advisor");
-      this.elements.masterBtn.addEventListener("click", () => {
-        if (onToggleMaster) onToggleMaster();
-      });
-      this.elements.btnModeAuto.addEventListener("click", () => {
+      this.elements = {
+        panel,
+        phaseBadge: document.getElementById("rubot-badge-status"),
+        masterBtn: document.getElementById("rubot-btn-master"),
+        modeAuto: document.getElementById("rubot-mode-auto"),
+        modeAdv: document.getElementById("rubot-mode-adv"),
+        advisorBox: document.getElementById("rubot-advisor-box"),
+        advTitle: document.getElementById("rubot-adv-title"),
+        advDesc: document.getElementById("rubot-adv-desc"),
+        advExec: document.getElementById("rubot-adv-exec"),
+        advSkip: document.getElementById("rubot-adv-skip"),
+        terminal: document.getElementById("rubot-terminal"),
+        dotOllama: document.getElementById("rubot-dot-ollama"),
+        statusOllama: document.getElementById("rubot-status-ollama"),
+        hostInput: document.getElementById("rubot-host-ollama"),
+        selectModel: document.getElementById("rubot-select-model"),
+        customModel: document.getElementById("rubot-custom-model"),
+        btnPing: document.getElementById("rubot-btn-ping")
+      };
+      this.elements.masterBtn.addEventListener("click", onToggleMaster);
+      this.elements.modeAuto.addEventListener("click", () => {
         CONFIG.ADVISOR_MODE = false;
-        this.elements.btnModeAuto.classList.add("active");
-        this.elements.btnModeAdv.classList.remove("active");
+        this.elements.modeAuto.classList.add("active");
+        this.elements.modeAdv.classList.remove("active");
         this.hideAdvisorBox();
-        this.logTerminal("Mode \u2192 AUTO-PILOT");
+        this.logTerminal("Mode: AUTO-PILOT (Fully Autonomous)");
       });
-      this.elements.btnModeAdv.addEventListener("click", () => {
+      this.elements.modeAdv.addEventListener("click", () => {
         CONFIG.ADVISOR_MODE = true;
-        this.elements.btnModeAdv.classList.add("active");
-        this.elements.btnModeAuto.classList.remove("active");
-        this.logTerminal("Mode \u2192 ADVISOR (Awaiting your approval each turn)");
+        this.elements.modeAdv.classList.add("active");
+        this.elements.modeAuto.classList.remove("active");
+        this.logTerminal("Mode: ADVISOR (Human Approval)");
       });
       this.elements.advExec.addEventListener("click", () => {
-        if (onExecuteAdvisor) onExecuteAdvisor();
+        if (this.pendingAdvisorAction?.onExec) {
+          this.pendingAdvisorAction.onExec();
+        }
+        this.hideAdvisorBox();
       });
       this.elements.advSkip.addEventListener("click", () => {
-        if (onSkipAdvisor) onSkipAdvisor();
+        if (this.pendingAdvisorAction?.onSkip) {
+          this.pendingAdvisorAction.onSkip();
+        }
+        this.hideAdvisorBox();
       });
-      const handleNameUpdate = (val) => {
-        if (!val) return;
-        const trimmed = val.trim();
-        if (BOARD_LABELS_BLACKLIST.has(trimmed.toLowerCase())) return;
-        GameMemory.setMyName(trimmed);
-        GameMemory.cashVerified = false;
-        this.logTerminal(`Identity \u2192 "${GameMemory.myName}"`);
-      };
-      this.elements.nameInput.addEventListener("change", (e) => handleNameUpdate(e.target.value));
-      this.elements.nameInput.addEventListener("input", (e) => handleNameUpdate(e.target.value));
-      const chkOllama = document.getElementById("rubot-chk-ollama");
-      const fieldsOllama = document.getElementById("rubot-ollama-fields");
-      const inputHost = document.getElementById("rubot-input-ollama-host");
-      const inputModel = document.getElementById("rubot-input-ollama-model");
-      const statusOllama = document.getElementById("rubot-ollama-status");
-      const btnPing = document.getElementById("rubot-btn-ollama-ping");
-      chkOllama.addEventListener("change", (e) => {
-        CONFIG.OLLAMA_ENABLED = e.target.checked;
-        localStorage.setItem("richup_ollama_enabled", e.target.checked ? "true" : "false");
-        fieldsOllama.style.display = e.target.checked ? "flex" : "none";
-        this.logTerminal(`Hybrid Brain (Ollama) ${e.target.checked ? "ENABLED" : "DISABLED"}`);
+      const tabBtns = panel.querySelectorAll(".rubot-tab-btn");
+      tabBtns.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const targetTab = btn.getAttribute("data-tab");
+          tabBtns.forEach((b) => b.classList.remove("active"));
+          btn.classList.add("active");
+          panel.querySelectorAll(".rubot-tab-page").forEach((page) => {
+            page.classList.remove("active");
+          });
+          const targetPage = document.getElementById(`rubot-page-${targetTab}`);
+          if (targetPage) targetPage.classList.add("active");
+          this.activeTab = targetTab;
+        });
       });
-      inputHost.addEventListener("change", (e) => {
+      document.getElementById("rubot-btn-clear-log").addEventListener("click", () => {
+        if (this.elements.terminal) this.elements.terminal.innerHTML = "";
+      });
+      this.elements.hostInput.addEventListener("change", (e) => {
         CONFIG.OLLAMA_HOST = e.target.value.trim();
         localStorage.setItem("richup_ollama_host", CONFIG.OLLAMA_HOST);
         this.logTerminal(`Ollama host set to: ${CONFIG.OLLAMA_HOST}`);
       });
-      inputModel.addEventListener("change", (e) => {
+      this.elements.selectModel.addEventListener("change", (e) => {
+        if (e.target.value === "custom") {
+          this.elements.customModel.style.display = "block";
+        } else {
+          this.elements.customModel.style.display = "none";
+          CONFIG.OLLAMA_MODEL = e.target.value;
+          localStorage.setItem("richup_ollama_model", CONFIG.OLLAMA_MODEL);
+          this.logTerminal(`Ollama model: ${CONFIG.OLLAMA_MODEL}`);
+        }
+      });
+      this.elements.customModel.addEventListener("change", (e) => {
         CONFIG.OLLAMA_MODEL = e.target.value.trim();
         localStorage.setItem("richup_ollama_model", CONFIG.OLLAMA_MODEL);
         this.logTerminal(`Ollama model set to: ${CONFIG.OLLAMA_MODEL}`);
       });
-      btnPing.addEventListener("click", async () => {
-        statusOllama.textContent = "\u23F3 Testing connection\u2026";
-        statusOllama.style.color = "#fbbf24";
-        this.logTerminal(`Pinging Ollama @ ${CONFIG.OLLAMA_HOST}\u2026`);
+      const testOllama = async () => {
+        this.elements.statusOllama.textContent = "Connecting...";
+        this.elements.dotOllama.className = "rubot-status-dot";
         const res = await OllamaClient.checkHealth();
         if (res.ok) {
-          const modelFound = res.hasTargetModel ? `(${CONFIG.OLLAMA_MODEL} \u2713)` : `(available: ${res.models.slice(0, 2).join(", ") || "none"})`;
-          statusOllama.textContent = `\u{1F7E2} Connected ${modelFound}`;
-          statusOllama.style.color = "#34d399";
-          this.logTerminal(`Ollama online! Models: ${res.models.join(", ") || "none"}`);
+          this.elements.dotOllama.className = "rubot-status-dot online";
+          const found = res.models.find((m) => m.includes(CONFIG.OLLAMA_MODEL)) || res.models[0] || CONFIG.OLLAMA_MODEL;
+          this.elements.statusOllama.textContent = `Connected (${CONFIG.OLLAMA_MODEL})`;
+          CONFIG.OLLAMA_ENABLED = true;
+          localStorage.setItem("richup_ollama_enabled", "true");
+          this.logTerminal(`Ollama connected: ${found}. Brain online!`);
         } else {
-          statusOllama.textContent = `\u26AA Offline \u2014 Minimax Math Fallback Active`;
-          statusOllama.style.color = "rgba(167, 139, 250, 0.5)";
-          this.logTerminal(`Ollama offline: ${res.error || "Connection failed"}. Fallback active.`);
+          this.elements.dotOllama.className = "rubot-status-dot offline";
+          this.elements.statusOllama.textContent = `Disconnected: ${res.error || "Check host"}`;
+          this.logTerminal(`Ollama offline: ${res.error || "Connection failed"}`);
         }
-      });
-      document.getElementById("rubot-chk-alwaysbuy").addEventListener("change", (e) => {
+      };
+      this.elements.btnPing.addEventListener("click", testOllama);
+      document.getElementById("rubot-chk-buy").addEventListener("change", (e) => {
         CONFIG.ALWAYS_BUY_AFFORDABLE = e.target.checked;
-      });
-      document.getElementById("rubot-chk-ambush").addEventListener("change", (e) => {
-        CONFIG.AMBUSH_BUILD_ONLY = e.target.checked;
-      });
-      document.getElementById("rubot-chk-auction").addEventListener("change", (e) => {
-        CONFIG.AUTO_AUCTION_ENABLED = e.target.checked;
       });
       document.getElementById("rubot-chk-trade").addEventListener("change", (e) => {
         CONFIG.AUTO_TRADE_ENABLED = e.target.checked;
@@ -3627,12 +3788,22 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       document.getElementById("rubot-chk-build").addEventListener("change", (e) => {
         CONFIG.AUTO_BUILD_ENABLED = e.target.checked;
       });
+      document.getElementById("rubot-chk-mortgage").addEventListener("change", (e) => {
+        CONFIG.AUTO_MORTGAGE_ENABLED = e.target.checked;
+      });
+      document.getElementById("rubot-chk-auction").addEventListener("change", (e) => {
+        CONFIG.AUTO_AUCTION_ENABLED = e.target.checked;
+      });
       document.getElementById("rubot-chk-reserve").addEventListener("change", (e) => {
         CONFIG.SMART_RESERVE_ENABLED = e.target.checked;
       });
+      document.getElementById("rubot-chk-chat").addEventListener("change", (e) => {
+        CONFIG.CHAT_ENABLED = e.target.checked;
+      });
       this.initDragAndPersistence();
       window.__richupLogTerminal = (msg) => this.logTerminal(msg);
-      this.logTerminal("RichUp Bot v4.0 ready \u2014 press = or click START BOT.");
+      this.logTerminal("RichUp Bot v5.0 initialized. Ready for gameplay.");
+      setTimeout(testOllama, 400);
     },
     isProposalActive(title) {
       return Boolean(
@@ -3666,27 +3837,15 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       }
     },
     updateTelemetry() {
-      if (!this.elements.valCash) return;
-      this.elements.valCash.textContent = `$${GameMemory.myCash}`;
-      if (GameMemory.myCash < 0) {
-        this.elements.valCash.classList.remove("green");
-        this.elements.valCash.classList.add("red");
-      } else {
-        this.elements.valCash.classList.remove("red");
-        this.elements.valCash.classList.add("green");
-      }
-      if (GameMemory.inJail) {
-        this.elements.valPos.textContent = `In Jail (#10)`;
-      } else {
-        this.elements.valPos.textContent = `Tile #${GameMemory.myPos}`;
-      }
-      this.elements.valEV.textContent = `$${GameMemory.lastDangerEV}`;
-      this.elements.valRsv.textContent = `$${GameMemory.lastDynamicReserve}`;
-      if (this.elements.nameInput && document.activeElement !== this.elements.nameInput && GameMemory.myName) {
-        if (this.elements.nameInput.value !== GameMemory.myName) {
-          this.elements.nameInput.value = GameMemory.myName;
+      if (this.elements.phaseBadge) {
+        const isActive = this.elements.masterBtn && this.elements.masterBtn.classList.contains("active");
+        if (isActive) {
+          this.elements.phaseBadge.textContent = CONFIG.ADVISOR_MODE ? "ADVISOR" : "ACTIVE";
         }
       }
+    },
+    appendLog(msg) {
+      this.logTerminal(msg);
     },
     logTerminal(msg) {
       if (!this.elements.terminal) return;
@@ -3700,10 +3859,15 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       const msgPart = document.createElement("span");
       msgPart.className = "log-msg";
       msgPart.textContent = msg;
-      if (msg.includes("ACTION") || msg.includes("EV+") || msg.includes("AMBUSH") || msg.includes("ready") || msg.includes("online")) line.classList.add("green");
-      else if (msg.includes("SWAP") || msg.includes("Trade") || msg.includes("ADVISOR") || msg.includes("Mode") || msg.includes("Identity")) line.classList.add("violet");
-      else if (msg.includes("Hotel Danger") || msg.includes("Veto") || msg.includes("Preserving") || msg.includes("Pinging")) line.classList.add("amber");
-      else if (msg.includes("ERROR") || msg.includes("offline") || msg.includes("failed") || msg.includes("Offline")) line.classList.add("red");
+      if (msg.includes("ACTION") || msg.includes("EV+") || msg.includes("Accept") || msg.includes("online") || msg.includes("Deal")) {
+        line.classList.add("green");
+      } else if (msg.includes("TRADE") || msg.includes("Brain") || msg.includes("Ollama") || msg.includes("STRATEGY")) {
+        line.classList.add("violet");
+      } else if (msg.includes("Caution") || msg.includes("Reserve") || msg.includes("Decline")) {
+        line.classList.add("amber");
+      } else if (msg.includes("ERROR") || msg.includes("DEBT") || msg.includes("MORTGAGE") || msg.includes("offline") || msg.includes("Bankrupt")) {
+        line.classList.add("red");
+      }
       line.appendChild(tsPart);
       line.appendChild(msgPart);
       this.elements.terminal.insertBefore(line, this.elements.terminal.firstChild);
@@ -4009,9 +4173,9 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         const btnText = normalizeText(buyBtn);
         const priceMatch = /\$?\s*(\d{2,4})|(\d{2,4})\s*\$/.exec(btnText);
         const price = priceMatch ? parseInt(priceMatch[1] || priceMatch[2], 10) : tile?.price || 60;
-        if (GameMemory.myName && GameMemory.players[GameMemory.myName]?.cash) {
+        if (GameMemory.myName && GameMemory.players[GameMemory.myName]?.cash !== void 0) {
           const sbCash = GameMemory.players[GameMemory.myName].cash;
-          if (typeof sbCash === "number" && sbCash > GameMemory.myCash) {
+          if (typeof sbCash === "number") {
             GameMemory.myCash = sbCash;
           }
         }
@@ -4165,8 +4329,9 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       return false;
     },
     handleDebtRecovery(snapshot) {
+      if (!CONFIG.AUTO_MORTGAGE_ENABLED) return false;
       const isDebt = GameMemory.myCash < 0;
-      if (!CONFIG.AUTO_MORTGAGE_ENABLED || !isDebt) return false;
+      if (!isDebt) return false;
       logToBot(`[DEBT RECOVERY] Negative balance ($${GameMemory.myCash}). Liquidating assets to survive...`);
       const mortgageBtn = snapshot.findModalMortgageButton();
       const sellHouseBtn = snapshot.findModalSellHouseButton();
@@ -4176,7 +4341,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         return executeOrAdvise({
           el: mortgageBtn,
           title: `MORTGAGE: ${tileName.toUpperCase()}`,
-          reason: `Cash is negative ($${GameMemory.myCash})! Mortgaging asset to clear debt.`,
+          reason: `In debt ($${GameMemory.myCash})! Mortgaging asset to clear debt immediately.`,
           onExecute: () => {
             if (openCard && GameMemory.ownership[openCard.tile.id]) {
               GameMemory.ownership[openCard.tile.id].mortgaged = true;
@@ -4189,7 +4354,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         return executeOrAdvise({
           el: sellHouseBtn,
           title: "SELL HOUSE [\u2193]",
-          reason: `Cash is negative ($${GameMemory.myCash})! Selling house to clear debt.`,
+          reason: `In debt ($${GameMemory.myCash})! Selling house to clear debt immediately.`,
           onExecute: () => delayClick(sellHouseBtn, "Clicking [\u2193] to sell house")
         });
       }
@@ -4203,8 +4368,26 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
             return executeOrAdvise({
               el: sidebarProp,
               title: `OPEN ${bestTarget.tile.name.toUpperCase()} TO LIQUIDATE`,
-              reason: `Cash is negative ($${GameMemory.myCash}). Selecting lowest sacrifice asset to mortgage.`,
+              reason: `In debt ($${GameMemory.myCash}). Selecting lowest sacrifice asset to mortgage.`,
               onExecute: () => delayClick(sidebarProp, `Opening ${bestTarget.tile.name} for debt recovery`)
+            });
+          }
+        }
+      }
+      const sidebarItems = document.querySelectorAll('div, li, button, [class*="property"]');
+      for (let i = 0; i < sidebarItems.length; i++) {
+        const el = sidebarItems[i];
+        const hud = document.getElementById("rubot-hud-panel");
+        if (hud && hud.contains(el)) continue;
+        const rect = el.getBoundingClientRect();
+        if (rect.left > window.innerWidth * 0.6) {
+          const t = (el.innerText || "").trim();
+          if (t.length >= 3 && t.length <= 25 && !t.includes("$") && !t.toLowerCase().includes("properties") && !t.toLowerCase().includes("trades")) {
+            return executeOrAdvise({
+              el,
+              title: `EMERGENCY LIQUIDATE: ${t.toUpperCase()}`,
+              reason: `In debt ($${GameMemory.myCash}). Emergency opening sidebar property to mortgage.`,
+              onExecute: () => delayClick(el, `Emergency clicking ${t} to liquidate`)
             });
           }
         }
