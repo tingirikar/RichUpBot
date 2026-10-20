@@ -282,6 +282,42 @@
     players: {},
     // Tile ownership: tileId -> { owner, houses, mortgaged }
     ownership: {},
+    // Archival history of declined trades per player:
+    // playerName -> Array<{ givenIds: number[], receivedIds: number[], cashOffer: number, ts: number }>
+    declinedTrades: {},
+    recordDeclinedTrade(partnerName, trade = {}) {
+      if (!partnerName) return;
+      const key = partnerName.trim();
+      if (!this.declinedTrades[key]) this.declinedTrades[key] = [];
+      const given = trade.givenTiles || (trade.myGivenTiles ? trade.myGivenTiles : trade.myGivenTile ? [trade.myGivenTile] : []);
+      const received = trade.receivedTiles || (trade.myReceivedTiles ? trade.myReceivedTiles : trade.myReceivedTile ? [trade.myReceivedTile] : []);
+      const givenIds = given.map((t) => typeof t === "object" ? t.id : t).filter((x) => typeof x === "number").sort();
+      const receivedIds = received.map((t) => typeof t === "object" ? t.id : t).filter((x) => typeof x === "number").sort();
+      const cashOffer = trade.cashOffer || trade.givenCash || 0;
+      this.declinedTrades[key].push({
+        givenIds,
+        receivedIds,
+        cashOffer,
+        ts: Date.now()
+      });
+      if (this.declinedTrades[key].length > 25) this.declinedTrades[key].shift();
+    },
+    isTradePreviouslyDeclined(partnerName, givenIds = [], receivedIds = [], cashOffer = 0) {
+      if (!partnerName) return false;
+      const history = this.declinedTrades[partnerName.trim()];
+      if (!history || history.length === 0) return false;
+      const gSorted = [...givenIds].sort().join(",");
+      const rSorted = [...receivedIds].sort().join(",");
+      return history.some((h) => {
+        const matchG = h.givenIds.join(",") === gSorted;
+        const matchR = h.receivedIds.join(",") === rSorted;
+        return matchG && matchR && cashOffer <= h.cashOffer && Date.now() - h.ts < 24e4;
+      });
+    },
+    getDeclinedCountForPlayer(partnerName) {
+      if (!partnerName) return 0;
+      return (this.declinedTrades[partnerName.trim()] || []).length;
+    },
     // Diagnostic & tracking logs
     processedLogs: /* @__PURE__ */ new Map(),
     wsActive: false,
@@ -342,6 +378,7 @@
       this.isMyTurn = false;
       this.players = {};
       this.ownership = {};
+      this.declinedTrades = {};
       BOARD_TILES.forEach((t) => {
         if (t.group) {
           this.ownership[t.id] = { owner: null, houses: 0, mortgaged: false };
@@ -464,7 +501,7 @@
             }
           }
         }
-        const allClickables = Array.from(document.querySelectorAll('button, [role="button"], [class*="btn" i], [class*="button" i], div[role="button"]')).filter((el) => !hud || !hud.contains(el));
+        const allClickables = Array.from(document.querySelectorAll('button, [role="button"], [class*="btn" i], [class*="button" i], div[role="button"], div[tabindex], a, div')).filter((el) => (!hud || !hud.contains(el)) && el.childElementCount <= 2);
         for (const el of allClickables) {
           if (!isVisibleAndEnabled(el)) continue;
           const txt = normalizeText(el);
@@ -588,6 +625,30 @@
         return this.findExactOrIncludes(["negotiate", "counter"]);
       },
       /**
+       * Detects secondary confirmation modal dialogs (e.g. "Are you sure you want to mortgage?", "Confirm action")
+       */
+      findConfirmationModalButton() {
+        const modals = document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="confirm" i], [class*="alert" i], [class*="dialog" i]');
+        for (let i = 0; i < modals.length; i++) {
+          const m = modals[i];
+          if (hud && hud.contains(m)) continue;
+          if (!isVisibleAndEnabled(m)) continue;
+          const text = (m.innerText || "").toLowerCase();
+          if (text.includes("are you sure") || text.includes("confirm") || text.includes("mortgage") || text.includes("proceed") || text.includes("unmortgage")) {
+            const btns = m.querySelectorAll('button, [role="button"], [class*="btn" i]');
+            for (let j = 0; j < btns.length; j++) {
+              const b = btns[j];
+              if (!isVisibleAndEnabled(b)) continue;
+              const bText = normalizeText(b);
+              if (bText === "yes" || bText === "confirm" || bText === "mortgage" || bText === "unmortgage" || bText === "ok" || bText === "proceed" || bText.includes("confirm")) {
+                return b;
+              }
+            }
+          }
+        }
+        return null;
+      },
+      /**
        * Detects if a property card popover/modal is currently open and returns its DOM element & tile info
        */
       /**
@@ -604,7 +665,7 @@
           if (rect.left > window.innerWidth * 0.65 && rect.width < 320) continue;
           const text = c.innerText || "";
           const lower = text.toLowerCase();
-          if (lower.includes("auction") || lower.includes("i'm bidding") || lower.includes("current bid") || lower.includes("highest bid") || lower.includes("sold in") || lower.includes("trades") || lower.includes("select your player")) {
+          if (lower.includes("i'm bidding") || lower.includes("current bid") || lower.includes("highest bid") || lower.includes("sold in") || lower.includes("trades") || lower.includes("select your player")) {
             continue;
           }
           if (text.includes("Owner") || text.includes("Price") || text.includes("with rent") || text.includes("when")) {
@@ -1711,7 +1772,56 @@
           }
         }
       }
-      return opportunities;
+      if (safeSacrifices.length >= 2) {
+        for (const myNeed of myMissing) {
+          if (!myNeed.heldBy || myNeed.isUnowned) continue;
+          const targetOppName = myNeed.heldBy;
+          const s1 = safeSacrifices[0];
+          const s2 = safeSacrifices[1];
+          const cashOffer = Math.min(Math.max(0, GameMemory2.myCash - 200), 50);
+          opportunities.push({
+            targetOwner: targetOppName,
+            myGivenTiles: [s1, s2],
+            myReceivedTiles: [myNeed.missingTile],
+            myGivenTile: s1,
+            myReceivedTile: myNeed.missingTile,
+            cashOffer,
+            cashDemand: 0,
+            summary: `2-FOR-1 PACKAGE: Give ${s1.name} & ${s2.name} -> Get ${myNeed.missingTile.name}`,
+            pitch: `take both ${s1.name.toLowerCase()} and ${s2.name.toLowerCase()} for ${myNeed.missingTile.name.toLowerCase()}?`
+          });
+        }
+      }
+      const finalized = [];
+      for (const op of opportunities) {
+        const givenTiles = Array.isArray(op.myGivenTiles) ? op.myGivenTiles : op.myGivenTile ? [op.myGivenTile] : [];
+        const recTiles = Array.isArray(op.myReceivedTiles) ? op.myReceivedTiles : op.myReceivedTile ? [op.myReceivedTile] : [];
+        const givenIds = givenTiles.map((t) => t.id);
+        const recIds = recTiles.map((t) => t.id);
+        if (GameMemory2.isTradePreviouslyDeclined(op.targetOwner, givenIds, recIds, op.cashOffer)) {
+          const extra = 75;
+          if (GameMemory2.myCash - (op.cashOffer + extra) >= 150) {
+            op.cashOffer += extra;
+            op.summary += ` [SWEETENED +$${extra}]`;
+            op.pitch = `${op.pitch.replace(/\?$/, "")} + ${op.cashOffer}?`;
+            logToBot(`[TRADE ENGINE] \u{1F36F} Sweetened previously declined trade for ${op.targetOwner}: increased cash to $${op.cashOffer}`);
+            finalized.push(op);
+          } else if (givenTiles.length === 1 && safeSacrifices.length >= 2) {
+            const s2 = safeSacrifices.find((s) => s.id !== givenTiles[0].id);
+            if (s2) {
+              op.myGivenTiles = [givenTiles[0], s2];
+              op.myGivenTile = null;
+              op.summary = `2-FOR-1 SWEETENED: Give ${givenTiles[0].name} & ${s2.name} -> Get ${recTiles[0]?.name || "property"}`;
+              op.pitch = `what about ${givenTiles[0].name.toLowerCase()} AND ${s2.name.toLowerCase()} for ${recTiles[0]?.name?.toLowerCase()}?`;
+              logToBot(`[TRADE ENGINE] \u{1F381} Upgraded declined trade to 2-for-1 package: [${givenTiles[0].name}, ${s2.name}]`);
+              finalized.push(op);
+            }
+          }
+        } else {
+          finalized.push(op);
+        }
+      }
+      return finalized;
     }
   };
 
@@ -2209,7 +2319,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
           if (this.processedChatIds.has(msgId)) continue;
           this.processedChatIds.add(msgId);
           this.lastRepliedTime = now;
-          logToBot2(`[CHAT DETECTED] ${sender}: "${msgText}". Engaging with AI reply...`);
+          logToBot(`[CHAT DETECTED] ${sender}: "${msgText}". Engaging with AI reply...`);
           const reply = await OllamaClient.generateChatResponse(sender, msgText);
           if (reply) {
             this.sendChatMessage(null, reply);
@@ -2238,7 +2348,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       if (!input) return false;
       this.lastSentTime = now;
       this.lastSentText = message;
-      logToBot2(`[CHAT SEND] "${message}"`);
+      logToBot(`[CHAT SEND] "${message}"`);
       setTimeout(() => {
         try {
           input.focus();
@@ -2262,7 +2372,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
             }
           }, 90);
         } catch (err) {
-          logToBot2(`Chat error: ${err}`);
+          logToBot(`Chat error: ${err}`);
         }
       }, 320);
       return true;
@@ -2291,11 +2401,11 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     async executeProposal(swap, onComplete) {
       if (this.isExecuting) return;
       this.isExecuting = true;
-      logToBot2(`[TRADE CREATOR] Starting automated proposal for ${swap.targetOwner}...`);
+      logToBot(`[TRADE CREATOR] Starting automated proposal for ${swap.targetOwner}...`);
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       const safetyTimer = setTimeout(() => {
         if (this.isExecuting) {
-          logToBot2("[TRADE CREATOR] Safety timeout triggered. Closing modal and resetting lock.");
+          logToBot("[TRADE CREATOR] Safety timeout triggered. Closing modal and resetting lock.");
           this.closeTradeModal();
           this.isExecuting = false;
           if (onComplete) onComplete(false);
@@ -2305,7 +2415,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         const snap1 = createDOMSnapshot();
         const createBtn = snap1.findCreateTradeButton();
         if (!createBtn) {
-          logToBot2("[TRADE CREATOR] Could not find [+ Create] trade button.");
+          logToBot("[TRADE CREATOR] Could not find [+ Create] trade button.");
           return;
         }
         createBtn.click();
@@ -2318,32 +2428,34 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
           await sleep(350);
         }
         if (!playerBtn) {
-          logToBot2(`[TRADE CREATOR] Could not find player button for "${swap.targetOwner}".`);
+          logToBot(`[TRADE CREATOR] Could not find player button for "${swap.targetOwner}".`);
           this.closeTradeModal();
           return;
         }
         playerBtn.click();
         await sleep(700);
-        const snap3 = createDOMSnapshot();
-        if (swap.myGivenTile) {
-          const myPropCard = snap3.findTradePropertyCard(swap.myGivenTile.name, "mine");
+        const givenTiles = Array.isArray(swap.myGivenTiles) ? swap.myGivenTiles : swap.myGivenTile ? [swap.myGivenTile] : [];
+        for (const tile of givenTiles) {
+          const snap3 = createDOMSnapshot();
+          const myPropCard = snap3.findTradePropertyCard(tile.name, "mine");
           if (myPropCard) {
             myPropCard.click();
-            logToBot2(`[TRADE CREATOR] Selected offer property: ${swap.myGivenTile.name}`);
-            await sleep(400);
+            logToBot(`[TRADE CREATOR] Selected offer property: ${tile.name}`);
+            await sleep(350);
           } else {
-            logToBot2(`[TRADE CREATOR] Could not find offer property: ${swap.myGivenTile.name}`);
+            logToBot(`[TRADE CREATOR] Could not find offer property: ${tile.name}`);
           }
         }
-        const snap4 = createDOMSnapshot();
-        if (swap.myReceivedTile) {
-          const theirPropCard = snap4.findTradePropertyCard(swap.myReceivedTile.name, "theirs");
+        const receivedTiles = Array.isArray(swap.myReceivedTiles) ? swap.myReceivedTiles : swap.myReceivedTile ? [swap.myReceivedTile] : [];
+        for (const tile of receivedTiles) {
+          const snap4 = createDOMSnapshot();
+          const theirPropCard = snap4.findTradePropertyCard(tile.name, "theirs");
           if (theirPropCard) {
             theirPropCard.click();
-            logToBot2(`[TRADE CREATOR] Selected request property: ${swap.myReceivedTile.name}`);
-            await sleep(400);
+            logToBot(`[TRADE CREATOR] Selected request property: ${tile.name}`);
+            await sleep(350);
           } else {
-            logToBot2(`[TRADE CREATOR] Could not find request property: ${swap.myReceivedTile.name}`);
+            logToBot(`[TRADE CREATOR] Could not find request property: ${tile.name}`);
           }
         }
         this.adjustCashInTradeModal(swap);
@@ -2352,20 +2464,28 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         const sendBtn = snap5.findSendTradeButton();
         if (sendBtn) {
           sendBtn.click();
-          logToBot2(`[TRADE CREATOR] Trade proposal sent to ${swap.targetOwner}!`);
+          logToBot(`[TRADE CREATOR] Trade proposal sent to ${swap.targetOwner}!`);
           this.lastProposedTimes.set(swap.targetOwner, Date.now());
+          this.lastSentProposal = {
+            targetOwner: swap.targetOwner,
+            givenTiles,
+            receivedTiles,
+            cashOffer: swap.cashOffer || 0,
+            cashDemand: swap.cashDemand || 0,
+            timestamp: Date.now()
+          };
           if (CONFIG.CHAT_ENABLED && swap.pitch) {
             await sleep(400);
             ChatEngine.sendChatMessage("tradeOffer", swap.pitch);
           }
           if (onComplete) onComplete(true);
         } else {
-          logToBot2("[TRADE CREATOR] Could not find [Send trade] button.");
+          logToBot("[TRADE CREATOR] Could not find [Send trade] button.");
           this.closeTradeModal();
           if (onComplete) onComplete(false);
         }
       } catch (err) {
-        logToBot2(`[TRADE CREATOR Error] ${err}`);
+        logToBot(`[TRADE CREATOR Error] ${err}`);
         this.closeTradeModal();
         if (onComplete) onComplete(false);
       } finally {
@@ -2422,7 +2542,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
           }
         }
       } catch (err) {
-        logToBot2(`Cash adjust note: ${err}`);
+        logToBot(`Cash adjust note: ${err}`);
       }
     },
     setReactInputValue(input, val) {
@@ -2542,6 +2662,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     syncBoardTilePricesAndBadgesFromDOM();
     syncPropertyCardModalFromDOM();
     syncMyPropertiesFromSidebar();
+    scanPlayerTokenPositionsFromDOM();
     scanActivityLogsOnly();
   }
   function detectLobbySettingsAndIdentity() {
@@ -2798,10 +2919,6 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
               const price = parseInt(m[1] || m[2], 10);
               if (!isNaN(price) && price >= 50 && price <= 500) {
                 tile.price = price;
-                if (GameMemory2.ownership[tile.id] && !GameMemory2.isMe(GameMemory2.ownership[tile.id].owner)) {
-                  GameMemory2.ownership[tile.id].owner = null;
-                  GameMemory2.ownership[tile.id].houses = 0;
-                }
               }
             }
           }
@@ -2822,6 +2939,152 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       }
     } else {
       GameMemory2.isNegativeDebt = GameMemory2.myCash < 0;
+    }
+  }
+  function scanPlayerTokenPositionsFromDOM() {
+    const hud = document.getElementById("rubot-hud-panel");
+    if (!document.body) return;
+    const boardEl = document.querySelector('[class*="board" i], main, section') || document.body;
+    const boardRect = boardEl.getBoundingClientRect();
+    if (boardRect.width < 200 || boardRect.height < 200) return;
+    const tileRects = /* @__PURE__ */ new Map();
+    const allEls = boardEl.querySelectorAll('div, [class*="tile" i], [class*="cell" i]');
+    for (let i = 0; i < allEls.length; i++) {
+      const el = allEls[i];
+      if (hud && hud.contains(el)) continue;
+      const text = (el.innerText || "").trim();
+      if (text.length > 80) continue;
+      for (const tile of BOARD_TILES) {
+        if (tileRects.has(tile.id)) continue;
+        let match = false;
+        if (tile.id === 0 && /^start/i.test(text)) match = true;
+        else if (tile.id === 10 && (/in prison/i.test(text) || /passing by/i.test(text))) match = true;
+        else if (tile.id === 20 && /vacation/i.test(text)) match = true;
+        else if (tile.id === 30 && /go to prison/i.test(text)) match = true;
+        else if (tile.name && new RegExp(`\\b${tile.name}\\b`, "i").test(text)) match = true;
+        if (match) {
+          const r = el.getBoundingClientRect();
+          if (r.width >= 25 && r.height >= 25) {
+            tileRects.set(tile.id, {
+              id: tile.id,
+              name: tile.name,
+              el,
+              rect: r,
+              cx: r.left + r.width / 2,
+              cy: r.top + r.height / 2
+            });
+          }
+        }
+      }
+    }
+    const playerAvatars = [];
+    const playerEntries = Object.keys(GameMemory2.players);
+    for (const pName of playerEntries) {
+      const rows = Array.from(document.querySelectorAll("div, section, li, tr")).filter((el) => {
+        if (hud && hud.contains(el)) return false;
+        const t = el.innerText || "";
+        return t.includes(pName) && t.includes("$") && t.length < 150;
+      });
+      const pRow = rows.find((r) => r.children.length >= 2) || rows[0];
+      if (!pRow) continue;
+      const avEl = pRow.querySelector('svg, img, [class*="avatar" i], [class*="face" i], [class*="token" i], div[style*="border-radius"]');
+      let color = "";
+      let fill = "";
+      let src = "";
+      let classSnippet = "";
+      if (avEl) {
+        const style = window.getComputedStyle(avEl);
+        color = style.backgroundColor || style.color || "";
+        classSnippet = (avEl.className || "").toString();
+        if (avEl.tagName.toLowerCase() === "img") {
+          src = avEl.src || avEl.getAttribute("data-src") || "";
+        }
+        const svgChild = avEl.tagName.toLowerCase() === "svg" ? avEl : avEl.querySelector("svg, circle, path");
+        if (svgChild) {
+          fill = svgChild.getAttribute("fill") || window.getComputedStyle(svgChild).fill || "";
+        }
+      }
+      playerAvatars.push({
+        name: pName,
+        isMe: GameMemory2.isMe(pName),
+        color,
+        fill,
+        src,
+        classSnippet
+      });
+    }
+    const candidates = Array.from(boardEl.querySelectorAll("svg, img, div, span")).filter((el) => {
+      if (hud && hud.contains(el)) return false;
+      if (el.closest('[class*="chat" i], [class*="scoreboard" i], [class*="modal" i]')) return false;
+      const r = el.getBoundingClientRect();
+      if (r.width < 18 || r.width > 65 || r.height < 18 || r.height > 65) return false;
+      if (r.left < boardRect.left || r.right > boardRect.right || r.top < boardRect.top || r.bottom > boardRect.bottom) return false;
+      const style = window.getComputedStyle(el);
+      const isRound = style.borderRadius && (parseInt(style.borderRadius) >= 10 || style.borderRadius.includes("%"));
+      const isSvg = el.tagName.toLowerCase() === "svg";
+      const isImg = el.tagName.toLowerCase() === "img";
+      const hasAvatarClass = (el.className || "").toString().toLowerCase().includes("avatar") || (el.className || "").toString().toLowerCase().includes("token");
+      return isRound || isSvg || isImg || hasAvatarClass;
+    });
+    for (const tokenEl of candidates) {
+      const tr = tokenEl.getBoundingClientRect();
+      const tcx = tr.left + tr.width / 2;
+      const tcy = tr.top + tr.height / 2;
+      const style = window.getComputedStyle(tokenEl);
+      const tColor = style.backgroundColor || style.color || "";
+      const tSrc = tokenEl.tagName.toLowerCase() === "img" ? tokenEl.src || "" : "";
+      const tSvg = tokenEl.tagName.toLowerCase() === "svg" ? tokenEl : tokenEl.querySelector("svg, circle, path");
+      const tFill = tSvg ? tSvg.getAttribute("fill") || window.getComputedStyle(tSvg).fill || "" : "";
+      const tClass = (tokenEl.className || "").toString();
+      let matchedPlayer = null;
+      for (const p of playerAvatars) {
+        let score = 0;
+        if (p.src && tSrc && p.src === tSrc) score += 10;
+        if (p.fill && tFill && p.fill === tFill && p.fill !== "none") score += 5;
+        if (p.color && tColor && p.color === tColor && !tColor.includes("rgba(0, 0, 0, 0)")) score += 3;
+        if (p.classSnippet && tClass && p.classSnippet === tClass) score += 2;
+        if (score >= 3) {
+          matchedPlayer = p;
+          break;
+        }
+      }
+      if (!matchedPlayer && playerAvatars.length === 1) {
+        matchedPlayer = playerAvatars[0];
+      }
+      if (!matchedPlayer) continue;
+      let bestTile = null;
+      let minDistance = Infinity;
+      for (const [id, t] of tileRects.entries()) {
+        if (tcx >= t.rect.left && tcx <= t.rect.right && tcy >= t.rect.top && tcy <= t.rect.bottom) {
+          bestTile = t;
+          minDistance = 0;
+          break;
+        }
+        if (t.el && t.el.contains(tokenEl)) {
+          bestTile = t;
+          minDistance = 0;
+          break;
+        }
+        const dist = Math.hypot(tcx - t.cx, tcy - t.cy);
+        if (dist < minDistance) {
+          minDistance = dist;
+          bestTile = t;
+        }
+      }
+      if (bestTile && minDistance < 85) {
+        if (matchedPlayer.isMe) {
+          if (GameMemory2.myPos !== bestTile.id && !GameMemory2.inJail) {
+            GameMemory2.myPos = bestTile.id;
+            logToBot(`[DOM COORDINATE SCRAPER] \u{1F3AF} Verified local position at Tile #${bestTile.id} (${bestTile.name}) [Pixel: (${Math.round(tcx)}, ${Math.round(tcy)})]`);
+          }
+        } else if (GameMemory2.players[matchedPlayer.name]) {
+          const curPos = GameMemory2.players[matchedPlayer.name].pos;
+          if (curPos !== bestTile.id) {
+            GameMemory2.players[matchedPlayer.name].pos = bestTile.id;
+            logToBot(`[DOM COORDINATE SCRAPER] \u{1F3AF} Verified ${matchedPlayer.name} at Tile #${bestTile.id} (${bestTile.name}) [Pixel: (${Math.round(tcx)}, ${Math.round(tcy)})] (was #${curPos})`);
+          }
+        }
+      }
     }
   }
   function syncPropertyCardModalFromDOM() {
@@ -2998,8 +3261,23 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       GameMemory2.markLogProcessed(line);
       return;
     }
-    if (/declined trade/i.test(line)) {
-      logToBot(`[TRADE INTEL] Trade declined: ${line}`);
+    if (/declined.*trade/i.test(line)) {
+      const parts = line.split(/declined/i);
+      const decliner = parts[0].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, "").trim();
+      const createdByPart = /created by (.+)/i.exec(line);
+      const creator = createdByPart ? createdByPart[1].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, "").trim() : null;
+      if (TradeProposalExecutor.lastSentProposal && (GameMemory2.isMe(creator) || !creator)) {
+        const proposal = TradeProposalExecutor.lastSentProposal;
+        if (!decliner || decliner.toLowerCase() === proposal.targetOwner.toLowerCase() || !creator) {
+          GameMemory2.recordDeclinedTrade(proposal.targetOwner, proposal);
+          const givenNames = (proposal.givenTiles || []).map((t) => t.name).join(", ") || "cash";
+          const recNames = (proposal.receivedTiles || []).map((t) => t.name).join(", ");
+          logToBot(`[TRADE MEMORY] \u{1F4DC} Archival rejection recorded for ${proposal.targetOwner}: Offered [${givenNames}] for [${recNames}] (+$${proposal.cashOffer || 0})`);
+        }
+      } else if (decliner) {
+        GameMemory2.recordDeclinedTrade(decliner, { givenTiles: [], receivedTiles: [], cashOffer: 0 });
+        logToBot(`[TRADE INTEL] Trade declined by ${decliner}`);
+      }
       GameMemory2.markLogProcessed(line);
       return;
     }
@@ -3072,11 +3350,12 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       if (!isNaN(rollVal) && rollVal >= 2 && rollVal <= 12) {
         const isMe = GameMemory2.isMe(player);
         logToBot(`[DICE EVENT] \u{1F3B2} ${isMe ? "I" : player} rolled ${rollVal}`);
-        const wsHealthy = typeof GameMemory2.isWsHealthy === "function" && GameMemory2.isWsHealthy();
-        if (!wsHealthy) {
-          if (isMe) {
+        if (isMe) {
+          if (!GameMemory2.inJail) {
             GameMemory2.myPos = (GameMemory2.myPos + rollVal) % 40;
-          } else if (GameMemory2.players[player]) {
+          }
+        } else if (GameMemory2.players[player]) {
+          if (!GameMemory2.players[player].inJail) {
             GameMemory2.players[player].pos = ((GameMemory2.players[player].pos || 0) + rollVal) % 40;
           }
         }
@@ -4116,9 +4395,13 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         for (const [pName, data] of oppEntries) {
           const hungryStr = data.hungrySets.length > 0 ? data.hungrySets.map((h) => `<span class="rubot-intel-badge red">${h.group} ${h.ownedCount}/${h.total}</span>`).join(" ") : "";
           const propStr = data.ownedTiles.length > 0 ? data.ownedTiles.map((t) => t.name).join(", ") : "None yet";
+          const declCount = typeof GameMemory2.getDeclinedCountForPlayer === "function" ? GameMemory2.getDeclinedCountForPlayer(pName) : 0;
+          const declBadge = declCount > 0 ? `<span class="rubot-intel-badge red">${declCount} Declined</span>` : "";
+          const pos = GameMemory2.players[pName]?.pos;
+          const posStr = typeof pos === "number" ? `Tile #${pos}` : "Tile #0";
           html += `
                     <div style="margin-top: 4px; padding-top: 4px; border-top: 1px solid rgba(139,92,246,0.12);">
-                        <b>${pName}:</b> <span class="rubot-intel-badge green">$${data.cash}</span> ${hungryStr}<br>
+                        <b>${pName}:</b> <span class="rubot-intel-badge green">$${data.cash}</span> <span class="rubot-intel-badge">${posStr}</span> ${hungryStr} ${declBadge}<br>
                         <span style="color: rgba(196,181,253,0.7);">${propStr}</span>
                     </div>
                 `;
@@ -4151,7 +4434,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
   function getIsActing() {
     return isActing;
   }
-  function logToBot2(msg) {
+  function logToBot(msg) {
     console.log(`[RichUp AI] ${(/* @__PURE__ */ new Date()).toISOString()} - ${msg}`);
     if (window.__richupLogTerminal) {
       window.__richupLogTerminal(msg);
@@ -4161,7 +4444,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     if (!el || isActing) return false;
     isActing = true;
     const delay = Math.floor(Math.random() * (CONFIG2.ACTION_DELAY_MAX - CONFIG2.ACTION_DELAY_MIN + 1)) + CONFIG2.ACTION_DELAY_MIN;
-    logToBot2(`[ACTION] ${reason} (in ${delay}ms)`);
+    logToBot(`[ACTION] ${reason} (in ${delay}ms)`);
     setTimeout(() => {
       try {
         if (typeof el.scrollIntoView === "function") {
@@ -4177,7 +4460,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         }
         el.click();
       } catch (err) {
-        logToBot2(`Click error: ${err}`);
+        logToBot(`Click error: ${err}`);
       } finally {
         setTimeout(() => {
           isActing = false;
@@ -4202,7 +4485,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         },
         () => {
           HUDPanel.hideAdvisorBox();
-          logToBot2(`[ADVISOR] Action skipped by user.`);
+          logToBot(`[ADVISOR] Action skipped by user.`);
           if (onSkip) onSkip();
         }
       );
@@ -4213,13 +4496,22 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     return true;
   }
   var ActionExecutor = {
+    handleConfirmationModal(snapshot) {
+      const confirmBtn = snapshot.findConfirmationModalButton ? snapshot.findConfirmationModalButton() : null;
+      if (confirmBtn) {
+        logToBot("[MODAL ACTION] Secondary confirmation dialog detected. Confirming action...");
+        delayClick(confirmBtn, "Confirm secondary action prompt");
+        return true;
+      }
+      return false;
+    },
     async handleTrade(snapshot) {
       const sidebarTrade = snapshot.findSidebarIncomingTradeItem();
       const confirmBtn = snapshot.findTradeConfirmButton();
       const declineBtn = snapshot.findTradeDeclineButton();
       const negotiateBtn = snapshot.findTradeNegotiateButton();
       if (!confirmBtn && !declineBtn && sidebarTrade) {
-        logToBot2("[TRADE] Incoming trade row detected in sidebar. Opening trade modal...");
+        logToBot("[TRADE] Incoming trade row detected in sidebar. Opening trade modal...");
         delayClick(sidebarTrade, "Open incoming trade from sidebar");
         return true;
       }
@@ -4245,9 +4537,9 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       isEvaluatingTrade = true;
       processedTradeSignatures.set(sig, now);
       try {
-        logToBot2("[TRADE] Evaluating incoming trade with Hybrid Brain...");
+        logToBot("[TRADE] Evaluating incoming trade with Hybrid Brain...");
         const verdict = await OllamaClient.evaluateTradeWithLLM(tradeData);
-        logToBot2(`Trade Verdict: ${verdict.reason}`);
+        logToBot(`Trade Verdict: ${verdict.reason}`);
         if (verdict.negotiate && negotiateBtn) {
           return executeOrAdvise({
             el: negotiateBtn,
@@ -4279,7 +4571,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
               if (verdict.chatReply) ChatEngine.sendChatMessage("tradeReject", verdict.chatReply);
               delayClick(declineBtn, `Declining trade (${verdict.reason})`);
               if (verdict.counterSwap && CONFIG2.AUTO_TRADE_ENABLED) {
-                logToBot2(`[COUNTER TRADE] Scheduling counter-proposal for ${verdict.counterSwap.targetOwner}...`);
+                logToBot(`[COUNTER TRADE] Scheduling counter-proposal for ${verdict.counterSwap.targetOwner}...`);
                 setTimeout(() => {
                   if (!TradeProposalExecutor.isExecuting) {
                     TradeProposalExecutor.executeProposal(verdict.counterSwap);
@@ -4353,7 +4645,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
           });
         }
       } else {
-        logToBot2(`Jail: Staying safe in cell (${decision.reason})`);
+        logToBot(`Jail: Staying safe in cell (${decision.reason})`);
       }
       if (rollBtn) {
         return executeOrAdvise({
@@ -4370,6 +4662,9 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       const buyBtn = snapshot.findBuyPropertyButton ? snapshot.findBuyPropertyButton(tile) : null;
       const auctionBtn = snapshot.findExactOrIncludes(["auction", "pass", "don't buy"]);
       if (isBuyingLand) return false;
+      if (!buyBtn && !auctionBtn && !GameMemory2.isMyTurn) {
+        return false;
+      }
       if (buyBtn) {
         let container = buyBtn.parentElement;
         for (let depth = 0; depth < 5 && container && container !== document.body; depth++) {
@@ -4390,11 +4685,11 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       }
       const isPurchasable = tile && tile.group && (tile.type === "property" || tile.type === "airport" || tile.type === "utility");
       const owner = tile ? GameMemory2.ownership[tile.id]?.owner : null;
-      if (isPurchasable && !owner && !buyBtn && !auctionBtn) {
+      if (GameMemory2.isMyTurn && isPurchasable && !owner && !buyBtn && !auctionBtn) {
         const now = Date.now();
-        if (!this._lastPendingBuyLog || now - this._lastPendingBuyLog > 1200) {
+        if (!this._lastPendingBuyLog || now - this._lastPendingBuyLog > 2500) {
           this._lastPendingBuyLog = now;
-          logToBot2(`[BUY PENDING] Standing on unowned ${tile.name} (Tile #${tile.id}, $${tile.price || 0}), scanning DOM for Buy prompt...`);
+          logToBot(`[BUY PENDING] Standing on unowned ${tile.name} (Tile #${tile.id}, $${tile.price || 0}), scanning DOM for Buy prompt...`);
         }
         return false;
       }
@@ -4412,7 +4707,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         }
         const candidateCash = Math.max(effectiveCash, price);
         const decision = MarkovRisk.shouldBuyProperty(tile, price, candidateCash);
-        logToBot2(`[BUY EVAL] ${tile ? tile.name : "Property"} ($${price}) | My Cash: $${effectiveCash} | Decision: ${decision.buy ? "BUY" : "SKIP"} (${decision.reason})`);
+        logToBot(`[BUY EVAL] ${tile ? tile.name : "Property"} ($${price}) | My Cash: $${effectiveCash} | Decision: ${decision.buy ? "BUY" : "SKIP"} (${decision.reason})`);
         if (decision.buy) {
           isBuyingLand = true;
           setTimeout(() => {
@@ -4423,7 +4718,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
             title: `BUY ${tile ? tile.name.toUpperCase() : "PROPERTY"} ($${price})`,
             reason: decision.reason,
             onExecute: () => {
-              logToBot2(`[BUY ACTION] Executing direct purchase for ${tile ? tile.name : "Property"} ($${price})`);
+              logToBot(`[BUY ACTION] Executing direct purchase for ${tile ? tile.name : "Property"} ($${price})`);
               if (tile && GameMemory2.ownership[tile.id]) {
                 GameMemory2.ownership[tile.id].owner = GameMemory2.myName || "__ME__";
               }
@@ -4435,21 +4730,21 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
           });
         }
         const auctionCheck = AuctionSniper.shouldSendToAuctionInsteadOfBuy(tile, price, candidateCash);
-        logToBot2(`[AUCTION EVAL] ${tile ? tile.name : "Property"} ($${price}) -> Send to auction? ${auctionCheck.auction ? "YES" : "NO"} (${auctionCheck.reason})`);
+        logToBot(`[AUCTION EVAL] ${tile ? tile.name : "Property"} ($${price}) -> Send to auction? ${auctionCheck.auction ? "YES" : "NO"} (${auctionCheck.reason})`);
         if (auctionCheck.auction && auctionBtn) {
           return executeOrAdvise({
             el: auctionBtn,
             title: "TRIGGER AUCTION",
             reason: auctionCheck.reason,
             onExecute: () => {
-              logToBot2(`[AUCTION ACTION] Sending ${tile ? tile.name : "Property"} to auction`);
+              logToBot(`[AUCTION ACTION] Sending ${tile ? tile.name : "Property"} to auction`);
               delayClick(auctionBtn, auctionCheck.reason);
             }
           });
         }
       }
       if (auctionBtn) {
-        logToBot2(`[AUCTION EVAL] Cannot afford direct purchase; sending property to auction.`);
+        logToBot(`[AUCTION EVAL] Cannot afford direct purchase; sending property to auction.`);
         return executeOrAdvise({
           el: auctionBtn,
           title: "PASS / AUCTION PROPERTY",
@@ -4620,7 +4915,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       if (!CONFIG2.AUTO_MORTGAGE_ENABLED) return false;
       const isDebt = GameMemory2.myCash < 0 || GameMemory2.isNegativeDebt;
       if (!isDebt) return false;
-      logToBot2(`[DEBT RECOVERY] Negative balance ($${GameMemory2.myCash}). Liquidating assets to survive...`);
+      logToBot(`[DEBT RECOVERY] Negative balance ($${GameMemory2.myCash}). Liquidating assets to survive...`);
       const openCard = snapshot.getOpenPropertyCard ? snapshot.getOpenPropertyCard() : null;
       if (openCard && GameMemory2.ownership[openCard.tile.id]?.mortgaged) {
         const targets2 = DebtRecovery.rankLiquidationTargets();
@@ -4686,7 +4981,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       const rollBtn = snapshot.findExactOrIncludes(["roll the dice", "roll again"]);
       if (rollBtn) {
         GameMemory2.isMyTurn = true;
-        logToBot2(`[DICE ACTION] It's my turn! Rolling dice (Turn #${GameMemory2.turnCount + 1}) | Cash: $${GameMemory2.myCash} | Pos: Tile #${GameMemory2.myPos}`);
+        logToBot(`[DICE ACTION] It's my turn! Rolling dice (Turn #${GameMemory2.turnCount + 1}) | Cash: $${GameMemory2.myCash} | Pos: Tile #${GameMemory2.myPos}`);
         return executeOrAdvise({
           el: rollBtn,
           title: `ROLL THE DICE (Turn #${GameMemory2.turnCount + 1})`,
@@ -4721,12 +5016,14 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         if (this.handleBuyOrAuction(snapshot)) {
           return true;
         }
-        if (this.unownedTileWaitCount < 8) {
+        if (this.unownedTileWaitCount < 4) {
           this.unownedTileWaitCount++;
-          logToBot2(`[TURN GUARD] BLOCKED premature 'End Turn'! Standing on unowned ${standingTile.name} (Tile #${standingTile.id}, $${standingTile.price}) with $${effectiveCash} cash. Holding turn for Buy prompt (${this.unownedTileWaitCount}/8)...`);
+          if (this.unownedTileWaitCount === 1) {
+            logToBot(`[TURN GUARD] Holding 'End Turn' on ${standingTile.name} ($${standingTile.price}) to allow Buy prompt to render...`);
+          }
           return false;
         } else {
-          logToBot2(`[TURN GUARD TIMEOUT] Waited on ${standingTile.name} ($${standingTile.price}) without Buy/Auction prompt. Proceeding.`);
+          logToBot(`[TURN GUARD TIMEOUT] Prompt did not appear for ${standingTile.name} ($${standingTile.price}). Proceeding.`);
         }
       } else {
         this.unownedTileWaitCount = 0;
@@ -4742,9 +5039,9 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       }
       if (CONFIG2.DELIBERATE_BEFORE_END_TURN && CONFIG2.OLLAMA_ENABLED && this.lastDeliberatedTurn !== GameMemory2.turnCount) {
         this.lastDeliberatedTurn = GameMemory2.turnCount;
-        logToBot2("[STRATEGY] Ollama turn review before ending...");
+        logToBot("[STRATEGY] Ollama turn review before ending...");
         const verdict = await OllamaClient.deliberateEndTurnStrategy();
-        logToBot2(`[STRATEGY] Deliberation: ${verdict.action} - ${verdict.rationale}`);
+        logToBot(`[STRATEGY] Deliberation: ${verdict.action} - ${verdict.rationale}`);
         if (verdict.action === "UPGRADE") {
           if (this.handleHouseBuilding(snapshot)) {
             return true;
@@ -4781,7 +5078,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
           this.isEndingTurn = false;
         }, 2500);
         GameMemory2.isMyTurn = false;
-        logToBot2(`[TURN ACTION] Ending turn #${GameMemory2.turnCount}. Passing turn priority to next player.`);
+        logToBot(`[TURN ACTION] Ending turn #${GameMemory2.turnCount}. Passing turn priority to next player.`);
         return executeOrAdvise({
           el: endTurnBtn,
           title: "END TURN",
@@ -4891,24 +5188,29 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         const dice = Array.isArray(payload.dice) ? payload.dice : Array.isArray(payload) ? payload : [];
         const sum = (dice[0] || 0) + (dice[1] || 0);
         const pName = payload.playerName || payload.username || payload.name || payload.player;
-        const isMeRolling = pName ? GameMemory2.isMe(pName) : GameMemory2.isMyTurn;
-        if (isMeRolling && sum > 0) {
-          GameMemory2.myPos = (GameMemory2.myPos + sum) % 40;
-          logToBot2(`[SOCKET DICE] \u{1F3B2} I rolled ${sum} ([${dice.join(",")}]) -> Moved to Tile #${GameMemory2.myPos} (${BOARD_TILES[GameMemory2.myPos]?.name || "Unknown"})`);
+        if (pName && GameMemory2.isMe(pName) && sum > 0) {
+          if (!GameMemory2.inJail) {
+            GameMemory2.myPos = (GameMemory2.myPos + sum) % 40;
+            logToBot(`[DICE] \u{1F3B2} I rolled ${sum} ([${dice.join(",")}]) -> Moved to Tile #${GameMemory2.myPos} (${BOARD_TILES[GameMemory2.myPos]?.name || "Unknown"})`);
+          }
         } else if (pName && GameMemory2.players[pName]) {
-          const currentOppPos = GameMemory2.players[pName].pos || 0;
-          GameMemory2.players[pName].pos = (currentOppPos + sum) % 40;
-          logToBot2(`[SOCKET DICE] \u{1F3B2} ${pName} rolled ${sum} -> Tile #${GameMemory2.players[pName].pos}`);
+          if (!GameMemory2.players[pName].inJail && sum > 0) {
+            const currentOppPos = GameMemory2.players[pName].pos || 0;
+            GameMemory2.players[pName].pos = (currentOppPos + sum) % 40;
+            logToBot(`[DICE] \u{1F3B2} ${pName} rolled ${sum} -> Tile #${GameMemory2.players[pName].pos}`);
+          }
         }
       }
       if (eventName.includes("purchase") || eventName.includes("buy")) {
         const tileId = typeof payload.blockIndex === "number" ? payload.blockIndex : typeof payload.tileId === "number" ? payload.tileId : payload.tileIndex;
-        if (typeof tileId === "number") {
+        const pName = payload.playerName || payload.username || payload.name || payload.player;
+        if (typeof tileId === "number" && pName) {
           GameMemory2.lastPurchasedBlock = tileId;
-          const buyer = payload.playerName || payload.username || (GameMemory2.isMyTurn ? GameMemory2.myName || "__ME__" : null);
-          if (buyer && GameMemory2.ownership[tileId]) {
+          const isMe = GameMemory2.isMe(pName);
+          const buyer = isMe ? GameMemory2.myName || "__ME__" : pName;
+          if (GameMemory2.ownership[tileId]) {
             GameMemory2.ownership[tileId].owner = buyer;
-            logToBot2(`[SOCKET PURCHASE] \u{1F3F7}\uFE0F Tile #${tileId} (${BOARD_TILES[tileId]?.name || "Unknown"}) acquired by ${buyer}`);
+            logToBot(`[PURCHASE] \u{1F3F7}\uFE0F Tile #${tileId} (${BOARD_TILES[tileId]?.name || "Unknown"}) acquired by ${buyer}`);
           }
         }
       }
@@ -5003,81 +5305,86 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       try {
         syncBoardStateFromDOM();
       } catch (err) {
-        logToBot2(`[DOM Sync Warning] ${err}`);
+        logToBot(`[DOM Sync Warning] ${err}`);
       }
       try {
         HUDPanel.updateTelemetry();
       } catch (err) {
-        logToBot2(`[Telemetry Warning] ${err}`);
+        logToBot(`[Telemetry Warning] ${err}`);
       }
       try {
         await ChatEngine.scanAndRespondToOpponentChat();
       } catch (err) {
-        logToBot2(`[Chat Scan Warning] ${err}`);
+        logToBot(`[Chat Scan Warning] ${err}`);
       }
       let snapshot;
       try {
         snapshot = createDOMSnapshot();
       } catch (err) {
-        logToBot2(`[DOM Snapshot Error] ${err}`);
+        logToBot(`[DOM Snapshot Error] ${err}`);
         return;
+      }
+      try {
+        if (ActionExecutor.handleConfirmationModal(snapshot)) return;
+      } catch (err) {
+        logToBot(`[Confirmation Modal Warning] ${err}`);
       }
       try {
         if (await ActionExecutor.handleTrade(snapshot)) return;
       } catch (err) {
-        logToBot2(`[Trade Step Warning] ${err}`);
+        logToBot(`[Trade Step Warning] ${err}`);
       }
       try {
         if (ActionExecutor.handleDebtRecovery(snapshot)) return;
       } catch (err) {
-        logToBot2(`[Debt Step Warning] ${err}`);
+        logToBot(`[Debt Step Warning] ${err}`);
       }
       try {
         if (ActionExecutor.handleJail(snapshot)) return;
       } catch (err) {
-        logToBot2(`[Jail Step Warning] ${err}`);
+        logToBot(`[Jail Step Warning] ${err}`);
       }
       try {
         if (ActionExecutor.handleRollDice(snapshot)) return;
       } catch (err) {
-        logToBot2(`[Roll Step Warning] ${err}`);
+        logToBot(`[Roll Step Warning] ${err}`);
       }
       try {
         if (ActionExecutor.handleBuyOrAuction(snapshot)) return;
       } catch (err) {
-        logToBot2(`[Buy/Auction Step Warning] ${err}`);
+        logToBot(`[Buy/Auction Step Warning] ${err}`);
       }
       try {
         if (ActionExecutor.handleAuction(snapshot)) return;
       } catch (err) {
-        logToBot2(`[Auction Bid Step Warning] ${err}`);
+        logToBot(`[Auction Bid Step Warning] ${err}`);
       }
       try {
         if (ActionExecutor.handleHouseBuilding(snapshot)) return;
       } catch (err) {
-        logToBot2(`[Build Step Warning] ${err}`);
+        logToBot(`[Build Step Warning] ${err}`);
       }
       try {
         if (ActionExecutor.handleUnmortgage(snapshot)) return;
       } catch (err) {
-        logToBot2(`[Unmortgage Step Warning] ${err}`);
+        logToBot(`[Unmortgage Step Warning] ${err}`);
       }
       try {
         if (ActionExecutor.handleProactiveTrade(snapshot)) return;
       } catch (err) {
-        logToBot2(`[Proactive Trade Step Warning] ${err}`);
+        logToBot(`[Proactive Trade Step Warning] ${err}`);
       }
       try {
         await ActionExecutor.deliberateBeforeEndTurn(snapshot);
       } catch (err) {
-        logToBot2(`[End Turn Step Warning] ${err}`);
+        logToBot(`[End Turn Step Warning] ${err}`);
         try {
           ActionExecutor.handleEndTurn(snapshot);
         } catch (_) {
         }
       }
     } catch (err) {
-      logToBot2(`Eval loop error: ${err}`);
+      logToBot(`Eval loop error: ${err}`);
     } finally {
       isEvaluating = false;
     }
@@ -5099,13 +5406,13 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     if (state.status) {
       const snap = createDOMSnapshot();
       if (!checkGameStarted(snap)) {
-        logToBot2("Lobby detected. Bot will activate once match starts.");
+        logToBot("Lobby detected. Bot will activate once match starts.");
       } else {
-        logToBot2("GRANDMASTER AI ENGAGED. AUTONOMOUS GAMEPLAY ACTIVE.");
+        logToBot("GRANDMASTER AI ENGAGED. AUTONOMOUS GAMEPLAY ACTIVE.");
       }
       evaluateAndAct();
     } else {
-      logToBot2("Automation Paused (STANDBY).");
+      logToBot("Automation Paused (STANDBY).");
     }
   }
   function startObserver() {

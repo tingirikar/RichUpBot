@@ -1,5 +1,7 @@
 import { BOARD_TILES, TILE_BY_NAME, BOARD_LABELS_BLACKLIST } from '../data/boardTiles.js';
 import { GameMemory } from '../memory/gameMemory.js';
+import { logToBot } from './actionExecutor.js';
+import { TradeProposalExecutor } from '../engine/tradeProposalExecutor.js';
 
 /**
  * BOARD DOM SCANNER & PLAYER TELEMETRY SYNC
@@ -8,6 +10,7 @@ import { GameMemory } from '../memory/gameMemory.js';
  * 1. Local player identity & cash balance from the player card with the leave [->] icon
  * 2. Exact owned properties and house counts from the "My properties" sidebar panel
  * 3. Activity feed logs
+ * 4. Floating avatar tokens and pixel (x, y) coordinates on the board
  */
 export function syncBoardStateFromDOM() {
     if (!document.body) return;
@@ -31,7 +34,10 @@ export function syncBoardStateFromDOM() {
     // 5. Sync Properties & House Counts from "My properties" Sidebar
     syncMyPropertiesFromSidebar();
 
-    // 6. Activity Logs: Safely parse activity log events without corrupting verified cash
+    // 6. Visual DOM Coordinate Scraper: read pixel coordinates of floating avatar tokens (Gap 2)
+    scanPlayerTokenPositionsFromDOM();
+
+    // 7. Activity Logs: Safely parse activity log events without corrupting verified cash
     scanActivityLogsOnly();
 }
 
@@ -392,11 +398,6 @@ export function syncBoardTilePricesAndBadgesFromDOM() {
                         const price = parseInt(m[1] || m[2], 10);
                         if (!isNaN(price) && price >= 50 && price <= 500) {
                             tile.price = price;
-                            // If a tile on the board has a price badge, it is UNOWNED!
-                            if (GameMemory.ownership[tile.id] && !GameMemory.isMe(GameMemory.ownership[tile.id].owner)) {
-                                GameMemory.ownership[tile.id].owner = null;
-                                GameMemory.ownership[tile.id].houses = 0;
-                            }
                         }
                     }
                 }
@@ -421,6 +422,190 @@ export function syncBoardTilePricesAndBadgesFromDOM() {
         }
     } else {
         GameMemory.isNegativeDebt = GameMemory.myCash < 0;
+    }
+}
+
+/**
+ * Visual DOM Coordinate Scraper for Player Avatars on the Board (Gap 2)
+ * Reads pixel (x, y) coordinates of floating avatar tokens / SVGs on the board
+ * and maps them directly to the matching board tile bounding boxes.
+ */
+export function scanPlayerTokenPositionsFromDOM() {
+    const hud = document.getElementById('rubot-hud-panel');
+    if (!document.body) return;
+
+    // 1. Find board container
+    const boardEl = document.querySelector('[class*="board" i], main, section') || document.body;
+    const boardRect = boardEl.getBoundingClientRect();
+    if (boardRect.width < 200 || boardRect.height < 200) return;
+
+    // 2. Discover tile bounding rects on the board
+    const tileRects = new Map(); // tileId -> { id, name, el, rect, cx, cy }
+    const allEls = boardEl.querySelectorAll('div, [class*="tile" i], [class*="cell" i]');
+
+    for (let i = 0; i < allEls.length; i++) {
+        const el = allEls[i];
+        if (hud && hud.contains(el)) continue;
+        const text = (el.innerText || '').trim();
+        if (text.length > 80) continue;
+
+        for (const tile of BOARD_TILES) {
+            if (tileRects.has(tile.id)) continue;
+            // Match tile by name or landmark text
+            let match = false;
+            if (tile.id === 0 && /^start/i.test(text)) match = true;
+            else if (tile.id === 10 && (/in prison/i.test(text) || /passing by/i.test(text))) match = true;
+            else if (tile.id === 20 && /vacation/i.test(text)) match = true;
+            else if (tile.id === 30 && /go to prison/i.test(text)) match = true;
+            else if (tile.name && new RegExp(`\\b${tile.name}\\b`, 'i').test(text)) match = true;
+
+            if (match) {
+                const r = el.getBoundingClientRect();
+                if (r.width >= 25 && r.height >= 25) {
+                    tileRects.set(tile.id, {
+                        id: tile.id,
+                        name: tile.name,
+                        el: el,
+                        rect: r,
+                        cx: r.left + r.width / 2,
+                        cy: r.top + r.height / 2
+                    });
+                }
+            }
+        }
+    }
+
+    // 3. Extract player avatar signatures from scoreboard
+    const playerAvatars = [];
+    const playerEntries = Object.keys(GameMemory.players);
+
+    for (const pName of playerEntries) {
+        // Find player card element in DOM
+        const rows = Array.from(document.querySelectorAll('div, section, li, tr')).filter(el => {
+            if (hud && hud.contains(el)) return false;
+            const t = el.innerText || '';
+            return t.includes(pName) && t.includes('$') && t.length < 150;
+        });
+
+        const pRow = rows.find(r => r.children.length >= 2) || rows[0];
+        if (!pRow) continue;
+
+        // Find avatar element in player card
+        const avEl = pRow.querySelector('svg, img, [class*="avatar" i], [class*="face" i], [class*="token" i], div[style*="border-radius"]');
+        let color = '';
+        let fill = '';
+        let src = '';
+        let classSnippet = '';
+
+        if (avEl) {
+            const style = window.getComputedStyle(avEl);
+            color = style.backgroundColor || style.color || '';
+            classSnippet = (avEl.className || '').toString();
+            if (avEl.tagName.toLowerCase() === 'img') {
+                src = avEl.src || avEl.getAttribute('data-src') || '';
+            }
+            const svgChild = avEl.tagName.toLowerCase() === 'svg' ? avEl : avEl.querySelector('svg, circle, path');
+            if (svgChild) {
+                fill = svgChild.getAttribute('fill') || window.getComputedStyle(svgChild).fill || '';
+            }
+        }
+
+        playerAvatars.push({
+            name: pName,
+            isMe: GameMemory.isMe(pName),
+            color,
+            fill,
+            src,
+            classSnippet
+        });
+    }
+
+    // 4. Find candidate floating avatar tokens on the board
+    const candidates = Array.from(boardEl.querySelectorAll('svg, img, div, span')).filter(el => {
+        if (hud && hud.contains(el)) return false;
+        if (el.closest('[class*="chat" i], [class*="scoreboard" i], [class*="modal" i]')) return false;
+
+        const r = el.getBoundingClientRect();
+        if (r.width < 18 || r.width > 65 || r.height < 18 || r.height > 65) return false;
+        if (r.left < boardRect.left || r.right > boardRect.right || r.top < boardRect.top || r.bottom > boardRect.bottom) return false;
+
+        const style = window.getComputedStyle(el);
+        const isRound = style.borderRadius && (parseInt(style.borderRadius) >= 10 || style.borderRadius.includes('%'));
+        const isSvg = el.tagName.toLowerCase() === 'svg';
+        const isImg = el.tagName.toLowerCase() === 'img';
+        const hasAvatarClass = (el.className || '').toString().toLowerCase().includes('avatar') || (el.className || '').toString().toLowerCase().includes('token');
+
+        return isRound || isSvg || isImg || hasAvatarClass;
+    });
+
+    // 5. Correlate candidate tokens to players & find their tile position
+    for (const tokenEl of candidates) {
+        const tr = tokenEl.getBoundingClientRect();
+        const tcx = tr.left + tr.width / 2;
+        const tcy = tr.top + tr.height / 2;
+
+        const style = window.getComputedStyle(tokenEl);
+        const tColor = style.backgroundColor || style.color || '';
+        const tSrc = tokenEl.tagName.toLowerCase() === 'img' ? (tokenEl.src || '') : '';
+        const tSvg = tokenEl.tagName.toLowerCase() === 'svg' ? tokenEl : tokenEl.querySelector('svg, circle, path');
+        const tFill = tSvg ? (tSvg.getAttribute('fill') || window.getComputedStyle(tSvg).fill || '') : '';
+        const tClass = (tokenEl.className || '').toString();
+
+        let matchedPlayer = null;
+        for (const p of playerAvatars) {
+            let score = 0;
+            if (p.src && tSrc && p.src === tSrc) score += 10;
+            if (p.fill && tFill && p.fill === tFill && p.fill !== 'none') score += 5;
+            if (p.color && tColor && p.color === tColor && !tColor.includes('rgba(0, 0, 0, 0)')) score += 3;
+            if (p.classSnippet && tClass && p.classSnippet === tClass) score += 2;
+
+            if (score >= 3) {
+                matchedPlayer = p;
+                break;
+            }
+        }
+
+        if (!matchedPlayer && playerAvatars.length === 1) {
+            matchedPlayer = playerAvatars[0];
+        }
+
+        if (!matchedPlayer) continue;
+
+        let bestTile = null;
+        let minDistance = Infinity;
+
+        for (const [id, t] of tileRects.entries()) {
+            if (tcx >= t.rect.left && tcx <= t.rect.right && tcy >= t.rect.top && tcy <= t.rect.bottom) {
+                bestTile = t;
+                minDistance = 0;
+                break;
+            }
+            if (t.el && t.el.contains(tokenEl)) {
+                bestTile = t;
+                minDistance = 0;
+                break;
+            }
+            const dist = Math.hypot(tcx - t.cx, tcy - t.cy);
+            if (dist < minDistance) {
+                minDistance = dist;
+                bestTile = t;
+            }
+        }
+
+        if (bestTile && minDistance < 85) {
+            if (matchedPlayer.isMe) {
+                if (GameMemory.myPos !== bestTile.id && !GameMemory.inJail) {
+                    GameMemory.myPos = bestTile.id;
+                    logToBot(`[DOM COORDINATE SCRAPER] 🎯 Verified local position at Tile #${bestTile.id} (${bestTile.name}) [Pixel: (${Math.round(tcx)}, ${Math.round(tcy)})]`);
+                }
+            } else if (GameMemory.players[matchedPlayer.name]) {
+                const curPos = GameMemory.players[matchedPlayer.name].pos;
+                if (curPos !== bestTile.id) {
+                    GameMemory.players[matchedPlayer.name].pos = bestTile.id;
+                    logToBot(`[DOM COORDINATE SCRAPER] 🎯 Verified ${matchedPlayer.name} at Tile #${bestTile.id} (${bestTile.name}) [Pixel: (${Math.round(tcx)}, ${Math.round(tcy)})] (was #${curPos})`);
+                }
+            }
+        }
     }
 }
 
@@ -659,8 +844,24 @@ function parseActivityLogLine(line) {
         return;
     }
 
-    if (/declined trade/i.test(line)) {
-        logToBot(`[TRADE INTEL] Trade declined: ${line}`);
+    if (/declined.*trade/i.test(line)) {
+        const parts = line.split(/declined/i);
+        const decliner = parts[0].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim();
+        const createdByPart = /created by (.+)/i.exec(line);
+        const creator = createdByPart ? createdByPart[1].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim() : null;
+
+        if (TradeProposalExecutor.lastSentProposal && (GameMemory.isMe(creator) || !creator)) {
+            const proposal = TradeProposalExecutor.lastSentProposal;
+            if (!decliner || decliner.toLowerCase() === proposal.targetOwner.toLowerCase() || !creator) {
+                GameMemory.recordDeclinedTrade(proposal.targetOwner, proposal);
+                const givenNames = (proposal.givenTiles || []).map(t => t.name).join(', ') || 'cash';
+                const recNames = (proposal.receivedTiles || []).map(t => t.name).join(', ');
+                logToBot(`[TRADE MEMORY] 📜 Archival rejection recorded for ${proposal.targetOwner}: Offered [${givenNames}] for [${recNames}] (+$${proposal.cashOffer || 0})`);
+            }
+        } else if (decliner) {
+            GameMemory.recordDeclinedTrade(decliner, { givenTiles: [], receivedTiles: [], cashOffer: 0 });
+            logToBot(`[TRADE INTEL] Trade declined by ${decliner}`);
+        }
         GameMemory.markLogProcessed(line);
         return;
     }
@@ -743,13 +944,12 @@ function parseActivityLogLine(line) {
         if (!isNaN(rollVal) && rollVal >= 2 && rollVal <= 12) {
             const isMe = GameMemory.isMe(player);
             logToBot(`[DICE EVENT] 🎲 ${isMe ? 'I' : player} rolled ${rollVal}`);
-            // Only advance position from text logs if WebSocket is NOT active/healthy!
-            // When WebSocket is active, socketHook.js already advanced position with 0ms latency.
-            const wsHealthy = typeof GameMemory.isWsHealthy === 'function' && GameMemory.isWsHealthy();
-            if (!wsHealthy) {
-                if (isMe) {
+            if (isMe) {
+                if (!GameMemory.inJail) {
                     GameMemory.myPos = (GameMemory.myPos + rollVal) % 40;
-                } else if (GameMemory.players[player]) {
+                }
+            } else if (GameMemory.players[player]) {
+                if (!GameMemory.players[player].inJail) {
                     GameMemory.players[player].pos = ((GameMemory.players[player].pos || 0) + rollVal) % 40;
                 }
             }

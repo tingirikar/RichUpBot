@@ -865,9 +865,14 @@ export const HUDPanel = {
                     ? data.ownedTiles.map(t => t.name).join(', ')
                     : 'None yet';
 
+                const declCount = typeof GameMemory.getDeclinedCountForPlayer === 'function' ? GameMemory.getDeclinedCountForPlayer(pName) : 0;
+                const declBadge = declCount > 0 ? `<span class="rubot-intel-badge red">${declCount} Declined</span>` : '';
+                const pos = GameMemory.players[pName]?.pos;
+                const posStr = typeof pos === 'number' ? `Tile #${pos}` : 'Tile #0';
+
                 html += `
                     <div style="margin-top: 4px; padding-top: 4px; border-top: 1px solid rgba(139,92,246,0.12);">
-                        <b>${pName}:</b> <span class="rubot-intel-badge green">$${data.cash}</span> ${hungryStr}<br>
+                        <b>${pName}:</b> <span class="rubot-intel-badge green">$${data.cash}</span> <span class="rubot-intel-badge">${posStr}</span> ${hungryStr} ${declBadge}<br>
                         <span style="color: rgba(196,181,253,0.7);">${propStr}</span>
                     </div>
                 `;

@@ -134,33 +134,40 @@ function parseSocketIOFrame(raw) {
             }
         }
 
-        // 2. Dice Rolled: Only advance myPos if it was MY roll!
+        // 2. Dice Rolled: Strictly advance myPos ONLY if pName is explicitly verified as ME!
         if (eventName.includes('roll') || eventName.includes('dice')) {
             const dice = Array.isArray(payload.dice) ? payload.dice : (Array.isArray(payload) ? payload : []);
             const sum = (dice[0] || 0) + (dice[1] || 0);
             const pName = payload.playerName || payload.username || payload.name || payload.player;
-            const isMeRolling = pName ? GameMemory.isMe(pName) : GameMemory.isMyTurn;
 
-            if (isMeRolling && sum > 0) {
-                GameMemory.myPos = (GameMemory.myPos + sum) % 40;
-                logToBot(`[SOCKET DICE] 🎲 I rolled ${sum} ([${dice.join(',')}]) -> Moved to Tile #${GameMemory.myPos} (${BOARD_TILES[GameMemory.myPos]?.name || 'Unknown'})`);
+            // NEVER fall back to isMyTurn! Only advance if pName explicitly matches local player!
+            if (pName && GameMemory.isMe(pName) && sum > 0) {
+                if (!GameMemory.inJail) {
+                    GameMemory.myPos = (GameMemory.myPos + sum) % 40;
+                    logToBot(`[DICE] 🎲 I rolled ${sum} ([${dice.join(',')}]) -> Moved to Tile #${GameMemory.myPos} (${BOARD_TILES[GameMemory.myPos]?.name || 'Unknown'})`);
+                }
             } else if (pName && GameMemory.players[pName]) {
-                const currentOppPos = GameMemory.players[pName].pos || 0;
-                GameMemory.players[pName].pos = (currentOppPos + sum) % 40;
-                logToBot(`[SOCKET DICE] 🎲 ${pName} rolled ${sum} -> Tile #${GameMemory.players[pName].pos}`);
+                if (!GameMemory.players[pName].inJail && sum > 0) {
+                    const currentOppPos = GameMemory.players[pName].pos || 0;
+                    GameMemory.players[pName].pos = (currentOppPos + sum) % 40;
+                    logToBot(`[DICE] 🎲 ${pName} rolled ${sum} -> Tile #${GameMemory.players[pName].pos}`);
+                }
             }
         }
 
-        // 3. Property Purchases
+        // 3. Property Purchases: Strictly assign owner ONLY if pName is explicitly verified!
         if (eventName.includes('purchase') || eventName.includes('buy')) {
             const tileId = typeof payload.blockIndex === 'number' ? payload.blockIndex : 
                            (typeof payload.tileId === 'number' ? payload.tileId : payload.tileIndex);
-            if (typeof tileId === 'number') {
+            const pName = payload.playerName || payload.username || payload.name || payload.player;
+
+            if (typeof tileId === 'number' && pName) {
                 GameMemory.lastPurchasedBlock = tileId;
-                const buyer = payload.playerName || payload.username || (GameMemory.isMyTurn ? (GameMemory.myName || '__ME__') : null);
-                if (buyer && GameMemory.ownership[tileId]) {
+                const isMe = GameMemory.isMe(pName);
+                const buyer = isMe ? (GameMemory.myName || '__ME__') : pName;
+                if (GameMemory.ownership[tileId]) {
                     GameMemory.ownership[tileId].owner = buyer;
-                    logToBot(`[SOCKET PURCHASE] 🏷️ Tile #${tileId} (${BOARD_TILES[tileId]?.name || 'Unknown'}) acquired by ${buyer}`);
+                    logToBot(`[PURCHASE] 🏷️ Tile #${tileId} (${BOARD_TILES[tileId]?.name || 'Unknown'}) acquired by ${buyer}`);
                 }
             }
         }

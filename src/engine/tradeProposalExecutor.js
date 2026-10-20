@@ -81,30 +81,36 @@ export const TradeProposalExecutor = {
             await sleep(700);
 
             // STEP 3: Wait for 2-column trade configuration window
-            const snap3 = createDOMSnapshot();
+            const givenTiles = Array.isArray(swap.myGivenTiles) 
+                ? swap.myGivenTiles 
+                : (swap.myGivenTile ? [swap.myGivenTile] : []);
 
-            // Select our property to give (left column)
-            if (swap.myGivenTile) {
-                const myPropCard = snap3.findTradePropertyCard(swap.myGivenTile.name, 'mine');
+            for (const tile of givenTiles) {
+                const snap3 = createDOMSnapshot();
+                const myPropCard = snap3.findTradePropertyCard(tile.name, 'mine');
                 if (myPropCard) {
                     myPropCard.click();
-                    logToBot(`[TRADE CREATOR] Selected offer property: ${swap.myGivenTile.name}`);
-                    await sleep(400);
+                    logToBot(`[TRADE CREATOR] Selected offer property: ${tile.name}`);
+                    await sleep(350);
                 } else {
-                    logToBot(`[TRADE CREATOR] Could not find offer property: ${swap.myGivenTile.name}`);
+                    logToBot(`[TRADE CREATOR] Could not find offer property: ${tile.name}`);
                 }
             }
 
-            // Select their property to request (right column)
-            const snap4 = createDOMSnapshot();
-            if (swap.myReceivedTile) {
-                const theirPropCard = snap4.findTradePropertyCard(swap.myReceivedTile.name, 'theirs');
+            // Select their property to request (right column - supports multi-property swaps)
+            const receivedTiles = Array.isArray(swap.myReceivedTiles)
+                ? swap.myReceivedTiles
+                : (swap.myReceivedTile ? [swap.myReceivedTile] : []);
+
+            for (const tile of receivedTiles) {
+                const snap4 = createDOMSnapshot();
+                const theirPropCard = snap4.findTradePropertyCard(tile.name, 'theirs');
                 if (theirPropCard) {
                     theirPropCard.click();
-                    logToBot(`[TRADE CREATOR] Selected request property: ${swap.myReceivedTile.name}`);
-                    await sleep(400);
+                    logToBot(`[TRADE CREATOR] Selected request property: ${tile.name}`);
+                    await sleep(350);
                 } else {
-                    logToBot(`[TRADE CREATOR] Could not find request property: ${swap.myReceivedTile.name}`);
+                    logToBot(`[TRADE CREATOR] Could not find request property: ${tile.name}`);
                 }
             }
 
@@ -120,6 +126,14 @@ export const TradeProposalExecutor = {
                 sendBtn.click();
                 logToBot(`[TRADE CREATOR] Trade proposal sent to ${swap.targetOwner}!`);
                 this.lastProposedTimes.set(swap.targetOwner, Date.now());
+                this.lastSentProposal = {
+                    targetOwner: swap.targetOwner,
+                    givenTiles,
+                    receivedTiles,
+                    cashOffer: swap.cashOffer || 0,
+                    cashDemand: swap.cashDemand || 0,
+                    timestamp: Date.now()
+                };
 
                 // STEP 6: Send friendly chat line (only if chat is enabled)
                 if (CONFIG.CHAT_ENABLED && swap.pitch) {

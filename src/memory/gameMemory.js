@@ -40,6 +40,52 @@ export const GameMemory = {
     // Tile ownership: tileId -> { owner, houses, mortgaged }
     ownership: {},
 
+    // Archival history of declined trades per player:
+    // playerName -> Array<{ givenIds: number[], receivedIds: number[], cashOffer: number, ts: number }>
+    declinedTrades: {},
+
+    recordDeclinedTrade(partnerName, trade = {}) {
+        if (!partnerName) return;
+        const key = partnerName.trim();
+        if (!this.declinedTrades[key]) this.declinedTrades[key] = [];
+
+        const given = trade.givenTiles || (trade.myGivenTiles ? trade.myGivenTiles : (trade.myGivenTile ? [trade.myGivenTile] : []));
+        const received = trade.receivedTiles || (trade.myReceivedTiles ? trade.myReceivedTiles : (trade.myReceivedTile ? [trade.myReceivedTile] : []));
+        const givenIds = given.map(t => typeof t === 'object' ? t.id : t).filter(x => typeof x === 'number').sort();
+        const receivedIds = received.map(t => typeof t === 'object' ? t.id : t).filter(x => typeof x === 'number').sort();
+        const cashOffer = trade.cashOffer || trade.givenCash || 0;
+
+        this.declinedTrades[key].push({
+            givenIds,
+            receivedIds,
+            cashOffer,
+            ts: Date.now()
+        });
+
+        if (this.declinedTrades[key].length > 25) this.declinedTrades[key].shift();
+    },
+
+    isTradePreviouslyDeclined(partnerName, givenIds = [], receivedIds = [], cashOffer = 0) {
+        if (!partnerName) return false;
+        const history = this.declinedTrades[partnerName.trim()];
+        if (!history || history.length === 0) return false;
+
+        const gSorted = [...givenIds].sort().join(',');
+        const rSorted = [...receivedIds].sort().join(',');
+
+        return history.some(h => {
+            const matchG = h.givenIds.join(',') === gSorted;
+            const matchR = h.receivedIds.join(',') === rSorted;
+            // Matches if this exact package was rejected and we haven't increased the sweetener
+            return matchG && matchR && cashOffer <= h.cashOffer && (Date.now() - h.ts < 240000);
+        });
+    },
+
+    getDeclinedCountForPlayer(partnerName) {
+        if (!partnerName) return 0;
+        return (this.declinedTrades[partnerName.trim()] || []).length;
+    },
+
     // Diagnostic & tracking logs
     processedLogs: new Map(),
     wsActive: false,
@@ -105,6 +151,7 @@ export const GameMemory = {
         this.isMyTurn = false;
         this.players = {};
         this.ownership = {};
+        this.declinedTrades = {};
         BOARD_TILES.forEach(t => {
             if (t.group) {
                 this.ownership[t.id] = { owner: null, houses: 0, mortgaged: false };

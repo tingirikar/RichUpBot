@@ -92,6 +92,13 @@ async function evaluateAndAct() {
             return;
         }
 
+        // 0. Check for secondary confirmation modals (e.g. custom rule "Are you sure?" prompts)
+        try {
+            if (ActionExecutor.handleConfirmationModal(snapshot)) return;
+        } catch (err) {
+            logToBot(`[Confirmation Modal Warning] ${err}`);
+        }
+
         // 1. Check for incoming trade modal (Hybrid Ollama / Minimax)
         try {
             if (await ActionExecutor.handleTrade(snapshot)) return;

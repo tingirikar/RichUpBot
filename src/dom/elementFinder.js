@@ -107,8 +107,8 @@ export function createDOMSnapshot() {
             }
 
             // 3. Fallback: scan any clickable element on the page
-            const allClickables = Array.from(document.querySelectorAll('button, [role="button"], [class*="btn" i], [class*="button" i], div[role="button"]'))
-                .filter(el => !hud || !hud.contains(el));
+            const allClickables = Array.from(document.querySelectorAll('button, [role="button"], [class*="btn" i], [class*="button" i], div[role="button"], div[tabindex], a, div'))
+                .filter(el => (!hud || !hud.contains(el)) && el.childElementCount <= 2);
             
             for (const el of allClickables) {
                 if (!isVisibleAndEnabled(el)) continue;
@@ -264,6 +264,40 @@ export function createDOMSnapshot() {
         },
 
         /**
+         * Detects secondary confirmation modal dialogs (e.g. "Are you sure you want to mortgage?", "Confirm action")
+         */
+        findConfirmationModalButton() {
+            const modals = document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="confirm" i], [class*="alert" i], [class*="dialog" i]');
+            for (let i = 0; i < modals.length; i++) {
+                const m = modals[i];
+                if (hud && hud.contains(m)) continue;
+                if (!isVisibleAndEnabled(m)) continue;
+
+                const text = (m.innerText || '').toLowerCase();
+                if (text.includes('are you sure') || text.includes('confirm') || text.includes('mortgage') || text.includes('proceed') || text.includes('unmortgage')) {
+                    const btns = m.querySelectorAll('button, [role="button"], [class*="btn" i]');
+                    for (let j = 0; j < btns.length; j++) {
+                        const b = btns[j];
+                        if (!isVisibleAndEnabled(b)) continue;
+                        const bText = normalizeText(b);
+                        if (
+                            bText === 'yes' ||
+                            bText === 'confirm' ||
+                            bText === 'mortgage' ||
+                            bText === 'unmortgage' ||
+                            bText === 'ok' ||
+                            bText === 'proceed' ||
+                            bText.includes('confirm')
+                        ) {
+                            return b;
+                        }
+                    }
+                }
+            }
+            return null;
+        },
+
+        /**
          * Detects if a property card popover/modal is currently open and returns its DOM element & tile info
          */
         /**
@@ -284,9 +318,8 @@ export function createDOMSnapshot() {
                 const text = c.innerText || '';
                 const lower = text.toLowerCase();
 
-                // Strictly exclude Auction, Bidding, Trade, and Lobby modals!
+                // Strictly exclude active Bidding, Trade, and Lobby modals!
                 if (
-                    lower.includes('auction') ||
                     lower.includes("i'm bidding") ||
                     lower.includes('current bid') ||
                     lower.includes('highest bid') ||

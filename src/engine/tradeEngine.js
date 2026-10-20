@@ -2,6 +2,7 @@ import { GROUP_TILES, BOARD_TILES } from '../data/boardTiles.js';
 import { GameMemory } from '../memory/gameMemory.js';
 import { OpponentTracker } from '../memory/opponentTracker.js';
 import { CONFIG } from '../config.js';
+import { logToBot } from '../dom/actionExecutor.js';
 
 /**
  * GAME-THEORETIC MINIMAX TRADE ENGINE
@@ -499,6 +500,64 @@ export const TradeEngine = {
             }
         }
 
-        return opportunities;
+        // 5. 2-FOR-1 MULTI-ASSET PACKAGE SWAPS (Gap 3: Offer 2 surplus properties for critical 3rd monopoly card)
+        if (safeSacrifices.length >= 2) {
+            for (const myNeed of myMissing) {
+                if (!myNeed.heldBy || myNeed.isUnowned) continue;
+                const targetOppName = myNeed.heldBy;
+                const s1 = safeSacrifices[0];
+                const s2 = safeSacrifices[1];
+                const cashOffer = Math.min(Math.max(0, GameMemory.myCash - 200), 50);
+
+                opportunities.push({
+                    targetOwner: targetOppName,
+                    myGivenTiles: [s1, s2],
+                    myReceivedTiles: [myNeed.missingTile],
+                    myGivenTile: s1,
+                    myReceivedTile: myNeed.missingTile,
+                    cashOffer,
+                    cashDemand: 0,
+                    summary: `2-FOR-1 PACKAGE: Give ${s1.name} & ${s2.name} -> Get ${myNeed.missingTile.name}`,
+                    pitch: `take both ${s1.name.toLowerCase()} and ${s2.name.toLowerCase()} for ${myNeed.missingTile.name.toLowerCase()}?`
+                });
+            }
+        }
+
+        // ARCHIVAL DECLINE FILTERING & SWEETENING (Gap 1: Never spam rejected trades; sweeten or pivot!)
+        const finalized = [];
+        for (const op of opportunities) {
+            const givenTiles = Array.isArray(op.myGivenTiles) ? op.myGivenTiles : (op.myGivenTile ? [op.myGivenTile] : []);
+            const recTiles = Array.isArray(op.myReceivedTiles) ? op.myReceivedTiles : (op.myReceivedTile ? [op.myReceivedTile] : []);
+            const givenIds = givenTiles.map(t => t.id);
+            const recIds = recTiles.map(t => t.id);
+
+            if (GameMemory.isTradePreviouslyDeclined(op.targetOwner, givenIds, recIds, op.cashOffer)) {
+                // Previously declined! Attempt to sweeten with cash
+                const extra = 75;
+                if (GameMemory.myCash - (op.cashOffer + extra) >= 150) {
+                    op.cashOffer += extra;
+                    op.summary += ` [SWEETENED +$${extra}]`;
+                    op.pitch = `${op.pitch.replace(/\?$/, '')} + ${op.cashOffer}?`;
+                    logToBot(`[TRADE ENGINE] 🍯 Sweetened previously declined trade for ${op.targetOwner}: increased cash to $${op.cashOffer}`);
+                    finalized.push(op);
+                } else if (givenTiles.length === 1 && safeSacrifices.length >= 2) {
+                    // Upgrade to 2-for-1 package
+                    const s2 = safeSacrifices.find(s => s.id !== givenTiles[0].id);
+                    if (s2) {
+                        op.myGivenTiles = [givenTiles[0], s2];
+                        op.myGivenTile = null;
+                        op.summary = `2-FOR-1 SWEETENED: Give ${givenTiles[0].name} & ${s2.name} -> Get ${recTiles[0]?.name || 'property'}`;
+                        op.pitch = `what about ${givenTiles[0].name.toLowerCase()} AND ${s2.name.toLowerCase()} for ${recTiles[0]?.name?.toLowerCase()}?`;
+                        logToBot(`[TRADE ENGINE] 🎁 Upgraded declined trade to 2-for-1 package: [${givenTiles[0].name}, ${s2.name}]`);
+                        finalized.push(op);
+                    }
+                }
+                // If cannot sweeten with cash or extra property, skip to respect player's archival rejection!
+            } else {
+                finalized.push(op);
+            }
+        }
+
+        return finalized;
     }
 };

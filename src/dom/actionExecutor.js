@@ -97,6 +97,16 @@ function executeOrAdvise({ el, title, reason, onExecute, onSkip }) {
 }
 
 export const ActionExecutor = {
+    handleConfirmationModal(snapshot) {
+        const confirmBtn = snapshot.findConfirmationModalButton ? snapshot.findConfirmationModalButton() : null;
+        if (confirmBtn) {
+            logToBot('[MODAL ACTION] Secondary confirmation dialog detected. Confirming action...');
+            delayClick(confirmBtn, 'Confirm secondary action prompt');
+            return true;
+        }
+        return false;
+    },
+
     async handleTrade(snapshot) {
         // If modal buttons aren't visible, check if an incoming trade notification exists in the sidebar
         const sidebarTrade = snapshot.findSidebarIncomingTradeItem();
@@ -291,6 +301,11 @@ export const ActionExecutor = {
 
         if (isBuyingLand) return false;
 
+        // Strictly exit if neither button is visible and it is NOT our turn!
+        if (!buyBtn && !auctionBtn && !GameMemory.isMyTurn) {
+            return false;
+        }
+
         // Verify or recover tile directly from the prompt card surrounding the buy button
         if (buyBtn) {
             let container = buyBtn.parentElement;
@@ -315,10 +330,10 @@ export const ActionExecutor = {
         const isPurchasable = tile && tile.group && (tile.type === 'property' || tile.type === 'airport' || tile.type === 'utility');
         const owner = tile ? GameMemory.ownership[tile.id]?.owner : null;
 
-        // If standing on an unowned purchasable property but buttons not rendered yet:
-        if (isPurchasable && !owner && !buyBtn && !auctionBtn) {
+        // Strictly on OUR turn: If standing on an unowned purchasable property but buttons not rendered yet:
+        if (GameMemory.isMyTurn && isPurchasable && !owner && !buyBtn && !auctionBtn) {
             const now = Date.now();
-            if (!this._lastPendingBuyLog || now - this._lastPendingBuyLog > 1200) {
+            if (!this._lastPendingBuyLog || now - this._lastPendingBuyLog > 2500) {
                 this._lastPendingBuyLog = now;
                 logToBot(`[BUY PENDING] Standing on unowned ${tile.name} (Tile #${tile.id}, $${tile.price || 0}), scanning DOM for Buy prompt...`);
             }
@@ -725,12 +740,14 @@ export const ActionExecutor = {
             }
 
             // 2. If prompt hasn't rendered yet (e.g. dice/movement animation), HOLD TURN!
-            if (this.unownedTileWaitCount < 8) {
+            if (this.unownedTileWaitCount < 4) {
                 this.unownedTileWaitCount++;
-                logToBot(`[TURN GUARD] BLOCKED premature 'End Turn'! Standing on unowned ${standingTile.name} (Tile #${standingTile.id}, $${standingTile.price}) with $${effectiveCash} cash. Holding turn for Buy prompt (${this.unownedTileWaitCount}/8)...`);
+                if (this.unownedTileWaitCount === 1) {
+                    logToBot(`[TURN GUARD] Holding 'End Turn' on ${standingTile.name} ($${standingTile.price}) to allow Buy prompt to render...`);
+                }
                 return false;
             } else {
-                logToBot(`[TURN GUARD TIMEOUT] Waited on ${standingTile.name} ($${standingTile.price}) without Buy/Auction prompt. Proceeding.`);
+                logToBot(`[TURN GUARD TIMEOUT] Prompt did not appear for ${standingTile.name} ($${standingTile.price}). Proceeding.`);
             }
         } else {
             this.unownedTileWaitCount = 0;
