@@ -78,7 +78,7 @@ export const MarkovRisk = {
 
         // 2. CRITICAL MONOPOLY COMPLETER: Always buy if it completes our set!
         const mySet = tile?.group ? GameMemory.getGroupCount(tile.group, '__ME__') : null;
-        if (mySet && (mySet.owned === mySet.total - 1 || tile.group === 'USA' || tile.group === 'Brazil')) {
+        if (mySet && mySet.total > 1 && mySet.owned === mySet.total - 1 && mySet.owned > 0) {
             return {
                 buy: true,
                 reason: `CRITICAL: Completes ${tile.group} Monopoly!`

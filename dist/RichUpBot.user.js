@@ -1920,7 +1920,7 @@
         };
       }
       const mySet = tile?.group ? GameMemory2.getGroupCount(tile.group, "__ME__") : null;
-      if (mySet && (mySet.owned === mySet.total - 1 || tile.group === "USA" || tile.group === "Brazil")) {
+      if (mySet && mySet.total > 1 && mySet.owned === mySet.total - 1 && mySet.owned > 0) {
         return {
           buy: true,
           reason: `CRITICAL: Completes ${tile.group} Monopoly!`
@@ -4002,6 +4002,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
   // src/dom/actionExecutor.js
   var isActing = false;
   var isEvaluatingTrade = false;
+  var isBuyingLand = false;
   var processedTradeSignatures = /* @__PURE__ */ new Map();
   function getIsActing() {
     return isActing;
@@ -4223,6 +4224,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     handleBuyOrAuction(snapshot) {
       const buyBtn = snapshot.findBuyPropertyButton();
       const auctionBtn = snapshot.findExactOrIncludes(["auction", "pass", "don't buy"]);
+      if (isBuyingLand) return false;
       if (!buyBtn && !auctionBtn) return false;
       let tile = null;
       if (buyBtn) {
@@ -4256,6 +4258,10 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         const effectiveCash = Math.max(GameMemory2.myCash, GameMemory2.players[GameMemory2.myName]?.cash || 0, price);
         const decision = MarkovRisk.shouldBuyProperty(tile, price, effectiveCash);
         if (decision.buy) {
+          isBuyingLand = true;
+          setTimeout(() => {
+            isBuyingLand = false;
+          }, 2e3);
           return executeOrAdvise({
             el: buyBtn,
             title: `BUY ${tile ? tile.name.toUpperCase() : "PROPERTY"} ($${price})`,

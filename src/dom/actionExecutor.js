@@ -16,6 +16,7 @@ import { HUDPanel } from '../ui/hudPanel.js';
 
 let isActing = false;
 let isEvaluatingTrade = false;
+let isBuyingLand = false;
 const processedTradeSignatures = new Map();
 
 export function getIsActing() {
@@ -287,6 +288,7 @@ export const ActionExecutor = {
         const buyBtn = snapshot.findBuyPropertyButton();
         const auctionBtn = snapshot.findExactOrIncludes(['auction', 'pass', "don't buy"]);
 
+        if (isBuyingLand) return false;
         if (!buyBtn && !auctionBtn) return false;
 
         let tile = null;
@@ -333,6 +335,9 @@ export const ActionExecutor = {
             const decision = MarkovRisk.shouldBuyProperty(tile, price, effectiveCash);
 
             if (decision.buy) {
+                isBuyingLand = true;
+                setTimeout(() => { isBuyingLand = false; }, 2000);
+
                 return executeOrAdvise({
                     el: buyBtn,
                     title: `BUY ${tile ? tile.name.toUpperCase() : 'PROPERTY'} ($${price})`,
