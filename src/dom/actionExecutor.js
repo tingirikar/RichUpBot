@@ -693,21 +693,39 @@ export const ActionExecutor = {
 
     handleRollDice(snapshot) {
         const rollBtn = snapshot.findExactOrIncludes(['roll the dice', 'roll again']);
-        if (rollBtn) {
-            GameMemory.isMyTurn = true;
-            logToBot(`[DICE ACTION] It's my turn! Rolling dice (Turn #${GameMemory.turnCount + 1}) | Cash: $${GameMemory.myCash} | Pos: Tile #${GameMemory.myPos}`);
+        if (!rollBtn) return false;
 
-            return executeOrAdvise({
-                el: rollBtn,
-                title: `ROLL THE DICE (Turn #${GameMemory.turnCount + 1})`,
-                reason: `My turn! Cash: $${GameMemory.myCash} | Pos: Tile #${GameMemory.myPos}`,
-                onExecute: () => {
-                    GameMemory.turnCount++;
-                    delayClick(rollBtn, `Rolling dice`);
-                }
-            });
+        // GUARD: If standing on an unowned buyable property or if Buy/Auction prompt is visible,
+        // DO NOT roll (especially on "roll again" doubles)! Handle purchase first!
+        const standingTile = BOARD_TILES[GameMemory.myPos];
+        const buyBtn = snapshot.findBuyPropertyButton ? snapshot.findBuyPropertyButton(standingTile) : null;
+        const auctionBtn = snapshot.findExactOrIncludes(['auction', 'pass', "don't buy"]);
+        const isPurchasable = standingTile && standingTile.group && (standingTile.type === 'property' || standingTile.type === 'airport' || standingTile.type === 'utility');
+        const isUnowned = isPurchasable && !GameMemory.ownership[standingTile.id]?.owner;
+
+        if (buyBtn || auctionBtn || isUnowned) {
+            logToBot(`[DICE GUARD] Buy/Auction pending for ${standingTile?.name || 'tile'}. Prioritizing purchase before roll.`);
+            if (this.handleBuyOrAuction(snapshot)) {
+                return true;
+            }
+            // If standing on unowned property but buttons haven't rendered yet in DOM, wait
+            if (isUnowned && !buyBtn && !auctionBtn) {
+                return false;
+            }
         }
-        return false;
+
+        GameMemory.isMyTurn = true;
+        logToBot(`[DICE ACTION] It's my turn! Rolling dice (Turn #${GameMemory.turnCount + 1}) | Cash: $${GameMemory.myCash} | Pos: Tile #${GameMemory.myPos}`);
+
+        return executeOrAdvise({
+            el: rollBtn,
+            title: `ROLL THE DICE (Turn #${GameMemory.turnCount + 1})`,
+            reason: `My turn! Cash: $${GameMemory.myCash} | Pos: Tile #${GameMemory.myPos}`,
+            onExecute: () => {
+                GameMemory.turnCount++;
+                delayClick(rollBtn, `Rolling dice`);
+            }
+        });
     },
 
     lastDeliberatedTurn: -1,

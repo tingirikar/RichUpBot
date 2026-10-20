@@ -2809,6 +2809,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       }
     }
     let foundLocalPlayerInScoreboard = false;
+    const activeScoreboardPlayers = /* @__PURE__ */ new Set();
     if (bestScoreboardContainer) {
       const rows = Array.from(bestScoreboardContainer.children);
       for (const row of rows) {
@@ -2816,12 +2817,12 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         if (!rowText.includes("$") || rowText.length > 160) continue;
         if (/paid|bought|rolled|landed|rent|tax|pardon|jail|prison|bankrupt|joined|left|game started|is playing/i.test(rowText)) continue;
         const normalizedRow = rowText.replace(/[−–—]/g, "-");
-        const negCashMatch = /(?:\$\s*-\s*(\d{1,6})|-\s*\$\s*(\d{1,6})|\b-\s*(\d{1,6}))/.exec(normalizedRow);
+        const negCashMatch = /(?:-\s*\$\s*(\d{1,6})|\$\s*-\s*(\d{1,6}))/.exec(normalizedRow);
         let parsedCash;
         if (negCashMatch) {
-          parsedCash = -parseInt(negCashMatch[1] || negCashMatch[2] || negCashMatch[3], 10);
+          parsedCash = -parseInt(negCashMatch[1] || negCashMatch[2], 10);
         } else {
-          const posCashMatch = /\$\s*(\d{1,6})|(\d{1,6})\s*\$/.exec(normalizedRow);
+          const posCashMatch = /(?:\$\s*(\d{1,6})|(\d{1,6})\s*\$)/.exec(normalizedRow);
           if (!posCashMatch) continue;
           parsedCash = parseInt(posCashMatch[1] || posCashMatch[2], 10);
         }
@@ -2830,13 +2831,14 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         const candidateLines = beforeDollar.split("\n").map((l) => l.trim()).filter(Boolean);
         let candidateName = null;
         for (const line of candidateLines) {
-          const clean = line.replace(/[->\]\[→←\|👑]/g, "").trim();
-          if (clean.length >= 2 && clean.length <= 24 && !BOARD_LABELS_BLACKLIST.has(clean.toLowerCase()) && !clean.toLowerCase().includes("share") && !clean.toLowerCase().includes("copy") && !/^\d+$/.test(clean)) {
+          const clean = line.replace(/[->\]\[→←\|👑]/g, "").replace(/\b-?\d+\b/g, "").trim();
+          if (clean.length >= 2 && clean.length <= 24 && !BOARD_LABELS_BLACKLIST.has(clean.toLowerCase()) && !clean.toLowerCase().includes("share") && !clean.toLowerCase().includes("copy")) {
             candidateName = clean;
             break;
           }
         }
         if (!candidateName) continue;
+        activeScoreboardPlayers.add(candidateName);
         const hasLeaveIcon = Boolean(
           row.querySelector('[class*="leave" i], [class*="exit" i], [title*="leave" i], [aria-label*="leave" i]') || row.innerHTML.includes("->") || row.innerHTML.includes("M17 16l4") || row.innerHTML.includes("M11 16l-4-4") || row.innerHTML.includes("M15 3h4a2")
         );
@@ -2860,6 +2862,13 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
             isMe: false,
             bankrupt: isBankrupt
           };
+        }
+      }
+      if (activeScoreboardPlayers.size >= 2) {
+        for (const pName of Object.keys(GameMemory2.players)) {
+          if (!activeScoreboardPlayers.has(pName) && !GameMemory2.isMe(pName)) {
+            delete GameMemory2.players[pName];
+          }
         }
       }
     }
@@ -2999,9 +3008,9 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         if (avEl.tagName.toLowerCase() === "img") {
           src = avEl.src || avEl.getAttribute("data-src") || "";
         }
-        const svgChild = avEl.tagName.toLowerCase() === "svg" ? avEl : avEl.querySelector("svg, circle, path");
-        if (svgChild) {
-          fill = svgChild.getAttribute("fill") || window.getComputedStyle(svgChild).fill || "";
+        const coloredShape = avEl.querySelector('path[fill]:not([fill="none"]):not([fill="#fff"]):not([fill="#ffffff"]), circle[fill]:not([fill="none"]), rect[fill]:not([fill="none"])') || (avEl.tagName.toLowerCase() === "svg" ? avEl : avEl.querySelector("svg, circle, path"));
+        if (coloredShape) {
+          fill = coloredShape.getAttribute("fill") || window.getComputedStyle(coloredShape).fill || "";
         }
       }
       playerAvatars.push({
@@ -3033,8 +3042,8 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       const style = window.getComputedStyle(tokenEl);
       const tColor = style.backgroundColor || style.color || "";
       const tSrc = tokenEl.tagName.toLowerCase() === "img" ? tokenEl.src || "" : "";
-      const tSvg = tokenEl.tagName.toLowerCase() === "svg" ? tokenEl : tokenEl.querySelector("svg, circle, path");
-      const tFill = tSvg ? tSvg.getAttribute("fill") || window.getComputedStyle(tSvg).fill || "" : "";
+      const tColoredShape = tokenEl.querySelector('path[fill]:not([fill="none"]):not([fill="#fff"]):not([fill="#ffffff"]), circle[fill]:not([fill="none"]), rect[fill]:not([fill="none"])') || (tokenEl.tagName.toLowerCase() === "svg" ? tokenEl : tokenEl.querySelector("svg, circle, path"));
+      const tFill = tColoredShape ? tColoredShape.getAttribute("fill") || window.getComputedStyle(tColoredShape).fill || "" : "";
       const tClass = (tokenEl.className || "").toString();
       let matchedPlayer = null;
       for (const p of playerAvatars) {
@@ -3202,70 +3211,65 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       }
     }
   }
+  function matchPlayerName(rawName) {
+    if (!rawName) return null;
+    const clean = rawName.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, "").trim();
+    if (!clean) return null;
+    const lower = clean.toLowerCase();
+    for (const key of Object.keys(GameMemory2.players)) {
+      if (key.toLowerCase() === lower) return key;
+    }
+    return clean;
+  }
   function scanActivityLogsOnly() {
     const hud = document.getElementById("rubot-hud-panel");
-    const feedContainer = document.querySelector('[class*="activity" i], [class*="feed" i], [class*="log" i], [class*="history" i], [class*="chat" i]');
-    const root = feedContainer || document.body;
     const processedLines = /* @__PURE__ */ new Set();
-    const lineElements = root.querySelectorAll('p, div, li, [class*="row" i], [class*="item" i], [class*="message" i]');
-    for (let i = 0; i < lineElements.length; i++) {
-      const el = lineElements[i];
-      if (hud && hud.contains(el)) continue;
+    const chatInput = document.querySelector('input[placeholder*="Say something" i], textarea[placeholder*="Say something" i]');
+    const chatBox = chatInput ? chatInput.closest('[class*="chat" i], div[style*="position"]') || chatInput.parentElement?.parentElement : null;
+    const isExcluded = (el) => {
+      if (!el) return true;
+      if (hud && hud.contains(el)) return true;
+      if (chatBox && chatBox.contains(el)) return true;
+      return false;
+    };
+    const candidateEls = document.querySelectorAll(
+      '[class*="board" i] p, [class*="board" i] div, [class*="feed" i] *, [class*="activity" i] *, [class*="log" i] *, [class*="history" i] *, p, li, div[class*="item" i]'
+    );
+    for (let i = 0; i < candidateEls.length; i++) {
+      const el = candidateEls[i];
+      if (isExcluded(el)) continue;
       if (el.children.length > 5) continue;
       const line = (el.innerText || "").replace(/\s+/g, " ").trim();
-      if (line.length >= 6 && line.length <= 180 && !processedLines.has(line)) {
-        processedLines.add(line);
-        if (!GameMemory2.isLogProcessed(line)) {
-          parseActivityLogLine(line);
-        }
-      }
-    }
-    const centerEls = document.querySelectorAll('main p, main div, [class*="board" i] p, [class*="board" i] div');
-    for (let i = 0; i < centerEls.length; i++) {
-      const el = centerEls[i];
-      if (hud && hud.contains(el)) continue;
-      if (el.children.length > 4) continue;
-      const line = (el.innerText || "").replace(/\s+/g, " ").trim();
-      if (line.length >= 6 && line.length <= 180 && !processedLines.has(line)) {
-        processedLines.add(line);
-        if (!GameMemory2.isLogProcessed(line)) {
-          parseActivityLogLine(line);
-        }
-      }
-    }
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    let node = walker.nextNode();
-    while (node) {
-      if (!hud || !hud.contains(node.parentElement)) {
-        const line = node.nodeValue ? node.nodeValue.replace(/\s+/g, " ").trim() : "";
-        if (line.length > 8 && line.length < 150 && !processedLines.has(line) && !GameMemory2.isLogProcessed(line)) {
+      if (line.length >= 6 && line.length <= 220 && !processedLines.has(line)) {
+        if (/bought|paid|rolled|landed on|passed through|prison|jail|pardon|bankrupt|won.*auction|trade|treasure card|tax/i.test(line)) {
           processedLines.add(line);
-          parseActivityLogLine(line);
+          if (!GameMemory2.isLogProcessed(line)) {
+            parseActivityLogLine(line);
+          }
         }
       }
-      node = walker.nextNode();
     }
   }
   function parseActivityLogLine(line) {
     if (/created a trade with/i.test(line)) {
       const parts = line.split(/created a trade with/i);
-      const p1 = parts[0].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, "").trim();
-      const p2 = parts[1].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, "").trim();
+      const p1 = matchPlayerName(parts[0]);
+      const p2 = matchPlayerName(parts[1]);
       logToBot(`[TRADE INTEL] Negotiation initiated: ${p1} \u2194\uFE0F ${p2}`);
       GameMemory2.markLogProcessed(line);
       return;
     }
     if (/is looking at a trade/i.test(line)) {
-      const p = line.split(/is looking at a trade/i)[0].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, "").trim();
+      const p = matchPlayerName(line.split(/is looking at a trade/i)[0]);
       logToBot(`[TRADE INTEL] ${p} is reviewing trade proposal...`);
       GameMemory2.markLogProcessed(line);
       return;
     }
     if (/declined.*trade/i.test(line)) {
       const parts = line.split(/declined/i);
-      const decliner = parts[0].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, "").trim();
+      const decliner = matchPlayerName(parts[0]);
       const createdByPart = /created by (.+)/i.exec(line);
-      const creator = createdByPart ? createdByPart[1].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, "").trim() : null;
+      const creator = createdByPart ? matchPlayerName(createdByPart[1]) : null;
       if (TradeProposalExecutor.lastSentProposal && (GameMemory2.isMe(creator) || !creator)) {
         const proposal = TradeProposalExecutor.lastSentProposal;
         if (!decliner || decliner.toLowerCase() === proposal.targetOwner.toLowerCase() || !creator) {
@@ -3288,16 +3292,50 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     }
     const payMatch = /(.+?)\s+paid\s+\$?(\d+)\s+to\s+(.+)/i.exec(line);
     if (payMatch) {
-      const payer = payMatch[1].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, "").trim();
+      const payer = matchPlayerName(payMatch[1]);
       const amount = parseInt(payMatch[2], 10);
-      const recipient = payMatch[3].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, "").trim();
-      if (GameMemory2.players[payer] && typeof GameMemory2.players[payer].cash === "number") {
+      const recipient = matchPlayerName(payMatch[3]);
+      if (payer && GameMemory2.players[payer] && typeof GameMemory2.players[payer].cash === "number") {
         GameMemory2.players[payer].cash -= amount;
       }
-      if (GameMemory2.players[recipient] && typeof GameMemory2.players[recipient].cash === "number") {
+      if (recipient && GameMemory2.players[recipient] && typeof GameMemory2.players[recipient].cash === "number") {
         GameMemory2.players[recipient].cash += amount;
       }
       logToBot(`[CASH FLOW] ${payer} paid $${amount} to ${recipient}`);
+      GameMemory2.markLogProcessed(line);
+      return;
+    }
+    const taxMatch = /(.+?)\s+paid\s+(?:a\s+)?\$?(\d+)\s+tax/i.exec(line);
+    if (taxMatch) {
+      const player = matchPlayerName(taxMatch[1]);
+      const taxAmount = parseInt(taxMatch[2], 10);
+      const isMe = GameMemory2.isMe(player);
+      const taxTileId = taxAmount >= 150 ? 4 : 38;
+      if (isMe) {
+        GameMemory2.myPos = taxTileId;
+        logToBot(`[TAX] Paid $${taxAmount} tax (Tile #${taxTileId})`);
+      } else if (player && GameMemory2.players[player]) {
+        GameMemory2.players[player].pos = taxTileId;
+        if (typeof GameMemory2.players[player].cash === "number") {
+          GameMemory2.players[player].cash -= taxAmount;
+        }
+        logToBot(`[TAX] ${player} paid $${taxAmount} tax (Tile #${taxTileId})`);
+      }
+      GameMemory2.markLogProcessed(line);
+      return;
+    }
+    if (line.includes("passed through Start")) {
+      const playerPart = line.split(/passed through Start/i)[0].trim();
+      const player = matchPlayerName(playerPart);
+      const isMe = GameMemory2.isMe(player);
+      if (isMe) {
+        logToBot(`[START PASS] I passed through Start and received $200`);
+      } else if (player && GameMemory2.players[player]) {
+        if (typeof GameMemory2.players[player].cash === "number") {
+          GameMemory2.players[player].cash += 200;
+        }
+        logToBot(`[START PASS] ${player} passed through Start and received $200`);
+      }
       GameMemory2.markLogProcessed(line);
       return;
     }
@@ -3305,9 +3343,12 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       for (const tile of BOARD_TILES) {
         if (tile.group && new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
           const buyerPart = line.split(/won|bought/i)[0].trim();
-          const cleanBuyer = buyerPart.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, "").trim();
+          const cleanBuyer = matchPlayerName(buyerPart);
           if (cleanBuyer && GameMemory2.ownership[tile.id]) {
             GameMemory2.ownership[tile.id].owner = cleanBuyer;
+            if (!GameMemory2.isMe(cleanBuyer) && GameMemory2.players[cleanBuyer]) {
+              GameMemory2.players[cleanBuyer].pos = tile.id;
+            }
             logToBot(`[MARKET INTEL] ${cleanBuyer} won ${tile.name} at auction!`);
             GameMemory2.markLogProcessed(line);
             return;
@@ -3317,7 +3358,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     }
     if (/got into prison|went to prison|sent to prison/i.test(line)) {
       const playerPart = line.split(/got into prison|went to prison|sent to prison/i)[0].trim();
-      const cleanPlayer = playerPart.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, "").trim();
+      const cleanPlayer = matchPlayerName(playerPart);
       const isMe = GameMemory2.isMe(cleanPlayer);
       logToBot(`[PRISON EVENT] \u{1F694} ${isMe ? "I was" : cleanPlayer + " was"} sent to prison!`);
       if (isMe) {
@@ -3330,9 +3371,9 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       GameMemory2.markLogProcessed(line);
       return;
     }
-    if (/got free|left prison|paid.*jail|paid.*bail/i.test(line)) {
-      const playerPart = line.split(/got free|left prison|paid/i)[0].trim();
-      const cleanPlayer = playerPart.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, "").trim();
+    if (/got free|left prison|paid.*jail|paid.*bail|used a Pardon/i.test(line)) {
+      const playerPart = line.split(/got free|left prison|paid|used a Pardon/i)[0].trim();
+      const cleanPlayer = matchPlayerName(playerPart);
       const isMe = GameMemory2.isMe(cleanPlayer);
       logToBot(`[PRISON EVENT] \u{1F513} ${isMe ? "I got" : cleanPlayer + " got"} released from prison.`);
       if (isMe) {
@@ -3345,7 +3386,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     }
     const rollMatch = /^(.+?)\s+rolled\s+(\d+)/i.exec(line);
     if (rollMatch) {
-      const player = rollMatch[1].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, "").trim();
+      const player = matchPlayerName(rollMatch[1]);
       const rollVal = parseInt(rollMatch[2], 10);
       if (!isNaN(rollVal) && rollVal >= 2 && rollVal <= 12) {
         const isMe = GameMemory2.isMe(player);
@@ -3354,7 +3395,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
           if (!GameMemory2.inJail) {
             GameMemory2.myPos = (GameMemory2.myPos + rollVal) % 40;
           }
-        } else if (GameMemory2.players[player]) {
+        } else if (player && GameMemory2.players[player]) {
           if (!GameMemory2.players[player].inJail) {
             GameMemory2.players[player].pos = ((GameMemory2.players[player].pos || 0) + rollVal) % 40;
           }
@@ -3367,7 +3408,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       for (const tile of BOARD_TILES) {
         if (new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
           const playerPart = line.split(/landed on/i)[0].trim();
-          const cleanPlayer = playerPart.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, "").trim();
+          const cleanPlayer = matchPlayerName(playerPart);
           const isMe = GameMemory2.isMe(cleanPlayer);
           const priceStr = tile.price ? ` ($${tile.price})` : "";
           if (isMe) {
@@ -3388,12 +3429,13 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       for (const tile of BOARD_TILES) {
         if (tile.group && new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
           const buyerPart = line.split(/bought a house in/i)[0].trim();
-          const cleanBuyer = buyerPart.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, "").trim();
+          const cleanBuyer = matchPlayerName(buyerPart);
           if (cleanBuyer && GameMemory2.ownership[tile.id]) {
             GameMemory2.ownership[tile.id].owner = cleanBuyer;
             GameMemory2.ownership[tile.id].houses = Math.min(5, (GameMemory2.ownership[tile.id].houses || 0) + 1);
             const isMe = GameMemory2.isMe(cleanBuyer);
             if (isMe) GameMemory2.myPos = tile.id;
+            else if (GameMemory2.players[cleanBuyer]) GameMemory2.players[cleanBuyer].pos = tile.id;
             logToBot(`[BUILD EVENT] \u{1F3E0} ${isMe ? "I" : cleanBuyer} bought a house in ${tile.name} (${GameMemory2.ownership[tile.id].houses}/5)`);
             GameMemory2.markLogProcessed(line);
             return;
@@ -3405,12 +3447,13 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       for (const tile of BOARD_TILES) {
         if (tile.group && new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
           const buyerPart = line.split(/bought a hotel in/i)[0].trim();
-          const cleanBuyer = buyerPart.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, "").trim();
+          const cleanBuyer = matchPlayerName(buyerPart);
           if (cleanBuyer && GameMemory2.ownership[tile.id]) {
             GameMemory2.ownership[tile.id].owner = cleanBuyer;
             GameMemory2.ownership[tile.id].houses = 5;
             const isMe = GameMemory2.isMe(cleanBuyer);
             if (isMe) GameMemory2.myPos = tile.id;
+            else if (GameMemory2.players[cleanBuyer]) GameMemory2.players[cleanBuyer].pos = tile.id;
             logToBot(`[BUILD EVENT] \u{1F3E8} ${isMe ? "I" : cleanBuyer} bought a HOTEL in ${tile.name}!`);
             GameMemory2.markLogProcessed(line);
             return;
@@ -3422,7 +3465,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       for (const tile of BOARD_TILES) {
         if (tile.group && new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
           const buyerPart = line.split(/bought/i)[0].trim();
-          const cleanBuyer = buyerPart.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, "").trim();
+          const cleanBuyer = matchPlayerName(buyerPart);
           if (cleanBuyer && GameMemory2.ownership[tile.id]) {
             GameMemory2.ownership[tile.id].owner = cleanBuyer;
             const isMe = GameMemory2.isMe(cleanBuyer);
@@ -3430,8 +3473,9 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
               GameMemory2.myPos = tile.id;
               logToBot(`[PURCHASE EVENT] \u{1F3F7}\uFE0F I purchased ${tile.name} (${tile.group}, $${tile.price})!`);
             } else {
-              GameMemory2.players[cleanBuyer] = GameMemory2.players[cleanBuyer] || { name: cleanBuyer, cash: 1500, pos: 0, isMe: false };
-              logToBot(`[PURCHASE EVENT] \u{1F3F7}\uFE0F ${cleanBuyer} bought ${tile.name} (${tile.group}, $${tile.price})`);
+              GameMemory2.players[cleanBuyer] = GameMemory2.players[cleanBuyer] || { name: cleanBuyer, cash: 1500, pos: tile.id, isMe: false };
+              GameMemory2.players[cleanBuyer].pos = tile.id;
+              logToBot(`[PURCHASE EVENT] \u{1F3F7}\uFE0F ${cleanBuyer} bought ${tile.name} (${tile.group}, $${tile.price}) -> Tile #${tile.id}`);
             }
             GameMemory2.markLogProcessed(line);
             return;
@@ -4979,20 +5023,32 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     },
     handleRollDice(snapshot) {
       const rollBtn = snapshot.findExactOrIncludes(["roll the dice", "roll again"]);
-      if (rollBtn) {
-        GameMemory2.isMyTurn = true;
-        logToBot(`[DICE ACTION] It's my turn! Rolling dice (Turn #${GameMemory2.turnCount + 1}) | Cash: $${GameMemory2.myCash} | Pos: Tile #${GameMemory2.myPos}`);
-        return executeOrAdvise({
-          el: rollBtn,
-          title: `ROLL THE DICE (Turn #${GameMemory2.turnCount + 1})`,
-          reason: `My turn! Cash: $${GameMemory2.myCash} | Pos: Tile #${GameMemory2.myPos}`,
-          onExecute: () => {
-            GameMemory2.turnCount++;
-            delayClick(rollBtn, `Rolling dice`);
-          }
-        });
+      if (!rollBtn) return false;
+      const standingTile = BOARD_TILES[GameMemory2.myPos];
+      const buyBtn = snapshot.findBuyPropertyButton ? snapshot.findBuyPropertyButton(standingTile) : null;
+      const auctionBtn = snapshot.findExactOrIncludes(["auction", "pass", "don't buy"]);
+      const isPurchasable = standingTile && standingTile.group && (standingTile.type === "property" || standingTile.type === "airport" || standingTile.type === "utility");
+      const isUnowned = isPurchasable && !GameMemory2.ownership[standingTile.id]?.owner;
+      if (buyBtn || auctionBtn || isUnowned) {
+        logToBot(`[DICE GUARD] Buy/Auction pending for ${standingTile?.name || "tile"}. Prioritizing purchase before roll.`);
+        if (this.handleBuyOrAuction(snapshot)) {
+          return true;
+        }
+        if (isUnowned && !buyBtn && !auctionBtn) {
+          return false;
+        }
       }
-      return false;
+      GameMemory2.isMyTurn = true;
+      logToBot(`[DICE ACTION] It's my turn! Rolling dice (Turn #${GameMemory2.turnCount + 1}) | Cash: $${GameMemory2.myCash} | Pos: Tile #${GameMemory2.myPos}`);
+      return executeOrAdvise({
+        el: rollBtn,
+        title: `ROLL THE DICE (Turn #${GameMemory2.turnCount + 1})`,
+        reason: `My turn! Cash: $${GameMemory2.myCash} | Pos: Tile #${GameMemory2.myPos}`,
+        onExecute: () => {
+          GameMemory2.turnCount++;
+          delayClick(rollBtn, `Rolling dice`);
+        }
+      });
     },
     lastDeliberatedTurn: -1,
     isEndingTurn: false,
@@ -5345,14 +5401,14 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         logToBot(`[Jail Step Warning] ${err}`);
       }
       try {
-        if (ActionExecutor.handleRollDice(snapshot)) return;
-      } catch (err) {
-        logToBot(`[Roll Step Warning] ${err}`);
-      }
-      try {
         if (ActionExecutor.handleBuyOrAuction(snapshot)) return;
       } catch (err) {
         logToBot(`[Buy/Auction Step Warning] ${err}`);
+      }
+      try {
+        if (ActionExecutor.handleRollDice(snapshot)) return;
+      } catch (err) {
+        logToBot(`[Roll Step Warning] ${err}`);
       }
       try {
         if (ActionExecutor.handleAuction(snapshot)) return;

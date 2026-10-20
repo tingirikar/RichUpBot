@@ -248,6 +248,8 @@ function detectLocalPlayerFromPlayerList() {
 
     let foundLocalPlayerInScoreboard = false;
 
+    const activeScoreboardPlayers = new Set();
+
     // 4. Extract players from discovered scoreboard container
     if (bestScoreboardContainer) {
         const rows = Array.from(bestScoreboardContainer.children);
@@ -261,13 +263,15 @@ function detectLocalPlayerFromPlayerList() {
             // Normalize Unicode minus (U+2212) and dashes to ASCII hyphen
             const normalizedRow = rowText.replace(/[−–—]/g, '-');
 
-            // 1. High priority check for negative cash (e.g. "$-205", "-$205", "$-14", "-14", "$426 -50")
-            const negCashMatch = /(?:\$\s*-\s*(\d{1,6})|-\s*\$\s*(\d{1,6})|\b-\s*(\d{1,6}))/.exec(normalizedRow);
+            // Strictly match real cash balance with dollar sign (never match bare delta numbers like -25 or +25)
+            // 1. Negative balance: "-$123" or "$-123"
+            const negCashMatch = /(?:-\s*\$\s*(\d{1,6})|\$\s*-\s*(\d{1,6}))/.exec(normalizedRow);
             let parsedCash;
             if (negCashMatch) {
-                parsedCash = -parseInt(negCashMatch[1] || negCashMatch[2] || negCashMatch[3], 10);
+                parsedCash = -parseInt(negCashMatch[1] || negCashMatch[2], 10);
             } else {
-                const posCashMatch = /\$\s*(\d{1,6})|(\d{1,6})\s*\$/.exec(normalizedRow);
+                // 2. Positive balance: "$123" or "123$"
+                const posCashMatch = /(?:\$\s*(\d{1,6})|(\d{1,6})\s*\$)/.exec(normalizedRow);
                 if (!posCashMatch) continue;
                 parsedCash = parseInt(posCashMatch[1] || posCashMatch[2], 10);
             }
@@ -278,13 +282,16 @@ function detectLocalPlayerFromPlayerList() {
 
             let candidateName = null;
             for (const line of candidateLines) {
-                const clean = line.replace(/[->\]\[→←\|👑]/g, '').trim();
+                // Remove icons, crowns, door badges, and standalone delta numbers (like "25" or "-25")
+                const clean = line
+                    .replace(/[->\]\[→←\|👑]/g, '')
+                    .replace(/\b-?\d+\b/g, '')
+                    .trim();
                 if (
                     clean.length >= 2 && clean.length <= 24 &&
                     !BOARD_LABELS_BLACKLIST.has(clean.toLowerCase()) &&
                     !clean.toLowerCase().includes('share') &&
-                    !clean.toLowerCase().includes('copy') &&
-                    !/^\d+$/.test(clean)
+                    !clean.toLowerCase().includes('copy')
                 ) {
                     candidateName = clean;
                     break;
@@ -292,6 +299,7 @@ function detectLocalPlayerFromPlayerList() {
             }
 
             if (!candidateName) continue;
+            activeScoreboardPlayers.add(candidateName);
 
             // In RichUp, only the local player's row has the interactive leave [->] button
             const hasLeaveIcon = Boolean(
@@ -323,6 +331,15 @@ function detectLocalPlayerFromPlayerList() {
                     isMe: false,
                     bankrupt: isBankrupt
                 };
+            }
+        }
+
+        // Prune disconnected or lobby-only players that are no longer in the scoreboard
+        if (activeScoreboardPlayers.size >= 2) {
+            for (const pName of Object.keys(GameMemory.players)) {
+                if (!activeScoreboardPlayers.has(pName) && !GameMemory.isMe(pName)) {
+                    delete GameMemory.players[pName];
+                }
             }
         }
     }
@@ -504,9 +521,10 @@ export function scanPlayerTokenPositionsFromDOM() {
             if (avEl.tagName.toLowerCase() === 'img') {
                 src = avEl.src || avEl.getAttribute('data-src') || '';
             }
-            const svgChild = avEl.tagName.toLowerCase() === 'svg' ? avEl : avEl.querySelector('svg, circle, path');
-            if (svgChild) {
-                fill = svgChild.getAttribute('fill') || window.getComputedStyle(svgChild).fill || '';
+            const coloredShape = avEl.querySelector('path[fill]:not([fill="none"]):not([fill="#fff"]):not([fill="#ffffff"]), circle[fill]:not([fill="none"]), rect[fill]:not([fill="none"])')
+                || (avEl.tagName.toLowerCase() === 'svg' ? avEl : avEl.querySelector('svg, circle, path'));
+            if (coloredShape) {
+                fill = coloredShape.getAttribute('fill') || window.getComputedStyle(coloredShape).fill || '';
             }
         }
 
@@ -547,8 +565,9 @@ export function scanPlayerTokenPositionsFromDOM() {
         const style = window.getComputedStyle(tokenEl);
         const tColor = style.backgroundColor || style.color || '';
         const tSrc = tokenEl.tagName.toLowerCase() === 'img' ? (tokenEl.src || '') : '';
-        const tSvg = tokenEl.tagName.toLowerCase() === 'svg' ? tokenEl : tokenEl.querySelector('svg, circle, path');
-        const tFill = tSvg ? (tSvg.getAttribute('fill') || window.getComputedStyle(tSvg).fill || '') : '';
+        const tColoredShape = tokenEl.querySelector('path[fill]:not([fill="none"]):not([fill="#fff"]):not([fill="#ffffff"]), circle[fill]:not([fill="none"]), rect[fill]:not([fill="none"])')
+            || (tokenEl.tagName.toLowerCase() === 'svg' ? tokenEl : tokenEl.querySelector('svg, circle, path'));
+        const tFill = tColoredShape ? (tColoredShape.getAttribute('fill') || window.getComputedStyle(tColoredShape).fill || '') : '';
         const tClass = (tokenEl.className || '').toString();
 
         let matchedPlayer = null;
@@ -769,56 +788,56 @@ function syncMyPropertiesFromSidebar() {
     }
 }
 
+function matchPlayerName(rawName) {
+    if (!rawName) return null;
+    const clean = rawName
+        .replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '')
+        .replace(/[^\w\s-]/g, '')
+        .trim();
+    if (!clean) return null;
+    const lower = clean.toLowerCase();
+    for (const key of Object.keys(GameMemory.players)) {
+        if (key.toLowerCase() === lower) return key;
+    }
+    return clean;
+}
+
 function scanActivityLogsOnly() {
     const hud = document.getElementById('rubot-hud-panel');
-    const feedContainer = document.querySelector('[class*="activity" i], [class*="feed" i], [class*="log" i], [class*="history" i], [class*="chat" i]');
-    const root = feedContainer || document.body;
-
     const processedLines = new Set();
 
-    // 1. Primary: Scan full paragraph, div, and row elements to get complete unbroken sentences
-    const lineElements = root.querySelectorAll('p, div, li, [class*="row" i], [class*="item" i], [class*="message" i]');
-    for (let i = 0; i < lineElements.length; i++) {
-        const el = lineElements[i];
-        if (hud && hud.contains(el)) continue;
+    // Identify and strictly exclude the bottom-left player chat input container
+    const chatInput = document.querySelector('input[placeholder*="Say something" i], textarea[placeholder*="Say something" i]');
+    const chatBox = chatInput ? (chatInput.closest('[class*="chat" i], div[style*="position"]') || chatInput.parentElement?.parentElement) : null;
+
+    const isExcluded = (el) => {
+        if (!el) return true;
+        if (hud && hud.contains(el)) return true;
+        if (chatBox && chatBox.contains(el)) return true;
+        return false;
+    };
+
+    // RichUp central activity log is rendered on the board (beneath the dice).
+    // Query candidate event rows across the board and body:
+    const candidateEls = document.querySelectorAll(
+        '[class*="board" i] p, [class*="board" i] div, [class*="feed" i] *, [class*="activity" i] *, [class*="log" i] *, [class*="history" i] *, p, li, div[class*="item" i]'
+    );
+
+    for (let i = 0; i < candidateEls.length; i++) {
+        const el = candidateEls[i];
+        if (isExcluded(el)) continue;
         if (el.children.length > 5) continue; // Skip large parent containers
 
         const line = (el.innerText || '').replace(/\s+/g, ' ').trim();
-        if (line.length >= 6 && line.length <= 180 && !processedLines.has(line)) {
-            processedLines.add(line);
-            if (!GameMemory.isLogProcessed(line)) {
-                parseActivityLogLine(line);
-            }
-        }
-    }
-
-    // 2. Center board fallback: Any center text elements
-    const centerEls = document.querySelectorAll('main p, main div, [class*="board" i] p, [class*="board" i] div');
-    for (let i = 0; i < centerEls.length; i++) {
-        const el = centerEls[i];
-        if (hud && hud.contains(el)) continue;
-        if (el.children.length > 4) continue;
-        const line = (el.innerText || '').replace(/\s+/g, ' ').trim();
-        if (line.length >= 6 && line.length <= 180 && !processedLines.has(line)) {
-            processedLines.add(line);
-            if (!GameMemory.isLogProcessed(line)) {
-                parseActivityLogLine(line);
-            }
-        }
-    }
-
-    // 3. TreeWalker fallback for standalone text nodes
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    let node = walker.nextNode();
-    while (node) {
-        if (!hud || !hud.contains(node.parentElement)) {
-            const line = node.nodeValue ? node.nodeValue.replace(/\s+/g, ' ').trim() : '';
-            if (line.length > 8 && line.length < 150 && !processedLines.has(line) && !GameMemory.isLogProcessed(line)) {
+        if (line.length >= 6 && line.length <= 220 && !processedLines.has(line)) {
+            // Check if line contains any game activity keywords
+            if (/bought|paid|rolled|landed on|passed through|prison|jail|pardon|bankrupt|won.*auction|trade|treasure card|tax/i.test(line)) {
                 processedLines.add(line);
-                parseActivityLogLine(line);
+                if (!GameMemory.isLogProcessed(line)) {
+                    parseActivityLogLine(line);
+                }
             }
         }
-        node = walker.nextNode();
     }
 }
 
@@ -830,15 +849,15 @@ function parseActivityLogLine(line) {
     // 0. Trade Creation & Activity Watch (Market Dynamics)
     if (/created a trade with/i.test(line)) {
         const parts = line.split(/created a trade with/i);
-        const p1 = parts[0].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim();
-        const p2 = parts[1].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim();
+        const p1 = matchPlayerName(parts[0]);
+        const p2 = matchPlayerName(parts[1]);
         logToBot(`[TRADE INTEL] Negotiation initiated: ${p1} ↔️ ${p2}`);
         GameMemory.markLogProcessed(line);
         return;
     }
 
     if (/is looking at a trade/i.test(line)) {
-        const p = line.split(/is looking at a trade/i)[0].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim();
+        const p = matchPlayerName(line.split(/is looking at a trade/i)[0]);
         logToBot(`[TRADE INTEL] ${p} is reviewing trade proposal...`);
         GameMemory.markLogProcessed(line);
         return;
@@ -846,9 +865,9 @@ function parseActivityLogLine(line) {
 
     if (/declined.*trade/i.test(line)) {
         const parts = line.split(/declined/i);
-        const decliner = parts[0].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim();
+        const decliner = matchPlayerName(parts[0]);
         const createdByPart = /created by (.+)/i.exec(line);
-        const creator = createdByPart ? createdByPart[1].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim() : null;
+        const creator = createdByPart ? matchPlayerName(createdByPart[1]) : null;
 
         if (TradeProposalExecutor.lastSentProposal && (GameMemory.isMe(creator) || !creator)) {
             const proposal = TradeProposalExecutor.lastSentProposal;
@@ -875,16 +894,54 @@ function parseActivityLogLine(line) {
     // Rent / Cash transfers
     const payMatch = /(.+?)\s+paid\s+\$?(\d+)\s+to\s+(.+)/i.exec(line);
     if (payMatch) {
-        const payer = payMatch[1].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim();
+        const payer = matchPlayerName(payMatch[1]);
         const amount = parseInt(payMatch[2], 10);
-        const recipient = payMatch[3].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim();
-        if (GameMemory.players[payer] && typeof GameMemory.players[payer].cash === 'number') {
+        const recipient = matchPlayerName(payMatch[3]);
+        if (payer && GameMemory.players[payer] && typeof GameMemory.players[payer].cash === 'number') {
             GameMemory.players[payer].cash -= amount;
         }
-        if (GameMemory.players[recipient] && typeof GameMemory.players[recipient].cash === 'number') {
+        if (recipient && GameMemory.players[recipient] && typeof GameMemory.players[recipient].cash === 'number') {
             GameMemory.players[recipient].cash += amount;
         }
         logToBot(`[CASH FLOW] ${payer} paid $${amount} to ${recipient}`);
+        GameMemory.markLogProcessed(line);
+        return;
+    }
+
+    // Taxes
+    const taxMatch = /(.+?)\s+paid\s+(?:a\s+)?\$?(\d+)\s+tax/i.exec(line);
+    if (taxMatch) {
+        const player = matchPlayerName(taxMatch[1]);
+        const taxAmount = parseInt(taxMatch[2], 10);
+        const isMe = GameMemory.isMe(player);
+        const taxTileId = taxAmount >= 150 ? 4 : 38;
+        if (isMe) {
+            GameMemory.myPos = taxTileId;
+            logToBot(`[TAX] Paid $${taxAmount} tax (Tile #${taxTileId})`);
+        } else if (player && GameMemory.players[player]) {
+            GameMemory.players[player].pos = taxTileId;
+            if (typeof GameMemory.players[player].cash === 'number') {
+                GameMemory.players[player].cash -= taxAmount;
+            }
+            logToBot(`[TAX] ${player} paid $${taxAmount} tax (Tile #${taxTileId})`);
+        }
+        GameMemory.markLogProcessed(line);
+        return;
+    }
+
+    // Pass Start
+    if (line.includes('passed through Start')) {
+        const playerPart = line.split(/passed through Start/i)[0].trim();
+        const player = matchPlayerName(playerPart);
+        const isMe = GameMemory.isMe(player);
+        if (isMe) {
+            logToBot(`[START PASS] I passed through Start and received $200`);
+        } else if (player && GameMemory.players[player]) {
+            if (typeof GameMemory.players[player].cash === 'number') {
+                GameMemory.players[player].cash += 200;
+            }
+            logToBot(`[START PASS] ${player} passed through Start and received $200`);
+        }
         GameMemory.markLogProcessed(line);
         return;
     }
@@ -894,9 +951,12 @@ function parseActivityLogLine(line) {
         for (const tile of BOARD_TILES) {
             if (tile.group && new RegExp(`\\b${tile.name}\\b`, 'i').test(line)) {
                 const buyerPart = line.split(/won|bought/i)[0].trim();
-                const cleanBuyer = buyerPart.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim();
+                const cleanBuyer = matchPlayerName(buyerPart);
                 if (cleanBuyer && GameMemory.ownership[tile.id]) {
                     GameMemory.ownership[tile.id].owner = cleanBuyer;
+                    if (!GameMemory.isMe(cleanBuyer) && GameMemory.players[cleanBuyer]) {
+                        GameMemory.players[cleanBuyer].pos = tile.id;
+                    }
                     logToBot(`[MARKET INTEL] ${cleanBuyer} won ${tile.name} at auction!`);
                     GameMemory.markLogProcessed(line);
                     return;
@@ -904,10 +964,11 @@ function parseActivityLogLine(line) {
             }
         }
     }
+
     // 1. In Prison / Go to Prison events
     if (/got into prison|went to prison|sent to prison/i.test(line)) {
         const playerPart = line.split(/got into prison|went to prison|sent to prison/i)[0].trim();
-        const cleanPlayer = playerPart.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim();
+        const cleanPlayer = matchPlayerName(playerPart);
         const isMe = GameMemory.isMe(cleanPlayer);
         logToBot(`[PRISON EVENT] 🚔 ${isMe ? 'I was' : cleanPlayer + ' was'} sent to prison!`);
         if (isMe) {
@@ -922,9 +983,9 @@ function parseActivityLogLine(line) {
     }
 
     // 2. Left Prison / Got free events
-    if (/got free|left prison|paid.*jail|paid.*bail/i.test(line)) {
-        const playerPart = line.split(/got free|left prison|paid/i)[0].trim();
-        const cleanPlayer = playerPart.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim();
+    if (/got free|left prison|paid.*jail|paid.*bail|used a Pardon/i.test(line)) {
+        const playerPart = line.split(/got free|left prison|paid|used a Pardon/i)[0].trim();
+        const cleanPlayer = matchPlayerName(playerPart);
         const isMe = GameMemory.isMe(cleanPlayer);
         logToBot(`[PRISON EVENT] 🔓 ${isMe ? 'I got' : cleanPlayer + ' got'} released from prison.`);
         if (isMe) {
@@ -939,7 +1000,7 @@ function parseActivityLogLine(line) {
     // 3. Dice Roll events (position update)
     const rollMatch = /^(.+?)\s+rolled\s+(\d+)/i.exec(line);
     if (rollMatch) {
-        const player = rollMatch[1].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim();
+        const player = matchPlayerName(rollMatch[1]);
         const rollVal = parseInt(rollMatch[2], 10);
         if (!isNaN(rollVal) && rollVal >= 2 && rollVal <= 12) {
             const isMe = GameMemory.isMe(player);
@@ -948,7 +1009,7 @@ function parseActivityLogLine(line) {
                 if (!GameMemory.inJail) {
                     GameMemory.myPos = (GameMemory.myPos + rollVal) % 40;
                 }
-            } else if (GameMemory.players[player]) {
+            } else if (player && GameMemory.players[player]) {
                 if (!GameMemory.players[player].inJail) {
                     GameMemory.players[player].pos = ((GameMemory.players[player].pos || 0) + rollVal) % 40;
                 }
@@ -963,7 +1024,7 @@ function parseActivityLogLine(line) {
         for (const tile of BOARD_TILES) {
             if (new RegExp(`\\b${tile.name}\\b`, 'i').test(line)) {
                 const playerPart = line.split(/landed on/i)[0].trim();
-                const cleanPlayer = playerPart.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim();
+                const cleanPlayer = matchPlayerName(playerPart);
                 const isMe = GameMemory.isMe(cleanPlayer);
                 const priceStr = tile.price ? ` ($${tile.price})` : '';
                 if (isMe) {
@@ -986,12 +1047,13 @@ function parseActivityLogLine(line) {
         for (const tile of BOARD_TILES) {
             if (tile.group && new RegExp(`\\b${tile.name}\\b`, 'i').test(line)) {
                 const buyerPart = line.split(/bought a house in/i)[0].trim();
-                const cleanBuyer = buyerPart.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim();
+                const cleanBuyer = matchPlayerName(buyerPart);
                 if (cleanBuyer && GameMemory.ownership[tile.id]) {
                     GameMemory.ownership[tile.id].owner = cleanBuyer;
                     GameMemory.ownership[tile.id].houses = Math.min(5, (GameMemory.ownership[tile.id].houses || 0) + 1);
                     const isMe = GameMemory.isMe(cleanBuyer);
                     if (isMe) GameMemory.myPos = tile.id;
+                    else if (GameMemory.players[cleanBuyer]) GameMemory.players[cleanBuyer].pos = tile.id;
                     logToBot(`[BUILD EVENT] 🏠 ${isMe ? 'I' : cleanBuyer} bought a house in ${tile.name} (${GameMemory.ownership[tile.id].houses}/5)`);
                     GameMemory.markLogProcessed(line);
                     return;
@@ -1005,12 +1067,13 @@ function parseActivityLogLine(line) {
         for (const tile of BOARD_TILES) {
             if (tile.group && new RegExp(`\\b${tile.name}\\b`, 'i').test(line)) {
                 const buyerPart = line.split(/bought a hotel in/i)[0].trim();
-                const cleanBuyer = buyerPart.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim();
+                const cleanBuyer = matchPlayerName(buyerPart);
                 if (cleanBuyer && GameMemory.ownership[tile.id]) {
                     GameMemory.ownership[tile.id].owner = cleanBuyer;
                     GameMemory.ownership[tile.id].houses = 5;
                     const isMe = GameMemory.isMe(cleanBuyer);
                     if (isMe) GameMemory.myPos = tile.id;
+                    else if (GameMemory.players[cleanBuyer]) GameMemory.players[cleanBuyer].pos = tile.id;
                     logToBot(`[BUILD EVENT] 🏨 ${isMe ? 'I' : cleanBuyer} bought a HOTEL in ${tile.name}!`);
                     GameMemory.markLogProcessed(line);
                     return;
@@ -1024,7 +1087,7 @@ function parseActivityLogLine(line) {
         for (const tile of BOARD_TILES) {
             if (tile.group && new RegExp(`\\b${tile.name}\\b`, 'i').test(line)) {
                 const buyerPart = line.split(/bought/i)[0].trim();
-                const cleanBuyer = buyerPart.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim();
+                const cleanBuyer = matchPlayerName(buyerPart);
                 if (cleanBuyer && GameMemory.ownership[tile.id]) {
                     GameMemory.ownership[tile.id].owner = cleanBuyer;
                     const isMe = GameMemory.isMe(cleanBuyer);
@@ -1032,8 +1095,9 @@ function parseActivityLogLine(line) {
                         GameMemory.myPos = tile.id;
                         logToBot(`[PURCHASE EVENT] 🏷️ I purchased ${tile.name} (${tile.group}, $${tile.price})!`);
                     } else {
-                        GameMemory.players[cleanBuyer] = GameMemory.players[cleanBuyer] || { name: cleanBuyer, cash: 1500, pos: 0, isMe: false };
-                        logToBot(`[PURCHASE EVENT] 🏷️ ${cleanBuyer} bought ${tile.name} (${tile.group}, $${tile.price})`);
+                        GameMemory.players[cleanBuyer] = GameMemory.players[cleanBuyer] || { name: cleanBuyer, cash: 1500, pos: tile.id, isMe: false };
+                        GameMemory.players[cleanBuyer].pos = tile.id;
+                        logToBot(`[PURCHASE EVENT] 🏷️ ${cleanBuyer} bought ${tile.name} (${tile.group}, $${tile.price}) -> Tile #${tile.id}`);
                     }
                     GameMemory.markLogProcessed(line);
                     return;

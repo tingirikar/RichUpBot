@@ -120,18 +120,18 @@ async function evaluateAndAct() {
             logToBot(`[Jail Step Warning] ${err}`);
         }
 
-        // 4. Roll Dice if it's our turn to roll!
-        try {
-            if (ActionExecutor.handleRollDice(snapshot)) return;
-        } catch (err) {
-            logToBot(`[Roll Step Warning] ${err}`);
-        }
-
-        // 5. Check for landing on unowned property (Buy vs Auction)
+        // 4. Check for landing on unowned property (Buy vs Auction) - MUST precede rolling dice/roll again
         try {
             if (ActionExecutor.handleBuyOrAuction(snapshot)) return;
         } catch (err) {
             logToBot(`[Buy/Auction Step Warning] ${err}`);
+        }
+
+        // 5. Roll Dice if it's our turn to roll (or roll again on doubles)
+        try {
+            if (ActionExecutor.handleRollDice(snapshot)) return;
+        } catch (err) {
+            logToBot(`[Roll Step Warning] ${err}`);
         }
 
         // 6. Check for ongoing Auction bidding
