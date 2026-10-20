@@ -773,16 +773,18 @@ export const ActionExecutor = {
 
         // CRITICAL BUG 3 FIX: If an open property card is ALREADY MORTGAGED, CLOSE IT IMMEDIATELY!
         // We cannot mortgage an already-mortgaged card; its button is Unmortgage which costs money!
+        const targets = DebtRecovery.rankLiquidationTargets();
+        const bestTarget = targets.length > 0 ? targets[0] : null;
+
         if (openCard && GameMemory.ownership[openCard.tile.id]?.mortgaged) {
-            const targets = DebtRecovery.rankLiquidationTargets();
-            if (targets.length > 0) {
-                const sidebarProp = snapshot.findSidebarPropertyItem(targets[0].tile.name);
+            if (bestTarget) {
+                const sidebarProp = snapshot.findSidebarPropertyItem(bestTarget.tile.name);
                 if (sidebarProp) {
                     return executeOrAdvise({
                         el: sidebarProp,
-                        title: `SWITCH TO ${targets[0].tile.name.toUpperCase()} (RIGHT SIDEBAR) TO LIQUIDATE`,
+                        title: `SWITCH TO ${bestTarget.tile.name.toUpperCase()} (RIGHT SIDEBAR) TO LIQUIDATE`,
                         reason: `In debt ($${GameMemory.myCash}). Current open card is already mortgaged; switching directly from right sidebar.`,
-                        onExecute: () => delayClick(sidebarProp, `Switching to ${targets[0].tile.name} from right sidebar`)
+                        onExecute: () => delayClick(sidebarProp, `Switching to ${bestTarget.tile.name} from right sidebar`)
                     });
                 }
             }
@@ -790,6 +792,19 @@ export const ActionExecutor = {
             if (closeBtn) {
                 delayClick(closeBtn, `Closing already-mortgaged ${openCard.tile.name} to select unmortgaged asset`);
                 return true;
+            }
+        }
+
+        // If open card is NOT our best target and an unmortgaged singleton is available, switch directly!
+        if (openCard && bestTarget && openCard.tile.id !== bestTarget.tile.id) {
+            const sidebarProp = snapshot.findSidebarPropertyItem(bestTarget.tile.name);
+            if (sidebarProp) {
+                return executeOrAdvise({
+                    el: sidebarProp,
+                    title: `SWITCH TO ${bestTarget.tile.name.toUpperCase()} (RIGHT SIDEBAR) TO LIQUIDATE`,
+                    reason: `In debt ($${GameMemory.myCash}). Switching from ${openCard.tile.name} to lower sacrifice asset ${bestTarget.tile.name}.`,
+                    onExecute: () => delayClick(sidebarProp, `Switching to ${bestTarget.tile.name} from right sidebar for debt recovery`)
+                });
             }
         }
 
@@ -824,9 +839,7 @@ export const ActionExecutor = {
         }
 
         // Open our lowest sacrifice unmortgaged property DIRECTLY FROM THE RIGHTMOST SIDEBAR!
-        const targets = DebtRecovery.rankLiquidationTargets();
-        if (targets.length > 0) {
-            const bestTarget = targets[0];
+        if (bestTarget) {
             const sidebarProp = snapshot.findSidebarPropertyItem(bestTarget.tile.name);
             if (sidebarProp) {
                 return executeOrAdvise({

@@ -312,10 +312,12 @@ function detectLocalPlayerFromPlayerList() {
 
         // Ensure container is strictly located in the right sidebar (never match board tile rows)
         const rect = el.getBoundingClientRect();
-        if (rect.left < window.innerWidth * 0.60) continue;
+        if (rect.left < window.innerWidth * 0.40) continue;
+        if (rect.top > window.innerHeight * 0.60) continue;
+        if (rect.width < 100) continue;
 
         const children = Array.from(el.children);
-        if (children.length >= 2 && children.length <= 8) {
+        if (children.length >= 2 && children.length <= 10) {
             let dollarCount = 0;
             for (const child of children) {
                 const cText = child.innerText || '';
@@ -342,7 +344,7 @@ function detectLocalPlayerFromPlayerList() {
             if (!rowText.includes('$') || rowText.length > 160) continue;
 
             // Strictly filter out any row that contains activity log words
-            if (/paid|bought|rolled|landed|rent|tax|pardon|jail|prison|bankrupt|joined|left|game started|is playing/i.test(rowText)) continue;
+            if (/\b(?:paid|bought|rolled|landed|rent|tax|joined|left|game started|is playing)\b/i.test(rowText)) continue;
 
             // Normalize Unicode minus (U+2212) and dashes to ASCII hyphen
             const normalizedRow = rowText.replace(/[−–—]/g, '-');
@@ -351,18 +353,24 @@ function detectLocalPlayerFromPlayerList() {
             // 1. Negative balance: "-$123" or "$-123"
             const negCashMatch = /(?:-\s*\$\s*(\d{1,6})|\$\s*-\s*(\d{1,6}))/.exec(normalizedRow);
             let parsedCash;
+            let cashToken = '';
             if (negCashMatch) {
                 parsedCash = -parseInt(negCashMatch[1] || negCashMatch[2], 10);
+                cashToken = negCashMatch[0];
             } else {
                 // 2. Positive balance: "$123" or "123$"
                 const posCashMatch = /(?:\$\s*(\d{1,6})|(\d{1,6})\s*\$)/.exec(normalizedRow);
                 if (!posCashMatch) continue;
                 parsedCash = parseInt(posCashMatch[1] || posCashMatch[2], 10);
+                cashToken = posCashMatch[0];
             }
             if (isNaN(parsedCash)) continue;
 
-            const beforeDollar = normalizedRow.split('$')[0].trim();
-            const candidateLines = beforeDollar.split('\n').map(l => l.trim()).filter(Boolean);
+            // Remove matched cash and delta indicators from row to cleanly extract candidate name
+            let textWithoutCash = normalizedRow.replace(cashToken, ' ');
+            textWithoutCash = textWithoutCash.replace(/[+-]\s*\$?\s*\d+/g, ' ');
+
+            const candidateLines = textWithoutCash.split('\n').map(l => l.trim()).filter(Boolean);
 
             let candidateName = null;
             for (const line of candidateLines) {
@@ -429,10 +437,10 @@ function detectLocalPlayerFromPlayerList() {
         }
     }
 
-    // 5. Fallback: Only scan other elements IF scoreboard container did not locate local player AND cash is unverified
-    if (!foundLocalPlayerInScoreboard && !GameMemory.cashVerified && currentName) {
+    // 5. Fallback: Scan other elements IF scoreboard container did not locate local player
+    if (!foundLocalPlayerInScoreboard && currentName) {
         const currentLower = currentName.toLowerCase();
-        const candidates = document.querySelectorAll('*');
+        const candidates = document.querySelectorAll('div, section, li, tr, p');
         for (let i = 0; i < candidates.length; i++) {
             const el = candidates[i];
             if (hud && hud.contains(el)) continue;
@@ -445,12 +453,12 @@ function detectLocalPlayerFromPlayerList() {
 
             if (text.toLowerCase().includes(currentLower) && text.includes('$') && text.length <= 150) {
                 const normText = text.replace(/[−–—]/g, '-');
-                const negMatch = /\$\s*-\s*(\d{1,6})|-\s*\$\s*(\d{1,6})/.exec(normText);
+                const negMatch = /(?:-\s*\$\s*(\d{1,6})|\$\s*-\s*(\d{1,6}))/.exec(normText);
                 let parsedCash;
                 if (negMatch) {
                     parsedCash = -parseInt(negMatch[1] || negMatch[2], 10);
                 } else {
-                    const posMatch = /\$\s*(\d{1,6})|(\d{1,6})\s*\$/.exec(normText);
+                    const posMatch = /(?:\$\s*(\d{1,6})|(\d{1,6})\s*\$)/.exec(normText);
                     if (posMatch) parsedCash = parseInt(posMatch[1] || posMatch[2], 10);
                 }
 
@@ -460,6 +468,7 @@ function detectLocalPlayerFromPlayerList() {
                     GameMemory.players[currentName] = GameMemory.players[currentName] || { cash: parsedCash, pos: GameMemory.myPos, isMe: true };
                     GameMemory.players[currentName].cash = parsedCash;
                     GameMemory.players[currentName].isMe = true;
+                    foundLocalPlayerInScoreboard = true;
                     break;
                 }
             }
@@ -880,6 +889,23 @@ function syncMyPropertiesFromSidebar() {
                                        (style.opacity && parseFloat(style.opacity) < 0.7);
                 if (isMortgagedRow && GameMemory.ownership[tile.id]) {
                     GameMemory.ownership[tile.id].mortgaged = true;
+                }
+
+                // Detect house count from row icons or badges in the sidebar
+                if (GameMemory.ownership[tile.id]) {
+                    if (inner.includes('hotel') || /hotel/i.test(rowText)) {
+                        GameMemory.ownership[tile.id].houses = 5;
+                    } else {
+                        const numMatch = /(?:x\s*|houses?\s*)(\d)/i.exec(rowText);
+                        if (numMatch) {
+                            GameMemory.ownership[tile.id].houses = parseInt(numMatch[1], 10);
+                        } else if (row.querySelector('svg, [class*="house" i], [class*="building" i]')) {
+                            // Single house icon present without number means 1 house
+                            if (!GameMemory.ownership[tile.id].houses) {
+                                GameMemory.ownership[tile.id].houses = 1;
+                            }
+                        }
+                    }
                 }
             }
         }

@@ -6,6 +6,7 @@
  */
 
 import { BOARD_TILES } from '../data/boardTiles.js';
+import { GameMemory } from '../memory/gameMemory.js';
 
 export function isVisibleAndEnabled(el) {
     if (!el || el.disabled) return false;
@@ -470,6 +471,17 @@ export function createDOMSnapshot() {
             // RichUp position-based action: In a 3-button action group ([↑], [↓], [🗑️]), 3rd button is Mortgage!
             if (actionBtns.length >= 3) {
                 return actionBtns[2];
+            }
+
+            // Direct search within the open property card for an enabled mortgage button (e.g. "Mortgage for $130")
+            const cardBtns = card.el.querySelectorAll('button, [role="button"], div[role="button"]');
+            for (let i = 0; i < cardBtns.length; i++) {
+                const btn = cardBtns[i];
+                if (!isVisibleAndEnabled(btn)) continue;
+                const text = normalizeText(btn);
+                if (text.includes('mortgage') && !text.includes('unmortgage')) {
+                    return btn;
+                }
             }
 
             for (const b of allButtons) {
