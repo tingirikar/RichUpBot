@@ -474,8 +474,17 @@ export const ActionExecutor = {
         const candidateTile = targetSet.tiles.find(t => (GameMemory.ownership[t.id]?.houses || 0) === targetSet.minHouses);
         if (!candidateTile) return false;
 
-        // If a different property card is open, dismiss it immediately!
+        // If a different property card is open, switch directly via right sidebar or dismiss it!
         if (openCard && openCard.tile.id !== candidateTile.id) {
+            const sidebarItem = snapshot.findSidebarPropertyItem(candidateTile.name);
+            if (sidebarItem) {
+                return executeOrAdvise({
+                    el: sidebarItem,
+                    title: `SWITCH TO ${candidateTile.name.toUpperCase()} (RIGHT SIDEBAR)`,
+                    reason: `Even building: Switching to ${candidateTile.name} from right sidebar (${targetSet.minHouses} houses).`,
+                    onExecute: () => delayClick(sidebarItem, `Switching to ${candidateTile.name} from right sidebar`)
+                });
+            }
             const closeBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
             if (closeBtn) {
                 delayClick(closeBtn, `Closing ${openCard.tile.name} to upgrade ${candidateTile.name} evenly`);
@@ -574,6 +583,18 @@ export const ActionExecutor = {
         // CRITICAL BUG 3 FIX: If an open property card is ALREADY MORTGAGED, CLOSE IT IMMEDIATELY!
         // We cannot mortgage an already-mortgaged card; its button is Unmortgage which costs money!
         if (openCard && GameMemory.ownership[openCard.tile.id]?.mortgaged) {
+            const targets = DebtRecovery.rankLiquidationTargets();
+            if (targets.length > 0) {
+                const sidebarProp = snapshot.findSidebarPropertyItem(targets[0].tile.name);
+                if (sidebarProp) {
+                    return executeOrAdvise({
+                        el: sidebarProp,
+                        title: `SWITCH TO ${targets[0].tile.name.toUpperCase()} (RIGHT SIDEBAR) TO LIQUIDATE`,
+                        reason: `In debt ($${GameMemory.myCash}). Current open card is already mortgaged; switching directly from right sidebar.`,
+                        onExecute: () => delayClick(sidebarProp, `Switching to ${targets[0].tile.name} from right sidebar`)
+                    });
+                }
+            }
             const closeBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
             if (closeBtn) {
                 delayClick(closeBtn, `Closing already-mortgaged ${openCard.tile.name} to select unmortgaged asset`);

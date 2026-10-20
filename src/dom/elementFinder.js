@@ -15,9 +15,10 @@ export function isVisibleAndEnabled(el) {
     if (hud && hud.contains(el)) return false;
 
     if (el.getAttribute('aria-disabled') === 'true') return false;
+    if (el.classList && (el.classList.contains('disabled') || el.classList.contains('btn-disabled'))) return false;
 
     const style = window.getComputedStyle(el);
-    if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) === 0) {
+    if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) === 0 || style.pointerEvents === 'none') {
         return false;
     }
 
@@ -492,7 +493,7 @@ export function createDOMSnapshot() {
             if (!propertyName) return null;
             const lowerTarget = propertyName.toLowerCase().trim();
 
-            // Locate right sidebar elements (x > 55% viewport width) to prevent hitting board tiles
+            // Locate right sidebar elements (x > 50% viewport width) to prevent hitting board tiles
             const allItems = document.querySelectorAll('div, li, button, [class*="property" i], [class*="item" i], p, span');
             for (let i = 0; i < allItems.length; i++) {
                 const el = allItems[i];
@@ -500,14 +501,28 @@ export function createDOMSnapshot() {
                 if (!isVisibleAndEnabled(el)) continue;
 
                 const rect = el.getBoundingClientRect();
-                if (rect.left < window.innerWidth * 0.55) continue; // Must be in the right panel!
-                if (rect.height < 18 || rect.height > 85 || rect.width < 80) continue;
+                if (rect.left < window.innerWidth * 0.50) continue; // Must be in the right panel!
+                if (rect.height < 18 || rect.height > 95 || rect.width < 70) continue;
 
-                const text = normalizeText(el);
-                if (text.includes('my properties') || text.includes('trades') || text.includes('bankrupt')) continue;
+                const rawText = normalizeText(el);
+                if (rawText.includes('my properties') || rawText.includes('trades') || rawText.includes('bankrupt')) continue;
 
-                if (text === lowerTarget || text.startsWith(lowerTarget) || (text.includes(lowerTarget) && text.length < lowerTarget.length + 15)) {
-                    return el;
+                // Clean emojis, country flags (🇩🇪), icons (✈, 🚰), and extra symbols
+                const cleanText = rawText
+                    .replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '')
+                    .replace(/[^\w\s-]/g, ' ')
+                    .replace(/\s+/g, ' ')
+                    .trim();
+
+                if (
+                    cleanText === lowerTarget ||
+                    cleanText.startsWith(lowerTarget) ||
+                    rawText.includes(lowerTarget) ||
+                    (cleanText.includes(lowerTarget) && cleanText.length < lowerTarget.length + 18)
+                ) {
+                    // Return the clickable row item (if el is an inner text element, prefer closest button or interactive container)
+                    const clickable = el.closest('button, [role="button"], li, div[class*="item" i], div[class*="property" i]') || el;
+                    return clickable;
                 }
             }
             return null;

@@ -563,8 +563,9 @@
     const hud = document.getElementById("rubot-hud-panel");
     if (hud && hud.contains(el)) return false;
     if (el.getAttribute("aria-disabled") === "true") return false;
+    if (el.classList && (el.classList.contains("disabled") || el.classList.contains("btn-disabled"))) return false;
     const style = window.getComputedStyle(el);
-    if (style.display === "none" || style.visibility === "hidden" || parseFloat(style.opacity) === 0) {
+    if (style.display === "none" || style.visibility === "hidden" || parseFloat(style.opacity) === 0 || style.pointerEvents === "none") {
       return false;
     }
     const rect = el.getBoundingClientRect();
@@ -921,12 +922,14 @@
           if (hud && hud.contains(el)) continue;
           if (!isVisibleAndEnabled(el)) continue;
           const rect = el.getBoundingClientRect();
-          if (rect.left < window.innerWidth * 0.55) continue;
-          if (rect.height < 18 || rect.height > 85 || rect.width < 80) continue;
-          const text = normalizeText(el);
-          if (text.includes("my properties") || text.includes("trades") || text.includes("bankrupt")) continue;
-          if (text === lowerTarget || text.startsWith(lowerTarget) || text.includes(lowerTarget) && text.length < lowerTarget.length + 15) {
-            return el;
+          if (rect.left < window.innerWidth * 0.5) continue;
+          if (rect.height < 18 || rect.height > 95 || rect.width < 70) continue;
+          const rawText = normalizeText(el);
+          if (rawText.includes("my properties") || rawText.includes("trades") || rawText.includes("bankrupt")) continue;
+          const cleanText = rawText.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, " ").replace(/\s+/g, " ").trim();
+          if (cleanText === lowerTarget || cleanText.startsWith(lowerTarget) || rawText.includes(lowerTarget) || cleanText.includes(lowerTarget) && cleanText.length < lowerTarget.length + 18) {
+            const clickable = el.closest('button, [role="button"], li, div[class*="item" i], div[class*="property" i]') || el;
+            return clickable;
           }
         }
         return null;
@@ -4366,6 +4369,15 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       const candidateTile = targetSet.tiles.find((t) => (GameMemory2.ownership[t.id]?.houses || 0) === targetSet.minHouses);
       if (!candidateTile) return false;
       if (openCard && openCard.tile.id !== candidateTile.id) {
+        const sidebarItem2 = snapshot.findSidebarPropertyItem(candidateTile.name);
+        if (sidebarItem2) {
+          return executeOrAdvise({
+            el: sidebarItem2,
+            title: `SWITCH TO ${candidateTile.name.toUpperCase()} (RIGHT SIDEBAR)`,
+            reason: `Even building: Switching to ${candidateTile.name} from right sidebar (${targetSet.minHouses} houses).`,
+            onExecute: () => delayClick(sidebarItem2, `Switching to ${candidateTile.name} from right sidebar`)
+          });
+        }
         const closeBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
         if (closeBtn) {
           delayClick(closeBtn, `Closing ${openCard.tile.name} to upgrade ${candidateTile.name} evenly`);
@@ -4443,6 +4455,18 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       logToBot(`[DEBT RECOVERY] Negative balance ($${GameMemory2.myCash}). Liquidating assets to survive...`);
       const openCard = snapshot.getOpenPropertyCard ? snapshot.getOpenPropertyCard() : null;
       if (openCard && GameMemory2.ownership[openCard.tile.id]?.mortgaged) {
+        const targets2 = DebtRecovery.rankLiquidationTargets();
+        if (targets2.length > 0) {
+          const sidebarProp = snapshot.findSidebarPropertyItem(targets2[0].tile.name);
+          if (sidebarProp) {
+            return executeOrAdvise({
+              el: sidebarProp,
+              title: `SWITCH TO ${targets2[0].tile.name.toUpperCase()} (RIGHT SIDEBAR) TO LIQUIDATE`,
+              reason: `In debt ($${GameMemory2.myCash}). Current open card is already mortgaged; switching directly from right sidebar.`,
+              onExecute: () => delayClick(sidebarProp, `Switching to ${targets2[0].tile.name} from right sidebar`)
+            });
+          }
+        }
         const closeBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
         if (closeBtn) {
           delayClick(closeBtn, `Closing already-mortgaged ${openCard.tile.name} to select unmortgaged asset`);
