@@ -336,6 +336,17 @@ export function createDOMSnapshot() {
                 ) {
                     for (const t of BOARD_TILES) {
                         if (t.group && new RegExp(`\\b${t.name}\\b`, 'i').test(text)) {
+                            // Update live mortgage status directly from open card DOM
+                            const lowerText = text.toLowerCase();
+                            if (lowerText.includes('mortgaged') || lowerText.includes('get back for')) {
+                                if (GameMemory.ownership[t.id]) {
+                                    GameMemory.ownership[t.id].mortgaged = true;
+                                }
+                            } else if (lowerText.includes('mortgage for')) {
+                                if (GameMemory.ownership[t.id]) {
+                                    GameMemory.ownership[t.id].mortgaged = false;
+                                }
+                            }
                             return { el: c, tile: t };
                         }
                     }
@@ -430,8 +441,10 @@ export function createDOMSnapshot() {
          */
         findModalMortgageButton() {
             const card = this.getOpenPropertyCard();
+            if (!card) return null;
             // If the open property card is ALREADY mortgaged, button is UNMORTGAGE! Do not return as mortgage!
-            if (card && GameMemory.ownership[card.tile.id]?.mortgaged) {
+            const cardText = (card.el.innerText || '').toLowerCase();
+            if (cardText.includes('mortgaged') || cardText.includes('get back for') || GameMemory.ownership[card.tile.id]?.mortgaged) {
                 return null;
             }
 
@@ -488,14 +501,24 @@ export function createDOMSnapshot() {
             for (const btn of cardBtns) {
                 const text = normalizeText(btn);
                 const inner = (btn.innerHTML || '').toLowerCase();
-                if (text.includes('unmortgage') || inner.includes('unmortgage') || text.includes('un-mortgage')) {
+                if (
+                    text.includes('unmortgage') || inner.includes('unmortgage') || text.includes('un-mortgage') ||
+                    text.includes('get back for') || inner.includes('get back for') ||
+                    /get back for|\$?\d+.*get back/i.test(text)
+                ) {
                     return btn;
                 }
             }
 
-            // If tile is marked mortgaged and card is open, the action button is the unmortgage trigger
-            const tileInfo = GameMemory.ownership[card.tile.id];
-            if (tileInfo && tileInfo.mortgaged) {
+            // Fallback: If card says Mortgaged, find the primary button inside the modal that is not a close/roll/end turn button
+            const cardText = (card.el.innerText || '').toLowerCase();
+            if (cardText.includes('mortgaged') || cardText.includes('get back for') || GameMemory.ownership[card.tile.id]?.mortgaged) {
+                for (const btn of cardBtns) {
+                    const txt = (btn.innerText || '').toLowerCase();
+                    if (txt.includes('$') && (txt.includes('get back') || !txt.includes('mortgage for'))) {
+                        return btn;
+                    }
+                }
                 const actionBtns = this.getPropertyCardActionButtons();
                 if (actionBtns.length > 0) return actionBtns[0];
             }

@@ -491,6 +491,77 @@ Guidelines:
     },
 
     /**
+     * Evaluates house upgrades and unmortgage-to-upgrade decisions with local LLM.
+     * Enforces intelligent building, strike-zone ambushes, and strict cash conservation.
+     */
+    async evaluateHouseBuildingWithLLM(buildContext) {
+        if (!CONFIG.OLLAMA_ENABLED || this.status === 'offline') {
+            return null;
+        }
+
+        const { completeSets = [], mortgagedMonopolies = [], myCash, reserve, opponents = [], myPos, dangerEV } = buildContext;
+
+        const setsDescription = completeSets.map(s => 
+            `- ${s.groupName}: Tiles [${s.tiles.map(t => `${t.name} (${GameMemory.ownership[t.id]?.houses || 0}h)`).join(', ')}]. House cost: $${s.houseCost} each. Min houses: ${s.minHouses}. Opponents in strike zone: ${s.opponentsInStrikeZone || 'None'}.`
+        ).join('\n') || 'None';
+
+        const mortgagedDescription = mortgagedMonopolies.map(m => 
+            `- ${m.groupName}: Mortgaged tile ${m.tile.name} (Cost to unmortgage: $${m.unmortgageCost}). Unmortgaging unlocks building on this set!`
+        ).join('\n') || 'None';
+
+        const oppSummary = opponents.map(o => `- ${o.name}: $${o.cash} (Pos #${o.pos})`).join('\n') || 'None';
+
+        const prompt = `You are a Grandmaster Monopoly AI playing RichUp.io. It is YOUR turn.
+YOUR STATUS:
+- Current Cash: $${myCash}
+- Position: Tile #${myPos}
+- Next-turn danger (estimated rent loss): $${dangerEV}
+- Strict Safety Cash Floor: $${reserve} (Your cash balance after any action MUST remain at or above this reserve!)
+
+CANDIDATE MONOPOLIES TO UPGRADE:
+${setsDescription}
+
+CANDIDATE MONOPOLIES BLOCKED BY MORTGAGE:
+${mortgagedDescription}
+
+OPPONENT STATUS:
+${oppSummary}
+
+GRANDMASTER DIRECTIVES:
+1. STRICT CASH PRESERVATION: You are NEVER allowed to spend cash below the safety floor of $${reserve}. If spending cash leaves you below this reserve, choose "WAIT".
+2. UNMORTGAGE FIRST: In Monopoly/RichUp, you cannot build houses on a monopoly if any property in it is mortgaged. If unmortgaging safely unlocks building on a high-traffic set, output "UNMORTGAGE".
+3. STRIKE ZONE ADVANTAGE: Upgrade sets where active opponents are within 2-12 steps (strike zone).
+4. EVEN BUILDING: In Monopoly, all properties in a set must be upgraded evenly.
+5. If no safe, high-EV action is possible, choose "WAIT".
+
+Output strictly valid JSON:
+{
+  "decision": "UPGRADE" | "UNMORTGAGE" | "WAIT",
+  "targetGroup": "group name or null",
+  "targetTile": "tile name or null",
+  "rationale": "under 15 words"
+}`;
+
+        try {
+            const messages = [
+                { role: 'system', content: 'You are an elite Grandmaster Monopoly AI. Output strictly valid JSON: {"decision": "UPGRADE" | "UNMORTGAGE" | "WAIT", "targetGroup": "...", "targetTile": "...", "rationale": "..."}' },
+                { role: 'user', content: prompt }
+            ];
+
+            const result = await this.sendChatCompletion(messages, { temperature: 0.1, num_predict: 80 });
+            const parsed = this.parseJsonSafely(result?.content || '');
+            if (parsed && (parsed.decision === 'UPGRADE' || parsed.decision === 'UNMORTGAGE' || parsed.decision === 'WAIT')) {
+                return {
+                    ...parsed,
+                    modelUsed: result.modelUsed
+                };
+            }
+        } catch (_) {}
+
+        return null;
+    },
+
+    /**
      * Deliberate strategic check right before ending turn
      */
     async deliberateEndTurnStrategy() {

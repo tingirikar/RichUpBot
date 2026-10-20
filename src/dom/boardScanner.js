@@ -230,6 +230,10 @@ function detectLocalPlayerFromPlayerList() {
         if (hud && hud.contains(el)) continue;
         if (el === document.body || el === document.documentElement) continue;
 
+        // Ensure container is strictly located in the right sidebar (never match board tile rows)
+        const rect = el.getBoundingClientRect();
+        if (rect.left < window.innerWidth * 0.60) continue;
+
         const children = Array.from(el.children);
         if (children.length >= 2 && children.length <= 8) {
             let dollarCount = 0;
@@ -282,8 +286,9 @@ function detectLocalPlayerFromPlayerList() {
 
             let candidateName = null;
             for (const line of candidateLines) {
-                // Remove icons, crowns, door badges, and standalone delta numbers (like "25" or "-25")
+                // Remove emojis, icons, crowns, door badges, and standalone delta numbers (like "25" or "-25")
                 const clean = line
+                    .replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '')
                     .replace(/[->\]\[→←\|👑]/g, '')
                     .replace(/\b-?\d+\b/g, '')
                     .trim();
@@ -779,6 +784,27 @@ function syncMyPropertiesFromSidebar() {
         }
     }
 
+    // Inspect individual property elements in the sidebar to detect mortgage badges / icons
+    const propertyRows = sidebarContainer.querySelectorAll('div, li, button, [class*="property" i], [class*="item" i]');
+    for (const row of propertyRows) {
+        if (row.children.length > 5) continue;
+        const rowText = (row.innerText || '').trim();
+        if (!rowText || rowText.length > 80) continue;
+
+        for (const tile of BOARD_TILES) {
+            if (tile.group && new RegExp(`^${tile.name}\\b`, 'i').test(rowText)) {
+                const inner = (row.innerHTML || '').toLowerCase();
+                const style = window.getComputedStyle(row);
+                const isMortgagedRow = inner.includes('mortgage') || 
+                                       row.className.toString().toLowerCase().includes('mortgage') ||
+                                       (style.opacity && parseFloat(style.opacity) < 0.7);
+                if (isMortgagedRow && GameMemory.ownership[tile.id]) {
+                    GameMemory.ownership[tile.id].mortgaged = true;
+                }
+            }
+        }
+    }
+
     // Clean up any properties we no longer own
     for (const tileId of Object.keys(GameMemory.ownership)) {
         if (GameMemory.isMe(GameMemory.ownership[tileId]?.owner) && !foundTileIds.has(Number(tileId))) {
@@ -808,7 +834,7 @@ function scanActivityLogsOnly() {
 
     // Identify and strictly exclude the bottom-left player chat input container
     const chatInput = document.querySelector('input[placeholder*="Say something" i], textarea[placeholder*="Say something" i]');
-    const chatBox = chatInput ? (chatInput.closest('[class*="chat" i], div[style*="position"]') || chatInput.parentElement?.parentElement) : null;
+    const chatBox = chatInput ? (chatInput.closest('[class*="chat" i]') || chatInput.parentElement?.parentElement) : null;
 
     const isExcluded = (el) => {
         if (!el) return true;

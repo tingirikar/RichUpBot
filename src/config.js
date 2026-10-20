@@ -24,7 +24,7 @@ export const CONFIG = {
     CHAT_ENABLED: localStorage.getItem('richup_cfg_chat') !== 'false',
 
     // Math & Game-Theory Parameters
-    BASE_MIN_RESERVE: 60,            // Absolute cash floor on empty board
+    BASE_MIN_RESERVE: 250,           // Absolute cash floor to prevent low-cash building traps
     RISK_AVERSION_FACTOR: 1.5,       // Balanced multiplier on 1-turn expected rent loss
     WORST_CASE_WEIGHT: 0.25,         // Weight on worst-case single roll
     TRADE_MIN_ADVANTAGE_RATIO: 1.05, // Require at least 5% utility edge in trades

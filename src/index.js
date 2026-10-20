@@ -143,7 +143,7 @@ async function evaluateAndAct() {
 
         // 7. Check for House Building upgrades (on monopolies)
         try {
-            if (ActionExecutor.handleHouseBuilding(snapshot)) return;
+            if (await ActionExecutor.handleHouseBuilding(snapshot)) return;
         } catch (err) {
             logToBot(`[Build Step Warning] ${err}`);
         }

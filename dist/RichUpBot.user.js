@@ -37,8 +37,8 @@
     AUTO_MORTGAGE_ENABLED: localStorage.getItem("richup_cfg_mortgage") !== "false",
     CHAT_ENABLED: localStorage.getItem("richup_cfg_chat") !== "false",
     // Math & Game-Theory Parameters
-    BASE_MIN_RESERVE: 60,
-    // Absolute cash floor on empty board
+    BASE_MIN_RESERVE: 250,
+    // Absolute cash floor to prevent low-cash building traps
     RISK_AVERSION_FACTOR: 1.5,
     // Balanced multiplier on 1-turn expected rent loss
     WORST_CASE_WEIGHT: 0.25,
@@ -671,6 +671,16 @@
           if (text.includes("Owner") || text.includes("Price") || text.includes("with rent") || text.includes("when")) {
             for (const t of BOARD_TILES) {
               if (t.group && new RegExp(`\\b${t.name}\\b`, "i").test(text)) {
+                const lowerText = text.toLowerCase();
+                if (lowerText.includes("mortgaged") || lowerText.includes("get back for")) {
+                  if (GameMemory.ownership[t.id]) {
+                    GameMemory.ownership[t.id].mortgaged = true;
+                  }
+                } else if (lowerText.includes("mortgage for")) {
+                  if (GameMemory.ownership[t.id]) {
+                    GameMemory.ownership[t.id].mortgaged = false;
+                  }
+                }
                 return { el: c, tile: t };
               }
             }
@@ -747,7 +757,9 @@
        */
       findModalMortgageButton() {
         const card = this.getOpenPropertyCard();
-        if (card && GameMemory.ownership[card.tile.id]?.mortgaged) {
+        if (!card) return null;
+        const cardText = (card.el.innerText || "").toLowerCase();
+        if (cardText.includes("mortgaged") || cardText.includes("get back for") || GameMemory.ownership[card.tile.id]?.mortgaged) {
           return null;
         }
         const actionBtns = this.getPropertyCardActionButtons();
@@ -787,12 +799,18 @@
         for (const btn of cardBtns) {
           const text = normalizeText(btn);
           const inner = (btn.innerHTML || "").toLowerCase();
-          if (text.includes("unmortgage") || inner.includes("unmortgage") || text.includes("un-mortgage")) {
+          if (text.includes("unmortgage") || inner.includes("unmortgage") || text.includes("un-mortgage") || text.includes("get back for") || inner.includes("get back for") || /get back for|\$?\d+.*get back/i.test(text)) {
             return btn;
           }
         }
-        const tileInfo = GameMemory.ownership[card.tile.id];
-        if (tileInfo && tileInfo.mortgaged) {
+        const cardText = (card.el.innerText || "").toLowerCase();
+        if (cardText.includes("mortgaged") || cardText.includes("get back for") || GameMemory.ownership[card.tile.id]?.mortgaged) {
+          for (const btn of cardBtns) {
+            const txt = (btn.innerText || "").toLowerCase();
+            if (txt.includes("$") && (txt.includes("get back") || !txt.includes("mortgage for"))) {
+              return btn;
+            }
+          }
           const actionBtns = this.getPropertyCardActionButtons();
           if (actionBtns.length > 0) return actionBtns[0];
         }
@@ -2231,6 +2249,69 @@ Guidelines:
       return "watching board";
     },
     /**
+     * Evaluates house upgrades and unmortgage-to-upgrade decisions with local LLM.
+     * Enforces intelligent building, strike-zone ambushes, and strict cash conservation.
+     */
+    async evaluateHouseBuildingWithLLM(buildContext) {
+      if (!CONFIG2.OLLAMA_ENABLED || this.status === "offline") {
+        return null;
+      }
+      const { completeSets = [], mortgagedMonopolies = [], myCash, reserve, opponents = [], myPos, dangerEV } = buildContext;
+      const setsDescription = completeSets.map(
+        (s) => `- ${s.groupName}: Tiles [${s.tiles.map((t) => `${t.name} (${GameMemory2.ownership[t.id]?.houses || 0}h)`).join(", ")}]. House cost: $${s.houseCost} each. Min houses: ${s.minHouses}. Opponents in strike zone: ${s.opponentsInStrikeZone || "None"}.`
+      ).join("\n") || "None";
+      const mortgagedDescription = mortgagedMonopolies.map(
+        (m) => `- ${m.groupName}: Mortgaged tile ${m.tile.name} (Cost to unmortgage: $${m.unmortgageCost}). Unmortgaging unlocks building on this set!`
+      ).join("\n") || "None";
+      const oppSummary = opponents.map((o) => `- ${o.name}: $${o.cash} (Pos #${o.pos})`).join("\n") || "None";
+      const prompt = `You are a Grandmaster Monopoly AI playing RichUp.io. It is YOUR turn.
+YOUR STATUS:
+- Current Cash: $${myCash}
+- Position: Tile #${myPos}
+- Next-turn danger (estimated rent loss): $${dangerEV}
+- Strict Safety Cash Floor: $${reserve} (Your cash balance after any action MUST remain at or above this reserve!)
+
+CANDIDATE MONOPOLIES TO UPGRADE:
+${setsDescription}
+
+CANDIDATE MONOPOLIES BLOCKED BY MORTGAGE:
+${mortgagedDescription}
+
+OPPONENT STATUS:
+${oppSummary}
+
+GRANDMASTER DIRECTIVES:
+1. STRICT CASH PRESERVATION: You are NEVER allowed to spend cash below the safety floor of $${reserve}. If spending cash leaves you below this reserve, choose "WAIT".
+2. UNMORTGAGE FIRST: In Monopoly/RichUp, you cannot build houses on a monopoly if any property in it is mortgaged. If unmortgaging safely unlocks building on a high-traffic set, output "UNMORTGAGE".
+3. STRIKE ZONE ADVANTAGE: Upgrade sets where active opponents are within 2-12 steps (strike zone).
+4. EVEN BUILDING: In Monopoly, all properties in a set must be upgraded evenly.
+5. If no safe, high-EV action is possible, choose "WAIT".
+
+Output strictly valid JSON:
+{
+  "decision": "UPGRADE" | "UNMORTGAGE" | "WAIT",
+  "targetGroup": "group name or null",
+  "targetTile": "tile name or null",
+  "rationale": "under 15 words"
+}`;
+      try {
+        const messages = [
+          { role: "system", content: 'You are an elite Grandmaster Monopoly AI. Output strictly valid JSON: {"decision": "UPGRADE" | "UNMORTGAGE" | "WAIT", "targetGroup": "...", "targetTile": "...", "rationale": "..."}' },
+          { role: "user", content: prompt }
+        ];
+        const result = await this.sendChatCompletion(messages, { temperature: 0.1, num_predict: 80 });
+        const parsed = this.parseJsonSafely(result?.content || "");
+        if (parsed && (parsed.decision === "UPGRADE" || parsed.decision === "UNMORTGAGE" || parsed.decision === "WAIT")) {
+          return {
+            ...parsed,
+            modelUsed: result.modelUsed
+          };
+        }
+      } catch (_) {
+      }
+      return null;
+    },
+    /**
      * Deliberate strategic check right before ending turn
      */
     async deliberateEndTurnStrategy() {
@@ -2579,6 +2660,100 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     }
   };
 
+  // src/engine/houseBuilder.js
+  var HouseBuilder = {
+    /**
+     * Checks if we are currently standing within 2 to 12 tiles of any opponent
+     * property that has 3+ houses or a hotel.
+     */
+    isPlayerInEnemyHotelZone() {
+      const myPos = GameMemory2.myPos || 0;
+      for (let roll = 2; roll <= 12; roll++) {
+        const targetTileId = (myPos + roll) % 40;
+        const tile = BOARD_TILES[targetTileId];
+        if (!tile || !tile.group) continue;
+        const info = GameMemory2.ownership[targetTileId];
+        if (info && !GameMemory2.isMe(info.owner) && info.houses >= 3 && !info.mortgaged) {
+          const rent = tile.rent[info.houses] || 0;
+          if (rent > 250) {
+            return { inDanger: true, tile, rent, distance: roll };
+          }
+        }
+      }
+      return { inDanger: false };
+    },
+    /**
+     * Checks if any active opponent is currently 2 to 12 tiles away
+     * from any tile in the given color group.
+     */
+    areOpponentsInStrikeZone(groupTiles) {
+      const tileIds = new Set(groupTiles.map((t) => t.id));
+      for (const [pName, pData] of Object.entries(GameMemory2.players)) {
+        if (GameMemory2.isMe(pName) || pData.bankrupt || pData.inJail) continue;
+        const oppPos = pData.pos || 0;
+        for (const tileId of tileIds) {
+          const dist = (tileId - oppPos + 40) % 40;
+          if (dist >= 2 && dist <= 12) {
+            return { oppApproaching: true, opponentName: pName, distance: dist };
+          }
+        }
+      }
+      return { oppApproaching: false };
+    },
+    rankHouseUpgrades(myCash) {
+      const reserve = MarkovRisk.computeDynamicReserve(GameMemory2.myPos);
+      const candidates = [];
+      if (myCash <= reserve) return candidates;
+      if (CONFIG2.AMBUSH_BUILD_ONLY) {
+        const dangerCheck = this.isPlayerInEnemyHotelZone();
+        if (dangerCheck.inDanger) {
+          return candidates;
+        }
+      }
+      for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
+        if (tiles[0].type !== "property") continue;
+        const { owned, total } = GameMemory2.getGroupCount(groupName, "__ME__");
+        if (owned !== total) continue;
+        const anyMortgaged = tiles.some((t) => GameMemory2.ownership[t.id]?.mortgaged);
+        if (anyMortgaged) continue;
+        const houseCounts = tiles.map((t) => GameMemory2.ownership[t.id]?.houses || 0);
+        const minHouses = Math.min(...houseCounts);
+        const strikeCheck = this.areOpponentsInStrikeZone(tiles);
+        const isAmbushWindow = strikeCheck.oppApproaching;
+        const isRushingTo3Houses = minHouses < 3;
+        const hasSufficientSurplus = isRushingTo3Houses ? myCash >= reserve + tiles[0].houseCost * 1.2 : myCash >= reserve + 300;
+        if (CONFIG2.AMBUSH_BUILD_ONLY && !isAmbushWindow && !hasSufficientSurplus) {
+          continue;
+        }
+        for (const tile of tiles) {
+          const info = GameMemory2.ownership[tile.id];
+          if (!info || info.houses >= 5) continue;
+          if (info.houses > minHouses) continue;
+          const cost = tile.houseCost;
+          if (myCash - cost < reserve) continue;
+          const currentRent = tile.rent[info.houses];
+          const nextRent = tile.rent[info.houses + 1] || currentRent;
+          const rentDelta = nextRent - currentRent;
+          const sweetSpotBoost = info.houses === 2 ? 2.6 : info.houses === 1 ? 1.5 : 1;
+          const ambushBoost = isAmbushWindow ? 1.8 : 1;
+          const roi = (rentDelta / cost * tile.markov * sweetSpotBoost * ambushBoost).toFixed(4);
+          candidates.push({
+            tile,
+            currentHouses: info.houses,
+            nextHouses: info.houses + 1,
+            cost,
+            rentDelta,
+            roi: parseFloat(roi),
+            isAmbush: isAmbushWindow,
+            targetOpp: strikeCheck.opponentName || null
+          });
+        }
+      }
+      candidates.sort((a, b) => b.roi - a.roi);
+      return candidates;
+    }
+  };
+
   // src/engine/debtRecovery.js
   var DebtRecovery = {
     rankLiquidationTargets() {
@@ -2793,6 +2968,8 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       const el = allContainers[i];
       if (hud && hud.contains(el)) continue;
       if (el === document.body || el === document.documentElement) continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.left < window.innerWidth * 0.6) continue;
       const children = Array.from(el.children);
       if (children.length >= 2 && children.length <= 8) {
         let dollarCount = 0;
@@ -2831,7 +3008,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         const candidateLines = beforeDollar.split("\n").map((l) => l.trim()).filter(Boolean);
         let candidateName = null;
         for (const line of candidateLines) {
-          const clean = line.replace(/[->\]\[→←\|👑]/g, "").replace(/\b-?\d+\b/g, "").trim();
+          const clean = line.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[->\]\[→←\|👑]/g, "").replace(/\b-?\d+\b/g, "").trim();
           if (clean.length >= 2 && clean.length <= 24 && !BOARD_LABELS_BLACKLIST.has(clean.toLowerCase()) && !clean.toLowerCase().includes("share") && !clean.toLowerCase().includes("copy")) {
             candidateName = clean;
             break;
@@ -3204,6 +3381,22 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         }
       }
     }
+    const propertyRows = sidebarContainer.querySelectorAll('div, li, button, [class*="property" i], [class*="item" i]');
+    for (const row of propertyRows) {
+      if (row.children.length > 5) continue;
+      const rowText = (row.innerText || "").trim();
+      if (!rowText || rowText.length > 80) continue;
+      for (const tile of BOARD_TILES) {
+        if (tile.group && new RegExp(`^${tile.name}\\b`, "i").test(rowText)) {
+          const inner = (row.innerHTML || "").toLowerCase();
+          const style = window.getComputedStyle(row);
+          const isMortgagedRow = inner.includes("mortgage") || row.className.toString().toLowerCase().includes("mortgage") || style.opacity && parseFloat(style.opacity) < 0.7;
+          if (isMortgagedRow && GameMemory2.ownership[tile.id]) {
+            GameMemory2.ownership[tile.id].mortgaged = true;
+          }
+        }
+      }
+    }
     for (const tileId of Object.keys(GameMemory2.ownership)) {
       if (GameMemory2.isMe(GameMemory2.ownership[tileId]?.owner) && !foundTileIds.has(Number(tileId))) {
         GameMemory2.ownership[tileId].owner = null;
@@ -3225,7 +3418,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     const hud = document.getElementById("rubot-hud-panel");
     const processedLines = /* @__PURE__ */ new Set();
     const chatInput = document.querySelector('input[placeholder*="Say something" i], textarea[placeholder*="Say something" i]');
-    const chatBox = chatInput ? chatInput.closest('[class*="chat" i], div[style*="position"]') || chatInput.parentElement?.parentElement : null;
+    const chatBox = chatInput ? chatInput.closest('[class*="chat" i]') || chatInput.parentElement?.parentElement : null;
     const isExcluded = (el) => {
       if (!el) return true;
       if (hud && hud.contains(el)) return true;
@@ -4840,82 +5033,202 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       }
       return false;
     },
-    handleHouseBuilding(snapshot) {
+    async handleHouseBuilding(snapshot) {
       if (!CONFIG2.AUTO_BUILD_ENABLED) return false;
+      if (!GameMemory2.isMyTurn) return false;
+      const bodyText = (document.body ? document.body.innerText : "").toLowerCase();
+      const myName = (GameMemory2.myName || "").toLowerCase();
+      if (bodyText.includes("is playing...") && myName && !bodyText.includes(`${myName} is playing...`)) {
+        return false;
+      }
       const openCard = snapshot.getOpenPropertyCard ? snapshot.getOpenPropertyCard() : null;
       const completeSets = [];
+      const mortgagedMonopolies = [];
       for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
         if (tiles[0].type !== "property") continue;
         const { owned, total } = GameMemory2.getGroupCount(groupName, "__ME__");
         if (owned === total) {
-          const anyMortgaged = tiles.some((t) => GameMemory2.ownership[t.id]?.mortgaged);
-          if (!anyMortgaged) {
+          const mortgagedTiles = tiles.filter((t) => GameMemory2.ownership[t.id]?.mortgaged);
+          if (mortgagedTiles.length > 0) {
+            for (const mTile of mortgagedTiles) {
+              const unmortgageCost = Math.round(mTile.price * 0.55);
+              mortgagedMonopolies.push({
+                groupName,
+                tile: mTile,
+                unmortgageCost,
+                allTiles: tiles
+              });
+            }
+          } else {
             const houseCounts = tiles.map((t) => GameMemory2.ownership[t.id]?.houses || 0);
             const minHouses = Math.min(...houseCounts);
             const maxHouses = Math.max(...houseCounts);
-            completeSets.push({ groupName, tiles, minHouses, maxHouses, houseCost: tiles[0].houseCost });
+            const strikeCheck = HouseBuilder.areOpponentsInStrikeZone ? HouseBuilder.areOpponentsInStrikeZone(tiles) : { oppApproaching: false };
+            completeSets.push({
+              groupName,
+              tiles,
+              minHouses,
+              maxHouses,
+              houseCost: tiles[0].houseCost,
+              opponentsInStrikeZone: strikeCheck.oppApproaching ? `${strikeCheck.opponentName} (${strikeCheck.distance} steps)` : null
+            });
           }
         }
       }
-      if (completeSets.length === 0) {
+      if (completeSets.length === 0 && mortgagedMonopolies.length === 0) {
         if (openCard) {
           const closeBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
           if (closeBtn) delayClick(closeBtn, "Closing property card: No monopolies available");
         }
         return false;
       }
-      const reserve = MarkovRisk.computeDynamicReserve(GameMemory2.myPos);
-      const targetSet = completeSets.find((s) => s.minHouses < 5 && GameMemory2.myCash - s.houseCost >= reserve);
-      if (!targetSet) {
+      const dynamicReserve = MarkovRisk.computeDynamicReserve(GameMemory2.myPos);
+      const reserve = Math.max(CONFIG2.BASE_MIN_RESERVE || 250, dynamicReserve);
+      if (GameMemory2.myCash <= reserve) {
         if (openCard) {
           const closeBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
-          if (closeBtn) delayClick(closeBtn, "Closing property card: Upgrades complete or budget limited");
+          if (closeBtn) delayClick(closeBtn, "Closing property card: Preserving cash reserve");
         }
         return false;
       }
-      const candidateTile = targetSet.tiles.find((t) => (GameMemory2.ownership[t.id]?.houses || 0) === targetSet.minHouses);
-      if (!candidateTile) return false;
-      if (openCard && openCard.tile.id !== candidateTile.id) {
-        const sidebarItem2 = snapshot.findSidebarPropertyItem(candidateTile.name);
-        if (sidebarItem2) {
-          return executeOrAdvise({
-            el: sidebarItem2,
-            title: `SWITCH TO ${candidateTile.name.toUpperCase()} (RIGHT SIDEBAR)`,
-            reason: `Even building: Switching to ${candidateTile.name} from right sidebar (${targetSet.minHouses} houses).`,
-            onExecute: () => delayClick(sidebarItem2, `Switching to ${candidateTile.name} from right sidebar`)
-          });
-        }
-        const closeBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
-        if (closeBtn) {
-          delayClick(closeBtn, `Closing ${openCard.tile.name} to upgrade ${candidateTile.name} evenly`);
-          return true;
-        }
-      }
-      if (openCard && openCard.tile.id === candidateTile.id) {
-        const modalUpgradeBtn = snapshot.findModalUpgradeButton();
-        if (modalUpgradeBtn) {
-          return executeOrAdvise({
-            el: modalUpgradeBtn,
-            title: `UPGRADE ${candidateTile.name.toUpperCase()} [\u2191]`,
-            reason: `Even building on ${targetSet.groupName}: Upgrading to ${targetSet.minHouses + 1} houses (${targetSet.minHouses} -> ${targetSet.minHouses + 1}).`,
-            onExecute: () => {
-              delayClick(modalUpgradeBtn, `Building house on ${candidateTile.name}`);
-              if (GameMemory2.ownership[candidateTile.id]) {
-                GameMemory2.ownership[candidateTile.id].houses = targetSet.minHouses + 1;
-              }
-              GameMemory2.myCash -= targetSet.houseCost;
-            }
-          });
-        }
-      }
-      const sidebarItem = snapshot.findSidebarPropertyItem(candidateTile.name);
-      if (sidebarItem) {
-        return executeOrAdvise({
-          el: sidebarItem,
-          title: `SELECT ${candidateTile.name.toUpperCase()} (RIGHT SIDEBAR)`,
-          reason: `Even building: Opening ${candidateTile.name} from right sidebar to build house (${targetSet.minHouses} -> ${targetSet.minHouses + 1}).`,
-          onExecute: () => delayClick(sidebarItem, `Opening ${candidateTile.name} from right sidebar`)
+      let chosenAction = null;
+      let chosenGroup = null;
+      let chosenTile = null;
+      if (CONFIG2.OLLAMA_ENABLED && OllamaClient.status !== "offline") {
+        const oppList = Object.entries(GameMemory2.players).filter(([pName]) => !GameMemory2.isMe(pName)).map(([pName, p]) => ({ name: pName, cash: p.cash, pos: p.pos || 0 }));
+        const aiVerdict = await OllamaClient.evaluateHouseBuildingWithLLM({
+          completeSets,
+          mortgagedMonopolies,
+          myCash: GameMemory2.myCash,
+          reserve,
+          opponents: oppList,
+          myPos: GameMemory2.myPos,
+          dangerEV: GameMemory2.lastDangerEV || 0
         });
+        if (aiVerdict) {
+          logToBot(`[AI UPGRADE] \u{1F9E0} Ollama [${aiVerdict.modelUsed || "AI"}]: ${aiVerdict.decision} - ${aiVerdict.rationale}`);
+          if (aiVerdict.decision === "WAIT") {
+            if (openCard) {
+              const closeBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
+              if (closeBtn) delayClick(closeBtn, "Closing property card: Ollama advised holding cash");
+            }
+            return false;
+          }
+          chosenAction = aiVerdict.decision;
+          chosenGroup = aiVerdict.targetGroup;
+          chosenTile = aiVerdict.targetTile;
+        }
+      }
+      const shouldUnmortgage = chosenAction === "UNMORTGAGE" || !chosenAction && mortgagedMonopolies.some((m) => GameMemory2.myCash - m.unmortgageCost >= reserve);
+      if (shouldUnmortgage && mortgagedMonopolies.length > 0) {
+        let targetMortgage = mortgagedMonopolies.find(
+          (m) => chosenTile && m.tile.name.toLowerCase() === chosenTile.toLowerCase() || chosenGroup && m.groupName.toLowerCase() === chosenGroup.toLowerCase()
+        );
+        if (!targetMortgage) {
+          targetMortgage = mortgagedMonopolies.find((m) => GameMemory2.myCash - m.unmortgageCost >= reserve);
+        }
+        if (targetMortgage && GameMemory2.myCash - targetMortgage.unmortgageCost >= reserve) {
+          if (openCard && openCard.tile.id === targetMortgage.tile.id) {
+            const unmortgageBtn = snapshot.findModalUnmortgageButton ? snapshot.findModalUnmortgageButton() : null;
+            if (unmortgageBtn) {
+              return executeOrAdvise({
+                el: unmortgageBtn,
+                title: `UNMORTGAGE MONOPOLY: ${targetMortgage.tile.name.toUpperCase()}`,
+                reason: `Reclaiming ${targetMortgage.tile.name} ($${targetMortgage.unmortgageCost}) to unlock house building on ${targetMortgage.groupName}!`,
+                onExecute: () => {
+                  if (GameMemory2.ownership[targetMortgage.tile.id]) {
+                    GameMemory2.ownership[targetMortgage.tile.id].mortgaged = false;
+                  }
+                  GameMemory2.myCash -= targetMortgage.unmortgageCost;
+                  delayClick(unmortgageBtn, `Unmortgaging ${targetMortgage.tile.name}`);
+                }
+              });
+            }
+          }
+          if (openCard && openCard.tile.id !== targetMortgage.tile.id) {
+            const sidebarItem2 = snapshot.findSidebarPropertyItem(targetMortgage.tile.name);
+            if (sidebarItem2) {
+              return executeOrAdvise({
+                el: sidebarItem2,
+                title: `SWITCH TO ${targetMortgage.tile.name.toUpperCase()} (RIGHT SIDEBAR)`,
+                reason: `Switching to mortgaged ${targetMortgage.tile.name} to unmortgage for ${targetMortgage.groupName} monopoly upgrades.`,
+                onExecute: () => delayClick(sidebarItem2, `Switching to ${targetMortgage.tile.name} from right sidebar`)
+              });
+            }
+            const closeBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
+            if (closeBtn) {
+              delayClick(closeBtn, `Closing card to select mortgaged ${targetMortgage.tile.name}`);
+              return true;
+            }
+          }
+          const sidebarItem = snapshot.findSidebarPropertyItem(targetMortgage.tile.name);
+          if (sidebarItem) {
+            return executeOrAdvise({
+              el: sidebarItem,
+              title: `SELECT ${targetMortgage.tile.name.toUpperCase()} (UNMORTGAGE)`,
+              reason: `Opening ${targetMortgage.tile.name} from right sidebar to unmortgage and unlock house building.`,
+              onExecute: () => delayClick(sidebarItem, `Opening ${targetMortgage.tile.name} from right sidebar to unmortgage`)
+            });
+          }
+        }
+      }
+      if (completeSets.length > 0) {
+        let targetSet = completeSets.find(
+          (s) => chosenGroup && s.groupName.toLowerCase() === chosenGroup.toLowerCase() && s.minHouses < 5 && GameMemory2.myCash - s.houseCost >= reserve
+        );
+        if (!targetSet) {
+          targetSet = completeSets.find((s) => s.minHouses < 5 && GameMemory2.myCash - s.houseCost >= reserve);
+        }
+        if (targetSet) {
+          const candidateTile = targetSet.tiles.find((t) => (GameMemory2.ownership[t.id]?.houses || 0) === targetSet.minHouses);
+          if (!candidateTile) return false;
+          if (openCard && openCard.tile.id !== candidateTile.id) {
+            const sidebarItem2 = snapshot.findSidebarPropertyItem(candidateTile.name);
+            if (sidebarItem2) {
+              return executeOrAdvise({
+                el: sidebarItem2,
+                title: `SWITCH TO ${candidateTile.name.toUpperCase()} (RIGHT SIDEBAR)`,
+                reason: `Even building: Switching to ${candidateTile.name} from right sidebar (${targetSet.minHouses} houses).`,
+                onExecute: () => delayClick(sidebarItem2, `Switching to ${candidateTile.name} from right sidebar`)
+              });
+            }
+            const closeBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
+            if (closeBtn) {
+              delayClick(closeBtn, `Closing ${openCard.tile.name} to upgrade ${candidateTile.name} evenly`);
+              return true;
+            }
+          }
+          if (openCard && openCard.tile.id === candidateTile.id) {
+            const modalUpgradeBtn = snapshot.findModalUpgradeButton();
+            if (modalUpgradeBtn) {
+              return executeOrAdvise({
+                el: modalUpgradeBtn,
+                title: `UPGRADE ${candidateTile.name.toUpperCase()} [\u2191]`,
+                reason: `Even building on ${targetSet.groupName}: Upgrading to ${targetSet.minHouses + 1} houses (${targetSet.minHouses} -> ${targetSet.minHouses + 1}).`,
+                onExecute: () => {
+                  delayClick(modalUpgradeBtn, `Building house on ${candidateTile.name}`);
+                  if (GameMemory2.ownership[candidateTile.id]) {
+                    GameMemory2.ownership[candidateTile.id].houses = targetSet.minHouses + 1;
+                  }
+                  GameMemory2.myCash -= targetSet.houseCost;
+                }
+              });
+            }
+          }
+          const sidebarItem = snapshot.findSidebarPropertyItem(candidateTile.name);
+          if (sidebarItem) {
+            return executeOrAdvise({
+              el: sidebarItem,
+              title: `SELECT ${candidateTile.name.toUpperCase()} (RIGHT SIDEBAR)`,
+              reason: `Even building: Opening ${candidateTile.name} from right sidebar to build house (${targetSet.minHouses} -> ${targetSet.minHouses + 1}).`,
+              onExecute: () => delayClick(sidebarItem, `Opening ${candidateTile.name} from right sidebar`)
+            });
+          }
+        }
+      }
+      if (openCard) {
+        const closeBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
+        if (closeBtn) delayClick(closeBtn, "Closing property card: Upgrades complete or budget limited");
       }
       return false;
     },
@@ -4924,7 +5237,9 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
      */
     handleUnmortgage(snapshot) {
       if (!CONFIG2.AUTO_MORTGAGE_ENABLED || GameMemory2.myCash <= 0) return false;
-      const reserve = MarkovRisk.computeDynamicReserve(GameMemory2.myPos);
+      if (!GameMemory2.isMyTurn) return false;
+      const dynamicReserve = MarkovRisk.computeDynamicReserve(GameMemory2.myPos);
+      const reserve = Math.max(CONFIG2.BASE_MIN_RESERVE || 250, dynamicReserve);
       const candidates = DebtRecovery.rankUnmortgageCandidates(GameMemory2.myCash, reserve);
       if (candidates.length === 0) return false;
       const unmortgageBtn = snapshot.findModalUnmortgageButton ? snapshot.findModalUnmortgageButton() : null;
@@ -5099,7 +5414,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         const verdict = await OllamaClient.deliberateEndTurnStrategy();
         logToBot(`[STRATEGY] Deliberation: ${verdict.action} - ${verdict.rationale}`);
         if (verdict.action === "UPGRADE") {
-          if (this.handleHouseBuilding(snapshot)) {
+          if (await this.handleHouseBuilding(snapshot)) {
             return true;
           }
         }
@@ -5416,7 +5731,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         logToBot(`[Auction Bid Step Warning] ${err}`);
       }
       try {
-        if (ActionExecutor.handleHouseBuilding(snapshot)) return;
+        if (await ActionExecutor.handleHouseBuilding(snapshot)) return;
       } catch (err) {
         logToBot(`[Build Step Warning] ${err}`);
       }
