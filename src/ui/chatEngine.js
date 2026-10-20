@@ -18,19 +18,27 @@ export const ChatEngine = {
 
     TEMPLATES: Object.freeze({
         tradeReject: [
-            "Numbers don't add up for me on that offer, sweeten the cash.",
-            "Can't let that property go that cheap. Add some cash on top?",
-            "That leaves me short on board value, no deal."
+            "nah sry",
+            "cant do that",
+            "nty",
+            "need more cash with that",
+            "counter me with cash",
+            "keeping that sry",
+            "no thx",
+            "pass for now"
         ],
         tradeAccept: [
-            "Deal accepted! Win-win.",
-            "Pleasure doing business with you.",
-            "Good trade, let's see how the dice roll."
+            "deal thx",
+            "gg thanks",
+            "nice trade",
+            "thx",
+            "accepted"
         ],
         tradeNegotiate: [
-            "Close, but let's counter-offer. Sweeten the deal?",
-            "I'm interested, but let's adjust terms to make it fair.",
-            "Counter-proposal sent, check if this works."
+            "counter me",
+            "add some cash and ill do it",
+            "almost, add cash",
+            "need a bit more cash"
         ]
     }),
 
@@ -94,6 +102,13 @@ export const ChatEngine = {
             if (!list || list.length === 0) return false;
             message = list[Math.floor(Math.random() * list.length)];
         }
+
+        // Enforce lowercase, casual human gamer style: strip robot prefixes & trailing periods
+        message = message
+            .replace(/^(decline:|accept:|negotiate:|counter:)\s*/i, '')
+            .replace(/[.!]$/, '')
+            .toLowerCase()
+            .trim();
 
         // Strict global cooldown: minimum 6 seconds between any outgoing chat messages
         const cooldown = CONFIG.CHAT_COOLDOWN_MS || 6000;

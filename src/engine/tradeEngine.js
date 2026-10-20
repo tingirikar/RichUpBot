@@ -234,19 +234,18 @@ export const TradeEngine = {
         if (givesOppMonopoly && !completesMyMonopoly) {
             const counter = this.findCounterTrade(tradeData);
             if (counter) {
-                const cashExtra = counter.cashDemand > 0 ? ` + $${counter.cashDemand}` : '';
                 return {
                     accept: false,
                     counterSwap: counter,
                     reason: `FATAL DANGER VETO: Gives ${partnerName} a ${oppGroupName} monopoly while we get none!`,
-                    chatReply: `Decline: That completes your ${oppGroupName} set. Give me ${counter.myReceivedTile.name}${cashExtra} if you want that.`
+                    chatReply: `counter me with ${counter.myReceivedTile.name.toLowerCase()}`
                 };
             }
             return {
                 accept: false,
                 counterSwap: null,
                 reason: `FATAL DANGER VETO: Gives ${partnerName} a ${oppGroupName} monopoly while we get none!`,
-                chatReply: `Decline: That completes your ${oppGroupName} set and puts me in danger. No deal.`
+                chatReply: `cant give u a set sry`
             };
         }
 
@@ -259,7 +258,7 @@ export const TradeEngine = {
                     accept: false,
                     counterSwap: this.findCounterTrade(tradeData),
                     reason: `MONOPOLY BLOCKED BY DEBT: Trade completes ${myCompletedGroup} but leaves only $${myCashAfter} cash!`,
-                    chatReply: `Decline: That set is great but leaves me with zero cash. Add +$100 cash and I'll accept!`
+                    chatReply: `id be broke lol add cash`
                 };
             }
 
@@ -270,7 +269,7 @@ export const TradeEngine = {
                     myGain: 3500,
                     oppGain: 3500,
                     reason: `MUTUAL MONOPOLY SWAP: Both players secure completed color sets (${myCompletedGroup})!`,
-                    chatReply: `Deal! Both get sets. Let's see who builds faster!`
+                    chatReply: `deal thx`
                 };
             } else {
                 // WE GET A MONOPOLY, OPPONENT GETS NONE! Overwhelming advantage!
@@ -279,7 +278,7 @@ export const TradeEngine = {
                     myGain: 5000,
                     oppGain: 500,
                     reason: `MONOPOLY COMPLETER: Completes our ${myCompletedGroup} monopoly without giving opponent a set!`,
-                    chatReply: `Deal accepted! Thanks for the trade.`
+                    chatReply: `deal thx`
                 };
             }
         }
@@ -305,7 +304,7 @@ export const TradeEngine = {
                 accept: false,
                 counterSwap: null,
                 reason: `20-ROUND SIMULATION VETO: Accepting drops 20-round survival from ${sim.rejSurvRate}% to ${sim.accSurvRate}%!`,
-                chatReply: `Decline: 20-turn simulation shows this increases my bankruptcy risk. No deal.`
+                chatReply: `nah sry`
             };
         }
 
@@ -317,17 +316,19 @@ export const TradeEngine = {
                     accept: false,
                     counterSwap: counter,
                     reason: `UNFAIR DEFICIT: Trade favors ${partnerName}. Countering for set completer.`,
-                    chatReply: counter.pitch
+                    chatReply: `counter me`
                 };
             }
 
-            const reasonableCash = Math.min(250, Math.max(50, Math.round(givenTiles.reduce((s, t) => s + (t.price || 100), 0) * 0.4)));
-            const givenName = givenTiles[0]?.name || 'that property';
             const naturalReplies = [
-                `No deal on ${givenName}, I'm building toward that set.`,
-                `That offer is too low for ${givenName}. Need at least +$${reasonableCash} or a better card.`,
-                `Can't trade ${givenName} without getting a property I need for my monopoly.`,
-                `Not looking to give up ${givenName} right now. Offer a property from my missing sets.`
+                "nah sry",
+                "cant do that",
+                "nty",
+                "need more cash with that",
+                "counter me with cash",
+                "keeping that sry",
+                "no thx",
+                "pass for now"
             ];
             const chatReply = naturalReplies[Math.floor(Math.random() * naturalReplies.length)];
 
@@ -343,7 +344,6 @@ export const TradeEngine = {
 
         GameMemory.lastTradeVerdict = acceptable ? 'ACCEPTABLE' : 'UNFAVORABLE';
 
-        const givenName = givenTiles[0]?.name || 'property';
         return {
             accept: acceptable,
             myGain: Math.round(myGain),
@@ -353,9 +353,7 @@ export const TradeEngine = {
             reason: acceptable
                 ? `GRANDMASTER EV+ TRADE: Net gain +$${Math.round(myGain)} vs Opp +$${Math.round(oppGain)} (20-turn Sim: +EV)`
                 : `Unfavorable utility: Net gain $${Math.round(myGain)} < requirement`,
-            chatReply: acceptable
-                ? "Deal accepted! Win-win."
-                : `Decline: Value doesn't work for ${givenName}. Need better terms or missing set pieces.`
+            chatReply: acceptable ? "deal thx" : "nah sry"
         };
     },
 

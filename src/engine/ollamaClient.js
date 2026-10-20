@@ -175,7 +175,7 @@ export const OllamaClient = {
             const messages = [
                 {
                     role: 'system',
-                    content: 'You are a Grandmaster Monopoly / RichUp AI player whose primary goal is to WIN. Never trade in the enemy\'s favor. If enemy completes a monopoly and we do not, you MUST DECLINE. Output ONLY valid JSON in format: {"decision": "CONFIRM" | "DECLINE" | "NEGOTIATE", "reason": "concise rationale under 15 words", "chatReply": "short casual in-game message under 15 words"}'
+                    content: 'You are a human playing RichUp.io casually online. Your goal is to WIN. Never trade in enemy favor. If enemy completes a monopoly and we do not, you MUST DECLINE. In "chatReply", write like a real gamer in all lowercase, very short (1-5 words), casual slang (e.g. "nah sry", "cant do that", "nty", "add cash and deal", "need more cash", "deal thx"). NEVER sound like an AI, never use capital letters or periods. Output ONLY valid JSON: {"decision": "CONFIRM" | "DECLINE" | "NEGOTIATE", "reason": "concise rationale under 10 words", "chatReply": "short casual lowercase message"}'
                 },
                 {
                     role: 'user',
@@ -463,12 +463,19 @@ Guidelines:
 
     getFallbackChatReply(sender, messageText) {
         const lower = (messageText || '').toLowerCase();
-        if (lower.includes('bot')) {
-            const replies = ['im here lol', 'nah watching a video on 2nd screen', 'im here just playing quiet', 'nah just planning turns'];
+        if (lower.includes('play') || lower.includes('bruh') || lower.includes('roll') || lower.includes('turn')) {
+            const replies = ['rolling now', 'my bad hold on', 'im thinking lol', 'one sec', 'hold on'];
             return replies[Math.floor(Math.random() * replies.length)];
         }
-        if (lower.includes('trade')) {
-            return 'send an offer, ill check it out';
+        if (lower.includes('bot') || lower.includes('ai')) {
+            const replies = ['nah lol just calculating', 'no lol', 'nah watching stream on 2nd monitor', 'just planning turns lol'];
+            return replies[Math.floor(Math.random() * replies.length)];
+        }
+        if (lower.includes('trade') || lower.includes('deal')) {
+            return 'send an offer ill check';
+        }
+        if (lower.includes('why') || lower.includes('lol')) {
+            return 'just trying to get sets lol';
         }
         if (lower.includes('hi') || lower.includes('hello') || lower.includes('yo') || lower.includes('hey')) {
             return 'yo';
@@ -479,7 +486,7 @@ Guidelines:
         if (lower.includes('gg') || lower.includes('wp')) {
             return 'gg';
         }
-        return 'watching the board';
+        return 'watching board';
     },
 
     /**

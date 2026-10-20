@@ -1704,8 +1704,6 @@
     }
     let givenCash = 0;
     let receivedCash = 0;
-    const givenTiles = [];
-    const receivedTiles = [];
     const inputs = Array.from(modal.querySelectorAll('input[type="range"], input[type="number"], input'));
     for (const input of inputs) {
       const rect = input.getBoundingClientRect();
@@ -1738,24 +1736,37 @@
       }
     }
     const cards = Array.from(modal.querySelectorAll('div, li, button, [class*="item" i], [class*="property" i], [class*="card" i]'));
+    const matchedTiles = [];
     const matchedTileIds = /* @__PURE__ */ new Set();
     for (const card of cards) {
-      const text = (card.innerText || "").trim();
-      if (!text || text.length > 50) continue;
+      const cls = (card.className || "").toLowerCase();
+      if (cls.includes("unselected") || cls.includes("inactive") || cls.includes("disabled")) continue;
+      const style = window.getComputedStyle(card);
+      if (parseFloat(style.opacity) < 0.65) continue;
+      const rawText = (card.innerText || "").trim();
+      if (!rawText || rawText.length > 50) continue;
+      const cleanText = rawText.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
       for (const tile of BOARD_TILES) {
         if (!tile.group) continue;
         if (matchedTileIds.has(tile.id)) continue;
-        if (new RegExp(`^${tile.name}\\b|\\b${tile.name}$`, "i").test(text)) {
+        const tName = tile.name.toLowerCase();
+        if (cleanText === tName || cleanText.startsWith(tName) || cleanText.endsWith(tName) || rawText.toLowerCase().includes(tName)) {
           matchedTileIds.add(tile.id);
-          const rect = card.getBoundingClientRect();
-          const center = rect.left + rect.width / 2;
-          if (center < modalMidX) {
-            if (meIsOnLeft) givenTiles.push(tile);
-            else receivedTiles.push(tile);
-          } else {
-            if (meIsOnLeft) receivedTiles.push(tile);
-            else givenTiles.push(tile);
-          }
+          matchedTiles.push(tile);
+          break;
+        }
+      }
+    }
+    const givenTiles = [];
+    const receivedTiles = [];
+    for (const tile of matchedTiles) {
+      const owner = GameMemory2.ownership[tile.id]?.owner;
+      if (GameMemory2.isMe(owner)) {
+        givenTiles.push(tile);
+      } else {
+        receivedTiles.push(tile);
+        if (owner && !GameMemory2.isMe(owner)) {
+          partnerName = owner;
         }
       }
     }
@@ -2407,19 +2418,18 @@
       if (givesOppMonopoly && !completesMyMonopoly) {
         const counter = this.findCounterTrade(tradeData);
         if (counter) {
-          const cashExtra = counter.cashDemand > 0 ? ` + $${counter.cashDemand}` : "";
           return {
             accept: false,
             counterSwap: counter,
             reason: `FATAL DANGER VETO: Gives ${partnerName} a ${oppGroupName} monopoly while we get none!`,
-            chatReply: `Decline: That completes your ${oppGroupName} set. Give me ${counter.myReceivedTile.name}${cashExtra} if you want that.`
+            chatReply: `counter me with ${counter.myReceivedTile.name.toLowerCase()}`
           };
         }
         return {
           accept: false,
           counterSwap: null,
           reason: `FATAL DANGER VETO: Gives ${partnerName} a ${oppGroupName} monopoly while we get none!`,
-          chatReply: `Decline: That completes your ${oppGroupName} set and puts me in danger. No deal.`
+          chatReply: `cant give u a set sry`
         };
       }
       if (completesMyMonopoly) {
@@ -2429,7 +2439,7 @@
             accept: false,
             counterSwap: this.findCounterTrade(tradeData),
             reason: `MONOPOLY BLOCKED BY DEBT: Trade completes ${myCompletedGroup} but leaves only $${myCashAfter} cash!`,
-            chatReply: `Decline: That set is great but leaves me with zero cash. Add +$100 cash and I'll accept!`
+            chatReply: `id be broke lol add cash`
           };
         }
         if (givesOppMonopoly) {
@@ -2438,7 +2448,7 @@
             myGain: 3500,
             oppGain: 3500,
             reason: `MUTUAL MONOPOLY SWAP: Both players secure completed color sets (${myCompletedGroup})!`,
-            chatReply: `Deal! Both get sets. Let's see who builds faster!`
+            chatReply: `deal thx`
           };
         } else {
           return {
@@ -2446,7 +2456,7 @@
             myGain: 5e3,
             oppGain: 500,
             reason: `MONOPOLY COMPLETER: Completes our ${myCompletedGroup} monopoly without giving opponent a set!`,
-            chatReply: `Deal accepted! Thanks for the trade.`
+            chatReply: `deal thx`
           };
         }
       }
@@ -2465,7 +2475,7 @@
           accept: false,
           counterSwap: null,
           reason: `20-ROUND SIMULATION VETO: Accepting drops 20-round survival from ${sim.rejSurvRate}% to ${sim.accSurvRate}%!`,
-          chatReply: `Decline: 20-turn simulation shows this increases my bankruptcy risk. No deal.`
+          chatReply: `nah sry`
         };
       }
       if (oppGain > myGain && !completesMyMonopoly) {
@@ -2475,16 +2485,18 @@
             accept: false,
             counterSwap: counter,
             reason: `UNFAIR DEFICIT: Trade favors ${partnerName}. Countering for set completer.`,
-            chatReply: counter.pitch
+            chatReply: `counter me`
           };
         }
-        const reasonableCash = Math.min(250, Math.max(50, Math.round(givenTiles.reduce((s, t) => s + (t.price || 100), 0) * 0.4)));
-        const givenName2 = givenTiles[0]?.name || "that property";
         const naturalReplies = [
-          `No deal on ${givenName2}, I'm building toward that set.`,
-          `That offer is too low for ${givenName2}. Need at least +$${reasonableCash} or a better card.`,
-          `Can't trade ${givenName2} without getting a property I need for my monopoly.`,
-          `Not looking to give up ${givenName2} right now. Offer a property from my missing sets.`
+          "nah sry",
+          "cant do that",
+          "nty",
+          "need more cash with that",
+          "counter me with cash",
+          "keeping that sry",
+          "no thx",
+          "pass for now"
         ];
         const chatReply = naturalReplies[Math.floor(Math.random() * naturalReplies.length)];
         return {
@@ -2496,7 +2508,6 @@
       }
       const acceptable = myGain > 0 && (myGain >= oppGain * CONFIG.TRADE_MIN_ADVANTAGE_RATIO || completesMyMonopoly) && sim.isSimulationEVPlus;
       GameMemory2.lastTradeVerdict = acceptable ? "ACCEPTABLE" : "UNFAVORABLE";
-      const givenName = givenTiles[0]?.name || "property";
       return {
         accept: acceptable,
         myGain: Math.round(myGain),
@@ -2504,7 +2515,7 @@
         sim20Rounds: sim,
         counterSwap: acceptable ? null : this.findCounterTrade(tradeData),
         reason: acceptable ? `GRANDMASTER EV+ TRADE: Net gain +$${Math.round(myGain)} vs Opp +$${Math.round(oppGain)} (20-turn Sim: +EV)` : `Unfavorable utility: Net gain $${Math.round(myGain)} < requirement`,
-        chatReply: acceptable ? "Deal accepted! Win-win." : `Decline: Value doesn't work for ${givenName}. Need better terms or missing set pieces.`
+        chatReply: acceptable ? "deal thx" : "nah sry"
       };
     },
     /**
@@ -2770,7 +2781,7 @@
         const messages = [
           {
             role: "system",
-            content: `You are a Grandmaster Monopoly / RichUp AI player whose primary goal is to WIN. Never trade in the enemy's favor. If enemy completes a monopoly and we do not, you MUST DECLINE. Output ONLY valid JSON in format: {"decision": "CONFIRM" | "DECLINE" | "NEGOTIATE", "reason": "concise rationale under 15 words", "chatReply": "short casual in-game message under 15 words"}`
+            content: 'You are a human playing RichUp.io casually online. Your goal is to WIN. Never trade in enemy favor. If enemy completes a monopoly and we do not, you MUST DECLINE. In "chatReply", write like a real gamer in all lowercase, very short (1-5 words), casual slang (e.g. "nah sry", "cant do that", "nty", "add cash and deal", "need more cash", "deal thx"). NEVER sound like an AI, never use capital letters or periods. Output ONLY valid JSON: {"decision": "CONFIRM" | "DECLINE" | "NEGOTIATE", "reason": "concise rationale under 10 words", "chatReply": "short casual lowercase message"}'
           },
           {
             role: "user",
@@ -3009,12 +3020,19 @@ Guidelines:
     },
     getFallbackChatReply(sender, messageText) {
       const lower = (messageText || "").toLowerCase();
-      if (lower.includes("bot")) {
-        const replies = ["im here lol", "nah watching a video on 2nd screen", "im here just playing quiet", "nah just planning turns"];
+      if (lower.includes("play") || lower.includes("bruh") || lower.includes("roll") || lower.includes("turn")) {
+        const replies = ["rolling now", "my bad hold on", "im thinking lol", "one sec", "hold on"];
         return replies[Math.floor(Math.random() * replies.length)];
       }
-      if (lower.includes("trade")) {
-        return "send an offer, ill check it out";
+      if (lower.includes("bot") || lower.includes("ai")) {
+        const replies = ["nah lol just calculating", "no lol", "nah watching stream on 2nd monitor", "just planning turns lol"];
+        return replies[Math.floor(Math.random() * replies.length)];
+      }
+      if (lower.includes("trade") || lower.includes("deal")) {
+        return "send an offer ill check";
+      }
+      if (lower.includes("why") || lower.includes("lol")) {
+        return "just trying to get sets lol";
       }
       if (lower.includes("hi") || lower.includes("hello") || lower.includes("yo") || lower.includes("hey")) {
         return "yo";
@@ -3025,7 +3043,7 @@ Guidelines:
       if (lower.includes("gg") || lower.includes("wp")) {
         return "gg";
       }
-      return "watching the board";
+      return "watching board";
     },
     /**
      * Deliberate strategic check right before ending turn
@@ -3068,19 +3086,27 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     processedChatIds: /* @__PURE__ */ new Set(),
     TEMPLATES: Object.freeze({
       tradeReject: [
-        "Numbers don't add up for me on that offer, sweeten the cash.",
-        "Can't let that property go that cheap. Add some cash on top?",
-        "That leaves me short on board value, no deal."
+        "nah sry",
+        "cant do that",
+        "nty",
+        "need more cash with that",
+        "counter me with cash",
+        "keeping that sry",
+        "no thx",
+        "pass for now"
       ],
       tradeAccept: [
-        "Deal accepted! Win-win.",
-        "Pleasure doing business with you.",
-        "Good trade, let's see how the dice roll."
+        "deal thx",
+        "gg thanks",
+        "nice trade",
+        "thx",
+        "accepted"
       ],
       tradeNegotiate: [
-        "Close, but let's counter-offer. Sweeten the deal?",
-        "I'm interested, but let's adjust terms to make it fair.",
-        "Counter-proposal sent, check if this works."
+        "counter me",
+        "add some cash and ill do it",
+        "almost, add cash",
+        "need a bit more cash"
       ]
     }),
     /**
@@ -3127,6 +3153,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         if (!list || list.length === 0) return false;
         message = list[Math.floor(Math.random() * list.length)];
       }
+      message = message.replace(/^(decline:|accept:|negotiate:|counter:)\s*/i, "").replace(/[.!]$/, "").toLowerCase().trim();
       const cooldown = CONFIG.CHAT_COOLDOWN_MS || 6e3;
       if (now - this.lastSentTime < cooldown) return false;
       if (this.lastSentText && message.toLowerCase() === this.lastSentText.toLowerCase() && now - this.lastSentTime < 25e3) {

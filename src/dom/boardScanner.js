@@ -928,8 +928,6 @@ export function scrapeTradeModalDOM() {
 
     let givenCash = 0;
     let receivedCash = 0;
-    const givenTiles = [];
-    const receivedTiles = [];
 
     // 1. Dynamic cash extraction from range inputs / sliders
     const inputs = Array.from(modal.querySelectorAll('input[type="range"], input[type="number"], input'));
@@ -966,29 +964,51 @@ export function scrapeTradeModalDOM() {
         }
     }
 
-    // 2. Dynamic property tiles extraction scoped by column geometry & orientation
+    // 2. Dynamic property tiles extraction scoped by selected status & verified ownership
     const cards = Array.from(modal.querySelectorAll('div, li, button, [class*="item" i], [class*="property" i], [class*="card" i]'));
+    const matchedTiles = [];
     const matchedTileIds = new Set();
 
     for (const card of cards) {
-        const text = (card.innerText || '').trim();
-        if (!text || text.length > 50) continue;
+        // Skip unselected / faded / inactive cards
+        const cls = (card.className || '').toLowerCase();
+        if (cls.includes('unselected') || cls.includes('inactive') || cls.includes('disabled')) continue;
+
+        const style = window.getComputedStyle(card);
+        if (parseFloat(style.opacity) < 0.65) continue; // Unselected cards in RichUp have faded opacity
+
+        const rawText = (card.innerText || '').trim();
+        if (!rawText || rawText.length > 50) continue;
+
+        const cleanText = rawText.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
 
         for (const tile of BOARD_TILES) {
             if (!tile.group) continue;
             if (matchedTileIds.has(tile.id)) continue;
 
-            if (new RegExp(`^${tile.name}\\b|\\b${tile.name}$`, 'i').test(text)) {
+            const tName = tile.name.toLowerCase();
+            if (cleanText === tName || cleanText.startsWith(tName) || cleanText.endsWith(tName) || rawText.toLowerCase().includes(tName)) {
                 matchedTileIds.add(tile.id);
-                const rect = card.getBoundingClientRect();
-                const center = rect.left + rect.width / 2;
-                if (center < modalMidX) {
-                    if (meIsOnLeft) givenTiles.push(tile);
-                    else receivedTiles.push(tile);
-                } else {
-                    if (meIsOnLeft) receivedTiles.push(tile);
-                    else givenTiles.push(tile);
-                }
+                matchedTiles.push(tile);
+                break;
+            }
+        }
+    }
+
+    // STRICT OWNERSHIP-BASED SEPARATION (Zero Hallucination Guarantee!):
+    // If WE own it, it is a property WE are giving! (We can NEVER give what we don't own!)
+    // If SOMEONE ELSE owns it, it is a property WE are receiving!
+    const givenTiles = [];
+    const receivedTiles = [];
+
+    for (const tile of matchedTiles) {
+        const owner = GameMemory.ownership[tile.id]?.owner;
+        if (GameMemory.isMe(owner)) {
+            givenTiles.push(tile);
+        } else {
+            receivedTiles.push(tile);
+            if (owner && !GameMemory.isMe(owner)) {
+                partnerName = owner;
             }
         }
     }
