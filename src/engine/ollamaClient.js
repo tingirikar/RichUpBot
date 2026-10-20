@@ -104,12 +104,13 @@ export const OllamaClient = {
 
     /**
      * Executes chat completion with multi-tier model priority:
-     * 1st priority: Primary configured model (e.g. llama3.2-vision:latest)
-     * 2nd priority: qwen2.5:7b (automatic fallback if primary fails)
+     * 1st priority: Primary configured model (default: qwen2.5:7b)
+     * 2nd priority: llama3.2:3b (ultra-fast fallback if primary fails)
+     * 3rd priority: Minimax Markov math engine (automatic zero-latency fallback)
      */
     async sendChatCompletion(messages, options = { temperature: 0.1, num_predict: 120 }) {
-        const primaryModel = CONFIG.OLLAMA_MODEL || 'llama3.2-vision:latest';
-        const fallbackModel = 'qwen2.5:7b';
+        const primaryModel = CONFIG.OLLAMA_MODEL || 'qwen2.5:7b';
+        const fallbackModel = (primaryModel === 'llama3.2:3b') ? 'qwen2.5:7b' : 'llama3.2:3b';
 
         // 1st Priority Attempt
         try {
@@ -131,7 +132,7 @@ export const OllamaClient = {
                 throw new Error(data.error);
             }
         } catch (primaryErr) {
-            // 2nd Priority Attempt (qwen2.5:7b)
+            // 2nd Priority Attempt (llama3.2:3b)
             if (primaryModel !== fallbackModel) {
                 try {
                     const fallbackData = await this.httpRequest({
@@ -143,7 +144,7 @@ export const OllamaClient = {
                             stream: false,
                             options
                         },
-                        timeout: CONFIG.OLLAMA_TIMEOUT_MS || 6000
+                        timeout: Math.min(CONFIG.OLLAMA_TIMEOUT_MS || 6000, 3500)
                     });
                     if (fallbackData?.message?.content) {
                         return { content: fallbackData.message.content, modelUsed: fallbackModel };
@@ -158,7 +159,7 @@ export const OllamaClient = {
     },
 
     /**
-     * Evaluates incoming trade with local LLM (1st priority: llama3.2-vision, 2nd: qwen2.5:7b, 3rd: Minimax)
+     * Evaluates incoming trade with local LLM (1st priority: qwen2.5:7b, 2nd: llama3.2:3b, 3rd: Minimax)
      */
     async evaluateTradeWithLLM(tradeData) {
         // ALWAYS evaluate with the game-theoretic rule engine first to establish baseline constraints

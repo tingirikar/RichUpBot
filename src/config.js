@@ -13,15 +13,15 @@ export const CONFIG = {
     // AI Operation Mode: false = FULL_AUTO, true = ADVISOR (Asks human before acting)
     ADVISOR_MODE: false,
 
-    // AI Strategy Toggles
-    ALWAYS_BUY_AFFORDABLE: true,     // Buy unowned lands when safe
-    SMART_RESERVE_ENABLED: true,     // Maintain dynamic cash reserve against opponent monopolies
+    // AI Strategy Toggles (Persisted in localStorage)
+    ALWAYS_BUY_AFFORDABLE: localStorage.getItem('richup_cfg_buy') !== 'false',
+    SMART_RESERVE_ENABLED: localStorage.getItem('richup_cfg_reserve') !== 'false',
     AMBUSH_BUILD_ONLY: false,        // Proactively build houses on monopolies whenever safe & affordable
-    AUTO_TRADE_ENABLED: true,        // Evaluate and propose win-win trades
-    AUTO_AUCTION_ENABLED: true,      // Intelligent auction bidding sniper
-    AUTO_BUILD_ENABLED: true,        // Rush 3 houses on monopolies
-    AUTO_MORTGAGE_ENABLED: true,     // Liquidate lowest-EV assets when in debt
-    CHAT_ENABLED: true,              // Contextual trade negotiation chat
+    AUTO_TRADE_ENABLED: localStorage.getItem('richup_cfg_trade') !== 'false',
+    AUTO_AUCTION_ENABLED: localStorage.getItem('richup_cfg_auction') !== 'false',
+    AUTO_BUILD_ENABLED: localStorage.getItem('richup_cfg_build') !== 'false',
+    AUTO_MORTGAGE_ENABLED: localStorage.getItem('richup_cfg_mortgage') !== 'false',
+    CHAT_ENABLED: localStorage.getItem('richup_cfg_chat') !== 'false',
 
     // Math & Game-Theory Parameters
     BASE_MIN_RESERVE: 60,            // Absolute cash floor on empty board
@@ -37,7 +37,7 @@ export const CONFIG = {
     // Hybrid Vision / LLM Brain Configuration (Local Ollama)
     OLLAMA_ENABLED: localStorage.getItem('richup_ollama_enabled') !== 'false', // Default to true!
     OLLAMA_HOST: localStorage.getItem('richup_ollama_host') || 'http://localhost:11434',
-    OLLAMA_MODEL: localStorage.getItem('richup_ollama_model') || 'llama3.2-vision:latest',
+    OLLAMA_MODEL: localStorage.getItem('richup_ollama_model') || 'qwen2.5:7b',
     OLLAMA_TIMEOUT_MS: 6000          // Cap to allow local LLMs to reason without early timeout
 };
 

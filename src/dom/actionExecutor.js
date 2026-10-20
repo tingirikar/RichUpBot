@@ -376,7 +376,7 @@ export const ActionExecutor = {
     handleAuction(snapshot) {
         if (!CONFIG.AUTO_AUCTION_ENABLED) return false;
 
-        const bidBtn = snapshot.findAuctionBidButton();
+        let bidBtn = snapshot.findAuctionBidButton();
         const passBtn = snapshot.findAuctionPassButton();
 
         if (!bidBtn && !passBtn) return false;
@@ -400,6 +400,7 @@ export const ActionExecutor = {
         const currentBid = bidMatch ? parseInt(bidMatch[1] || bidMatch[2], 10) : 50;
 
         const decision = AuctionSniper.evaluateAuctionStep(auctionedTile, currentBid, GameMemory.myCash);
+        bidBtn = snapshot.findAuctionBidButton(decision.increment) || bidBtn;
 
         if (decision.shouldBid && bidBtn) {
             return executeOrAdvise({
@@ -426,6 +427,8 @@ export const ActionExecutor = {
 
         // Check if an upgrade modal is already open
         const modalUpgradeBtn = snapshot.findModalUpgradeButton();
+        const openCard = snapshot.getOpenPropertyCard ? snapshot.getOpenPropertyCard() : null;
+
         if (modalUpgradeBtn) {
             return executeOrAdvise({
                 el: modalUpgradeBtn,
@@ -433,6 +436,15 @@ export const ActionExecutor = {
                 reason: 'Building house on selected property.',
                 onExecute: () => delayClick(modalUpgradeBtn, 'Clicking [↑] to build house')
             });
+        }
+
+        // If a property card is open but cannot be upgraded further, close it!
+        if (openCard) {
+            const closeBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
+            if (closeBtn) {
+                delayClick(closeBtn, 'Closing property card after build completion');
+                return true;
+            }
         }
 
         const upgrades = HouseBuilder.rankHouseUpgrades(GameMemory.myCash);
@@ -450,7 +462,6 @@ export const ActionExecutor = {
                             if (candidates.length > 0) {
                                 // 1. If mortgage button is already visible in an open card modal, execute it!
                                 const modalMortgageBtn = snapshot.findModalMortgageButton();
-                                const openCard = snapshot.getOpenPropertyCard ? snapshot.getOpenPropertyCard() : null;
 
                                 if (modalMortgageBtn) {
                                     const matchingCandidate = candidates.find(c => openCard && c.tile.id === openCard.tile.id);
@@ -501,6 +512,49 @@ export const ActionExecutor = {
                 title: `SELECT ${top.tile.name.toUpperCase()} TO UPGRADE`,
                 reason: `Opening property menu to build house (${top.nextHouses} houses, ROI: ${top.roi})`,
                 onExecute: () => delayClick(sidebarItem, `Opening ${top.tile.name} from sidebar`)
+            });
+        }
+
+        return false;
+    },
+
+    /**
+     * Autonomous Unmortgaging: Reclaims mortgaged properties when player has cash surplus
+     */
+    handleUnmortgage(snapshot) {
+        if (!CONFIG.AUTO_MORTGAGE_ENABLED || GameMemory.myCash <= 0) return false;
+
+        const reserve = MarkovRisk.computeDynamicReserve(GameMemory.myPos);
+        const candidates = DebtRecovery.rankUnmortgageCandidates(GameMemory.myCash, reserve);
+        if (candidates.length === 0) return false;
+
+        const unmortgageBtn = snapshot.findModalUnmortgageButton ? snapshot.findModalUnmortgageButton() : null;
+        const openCard = snapshot.getOpenPropertyCard ? snapshot.getOpenPropertyCard() : null;
+
+        if (unmortgageBtn && openCard) {
+            const tileName = openCard.tile.name;
+            return executeOrAdvise({
+                el: unmortgageBtn,
+                title: `UNMORTGAGE: ${tileName.toUpperCase()}`,
+                reason: `Surplus cash ($${GameMemory.myCash} > $${reserve + 200}). Reclaiming ${tileName} to collect full rent!`,
+                onExecute: () => {
+                    if (GameMemory.ownership[openCard.tile.id]) {
+                        GameMemory.ownership[openCard.tile.id].mortgaged = false;
+                    }
+                    delayClick(unmortgageBtn, `Unmortgaging ${tileName}`);
+                }
+            });
+        }
+
+        // If modal is not open, open top unmortgage candidate from sidebar
+        const target = candidates[0];
+        const sidebarProp = snapshot.findSidebarPropertyItem(target.tile.name);
+        if (sidebarProp) {
+            return executeOrAdvise({
+                el: sidebarProp,
+                title: `OPEN ${target.tile.name.toUpperCase()} TO UNMORTGAGE`,
+                reason: `Surplus funds available ($${GameMemory.myCash}). Selecting mortgaged property to restore.`,
+                onExecute: () => delayClick(sidebarProp, `Opening ${target.tile.name} to unmortgage`)
             });
         }
 
@@ -631,6 +685,12 @@ export const ActionExecutor = {
     handleEndTurn(snapshot) {
         const endTurnBtn = snapshot.findExactOrIncludes(['end turn', 'done', 'continue', 'ok']);
         if (endTurnBtn) {
+            // If any property card modal is lingering open, dismiss it before ending turn
+            const modalCloseBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
+            if (modalCloseBtn) {
+                try { modalCloseBtn.click(); } catch (_) {}
+            }
+
             GameMemory.isMyTurn = false;
             return executeOrAdvise({
                 el: endTurnBtn,

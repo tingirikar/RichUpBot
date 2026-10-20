@@ -26,23 +26,16 @@
     STALL_TIMEOUT_SEC: 8,
     // AI Operation Mode: false = FULL_AUTO, true = ADVISOR (Asks human before acting)
     ADVISOR_MODE: false,
-    // AI Strategy Toggles
-    ALWAYS_BUY_AFFORDABLE: true,
-    // Buy unowned lands when safe
-    SMART_RESERVE_ENABLED: true,
-    // Maintain dynamic cash reserve against opponent monopolies
+    // AI Strategy Toggles (Persisted in localStorage)
+    ALWAYS_BUY_AFFORDABLE: localStorage.getItem("richup_cfg_buy") !== "false",
+    SMART_RESERVE_ENABLED: localStorage.getItem("richup_cfg_reserve") !== "false",
     AMBUSH_BUILD_ONLY: false,
     // Proactively build houses on monopolies whenever safe & affordable
-    AUTO_TRADE_ENABLED: true,
-    // Evaluate and propose win-win trades
-    AUTO_AUCTION_ENABLED: true,
-    // Intelligent auction bidding sniper
-    AUTO_BUILD_ENABLED: true,
-    // Rush 3 houses on monopolies
-    AUTO_MORTGAGE_ENABLED: true,
-    // Liquidate lowest-EV assets when in debt
-    CHAT_ENABLED: true,
-    // Contextual trade negotiation chat
+    AUTO_TRADE_ENABLED: localStorage.getItem("richup_cfg_trade") !== "false",
+    AUTO_AUCTION_ENABLED: localStorage.getItem("richup_cfg_auction") !== "false",
+    AUTO_BUILD_ENABLED: localStorage.getItem("richup_cfg_build") !== "false",
+    AUTO_MORTGAGE_ENABLED: localStorage.getItem("richup_cfg_mortgage") !== "false",
+    CHAT_ENABLED: localStorage.getItem("richup_cfg_chat") !== "false",
     // Math & Game-Theory Parameters
     BASE_MIN_RESERVE: 60,
     // Absolute cash floor on empty board
@@ -66,7 +59,7 @@
     OLLAMA_ENABLED: localStorage.getItem("richup_ollama_enabled") !== "false",
     // Default to true!
     OLLAMA_HOST: localStorage.getItem("richup_ollama_host") || "http://localhost:11434",
-    OLLAMA_MODEL: localStorage.getItem("richup_ollama_model") || "llama3.2-vision:latest",
+    OLLAMA_MODEL: localStorage.getItem("richup_ollama_model") || "qwen2.5:7b",
     OLLAMA_TIMEOUT_MS: 6e3
     // Cap to allow local LLMs to reason without early timeout
   };
@@ -250,7 +243,7 @@
   ]);
 
   // src/memory/gameMemory.js
-  var GameMemory = {
+  var GameMemory2 = {
     // Identity
     myName: (() => {
       const saved = localStorage.getItem("richup_bot_my_name");
@@ -289,7 +282,7 @@
     // Tile ownership: tileId -> { owner, houses, mortgaged }
     ownership: {},
     // Diagnostic & tracking logs
-    processedLogs: /* @__PURE__ */ new Set(),
+    processedLogs: /* @__PURE__ */ new Map(),
     wsActive: false,
     wsLastMessageTime: 0,
     wsMessages: [],
@@ -298,6 +291,26 @@
     lastDynamicReserve: CONFIG.BASE_MIN_RESERVE,
     lastJailMode: "AGR_EXIT",
     lastTradeVerdict: "READY",
+    isLogProcessed(line, ttlMs = 8e3) {
+      if (!line) return true;
+      const last = this.processedLogs.get(line);
+      if (!last) return false;
+      if (Date.now() - last > ttlMs) {
+        this.processedLogs.delete(line);
+        return false;
+      }
+      return true;
+    },
+    markLogProcessed(line) {
+      if (!line) return;
+      const now = Date.now();
+      this.processedLogs.set(line, now);
+      if (this.processedLogs.size > 100) {
+        for (const [k, v] of this.processedLogs.entries()) {
+          if (now - v > 2e4) this.processedLogs.delete(k);
+        }
+      }
+    },
     isWsHealthy() {
       return Boolean(this.wsActive && Date.now() - this.wsLastMessageTime < 15e3 && this.cashVerified && this.myName);
     },
@@ -382,7 +395,7 @@
       return owned === total ? tile.rent[0] * 2 : tile.rent[0];
     }
   };
-  GameMemory.reset();
+  GameMemory2.reset();
 
   // src/dom/socketHook.js
   function installWebSocketHook() {
@@ -393,14 +406,14 @@
     if (!NativeWS) return;
     targetWin.WebSocket = function(...args) {
       const ws = new NativeWS(...args);
-      GameMemory.activeSocket = ws;
+      GameMemory2.activeSocket = ws;
       console.log("[RichUpBot WS Hook] Native WebSocket intercepted:", args[0]);
       ws.addEventListener("message", (event) => {
         try {
           const raw = typeof event.data === "string" ? event.data : "";
           if (!raw || raw === "2" || raw === "3") return;
-          if (GameMemory.wsMessages.length >= 35) GameMemory.wsMessages.shift();
-          GameMemory.wsMessages.push({
+          if (GameMemory2.wsMessages.length >= 35) GameMemory2.wsMessages.shift();
+          GameMemory2.wsMessages.push({
             ts: Date.now(),
             preview: raw.slice(0, 300)
           });
@@ -426,23 +439,23 @@
       if (!Array.isArray(arr) || arr.length === 0) return;
       const eventName = String(arr[0] || "").toLowerCase();
       const payload = arr[1] || {};
-      GameMemory.wsActive = true;
-      GameMemory.wsLastMessageTime = Date.now();
+      GameMemory2.wsActive = true;
+      GameMemory2.wsLastMessageTime = Date.now();
       if (eventName.includes("game") || eventName.includes("init") || eventName.includes("state") || eventName.includes("room")) {
         if (payload.settings) {
           if (typeof payload.settings.can_collect_rent_in_jail === "boolean") {
-            GameMemory.roomSettings.collectRentInJail = payload.settings.can_collect_rent_in_jail;
+            GameMemory2.roomSettings.collectRentInJail = payload.settings.can_collect_rent_in_jail;
           }
           if (typeof payload.settings.double_on_start === "boolean") {
-            GameMemory.roomSettings.doubleOnStart = payload.settings.double_on_start;
+            GameMemory2.roomSettings.doubleOnStart = payload.settings.double_on_start;
           }
           if (typeof payload.settings.pass_start_bonus === "number") {
-            GameMemory.roomSettings.passStartBonus = payload.settings.pass_start_bonus;
+            GameMemory2.roomSettings.passStartBonus = payload.settings.pass_start_bonus;
           }
           if (typeof payload.settings.starting_cash === "number") {
-            GameMemory.roomSettings.startingCash = payload.settings.starting_cash;
-            if (!GameMemory.cashVerified) {
-              GameMemory.myCash = payload.settings.starting_cash;
+            GameMemory2.roomSettings.startingCash = payload.settings.starting_cash;
+            if (!GameMemory2.cashVerified) {
+              GameMemory2.myCash = payload.settings.starting_cash;
             }
           }
         }
@@ -451,16 +464,16 @@
         if (playersList) {
           const me = myId ? playersList.find((p) => p.id === myId || p.userId === myId || p.isMe || p.is_me) : playersList.find((p) => p.isMe || p.is_me);
           if (me && (me.name || me.username)) {
-            GameMemory.setMyName(me.name || me.username);
+            GameMemory2.setMyName(me.name || me.username);
           }
           for (const p of playersList) {
             const pName = p.name || p.username;
             if (!pName) continue;
             const rawMoney = typeof p.money === "number" ? p.money : typeof p.cash === "number" ? p.cash : typeof p.balance === "number" ? p.balance : null;
-            const isThisPlayerMe = GameMemory.isMe(pName) || myId && p.id === myId || Boolean(p.isMe || p.is_me);
-            const playerPos = typeof p.position === "number" ? p.position : typeof p.pos === "number" ? p.pos : GameMemory.players[pName]?.pos || 0;
+            const isThisPlayerMe = GameMemory2.isMe(pName) || myId && p.id === myId || Boolean(p.isMe || p.is_me);
+            const playerPos = typeof p.position === "number" ? p.position : typeof p.pos === "number" ? p.pos : GameMemory2.players[pName]?.pos || 0;
             if (rawMoney !== null) {
-              GameMemory.players[pName] = {
+              GameMemory2.players[pName] = {
                 cash: rawMoney,
                 pos: playerPos,
                 inJail: Boolean(p.inJail || p.jailTurns || p.in_jail),
@@ -468,11 +481,11 @@
                 bankrupt: Boolean(p.bankrupt)
               };
               if (isThisPlayerMe) {
-                GameMemory.setMyName(pName);
-                GameMemory.myCash = rawMoney;
-                GameMemory.cashVerified = true;
-                GameMemory.myPos = playerPos;
-                if (typeof p.inJail === "boolean") GameMemory.inJail = p.inJail;
+                GameMemory2.setMyName(pName);
+                GameMemory2.myCash = rawMoney;
+                GameMemory2.cashVerified = true;
+                GameMemory2.myPos = playerPos;
+                if (typeof p.inJail === "boolean") GameMemory2.inJail = p.inJail;
               }
             }
           }
@@ -482,28 +495,28 @@
         const dice = Array.isArray(payload.dice) ? payload.dice : Array.isArray(payload) ? payload : [];
         const sum = (dice[0] || 0) + (dice[1] || 0);
         const pName = payload.playerName || payload.username || payload.name || payload.player;
-        const isMeRolling = pName ? GameMemory.isMe(pName) : GameMemory.isMyTurn;
+        const isMeRolling = pName ? GameMemory2.isMe(pName) : GameMemory2.isMyTurn;
         if (isMeRolling && sum > 0) {
-          GameMemory.myPos = (GameMemory.myPos + sum) % 40;
-        } else if (pName && GameMemory.players[pName]) {
-          const currentOppPos = GameMemory.players[pName].pos || 0;
-          GameMemory.players[pName].pos = (currentOppPos + sum) % 40;
+          GameMemory2.myPos = (GameMemory2.myPos + sum) % 40;
+        } else if (pName && GameMemory2.players[pName]) {
+          const currentOppPos = GameMemory2.players[pName].pos || 0;
+          GameMemory2.players[pName].pos = (currentOppPos + sum) % 40;
         }
       }
       if (eventName.includes("purchase") || eventName.includes("buy")) {
         const tileId = typeof payload.blockIndex === "number" ? payload.blockIndex : typeof payload.tileId === "number" ? payload.tileId : payload.tileIndex;
         if (typeof tileId === "number") {
-          GameMemory.lastPurchasedBlock = tileId;
-          const buyer = payload.playerName || payload.username || (GameMemory.isMyTurn ? GameMemory.myName || "__ME__" : null);
-          if (buyer && GameMemory.ownership[tileId]) {
-            GameMemory.ownership[tileId].owner = buyer;
+          GameMemory2.lastPurchasedBlock = tileId;
+          const buyer = payload.playerName || payload.username || (GameMemory2.isMyTurn ? GameMemory2.myName || "__ME__" : null);
+          if (buyer && GameMemory2.ownership[tileId]) {
+            GameMemory2.ownership[tileId].owner = buyer;
           }
         }
       }
       if (eventName.includes("turn")) {
         const active = payload.activePlayer || payload.player || payload.username || payload.name;
         if (active) {
-          GameMemory.isMyTurn = GameMemory.isMe(active);
+          GameMemory2.isMyTurn = GameMemory2.isMe(active);
         }
       }
       deepSyncFromObject(payload);
@@ -519,12 +532,12 @@
     const name = obj.name || obj.username || obj.playerName || obj.player_name;
     const rawMoney = typeof obj.money === "number" ? obj.money : typeof obj.cash === "number" ? obj.cash : typeof obj.balance === "number" ? obj.balance : null;
     if (typeof name === "string" && rawMoney !== null) {
-      const isThisPlayerMe = GameMemory.isMe(name) || Boolean(obj.isMe || obj.is_me);
+      const isThisPlayerMe = GameMemory2.isMe(name) || Boolean(obj.isMe || obj.is_me);
       if (obj.isMe || obj.is_me) {
-        GameMemory.setMyName(name);
+        GameMemory2.setMyName(name);
       }
-      const playerPos = typeof obj.position === "number" ? obj.position : typeof obj.pos === "number" ? obj.pos : GameMemory.players[name]?.pos || 0;
-      GameMemory.players[name] = {
+      const playerPos = typeof obj.position === "number" ? obj.position : typeof obj.pos === "number" ? obj.pos : GameMemory2.players[name]?.pos || 0;
+      GameMemory2.players[name] = {
         cash: rawMoney,
         pos: playerPos,
         inJail: Boolean(obj.inJail || obj.jailTurns || obj.in_jail),
@@ -532,10 +545,10 @@
         bankrupt: Boolean(obj.bankrupt)
       };
       if (isThisPlayerMe) {
-        GameMemory.myCash = rawMoney;
-        GameMemory.cashVerified = true;
-        GameMemory.myPos = playerPos;
-        if (typeof obj.inJail === "boolean") GameMemory.inJail = obj.inJail;
+        GameMemory2.myCash = rawMoney;
+        GameMemory2.cashVerified = true;
+        GameMemory2.myPos = playerPos;
+        if (typeof obj.inJail === "boolean") GameMemory2.inJail = obj.inJail;
       }
     }
     for (const k of Object.keys(obj)) {
@@ -612,9 +625,16 @@
         }
         return null;
       },
-      findAuctionBidButton() {
+      findAuctionBidButton(preferredIncrement = 10) {
+        if (preferredIncrement >= 50) {
+          for (const b of allButtons) {
+            if (b.text.includes("+50") || b.text.includes("+ 50") || b.text.includes("+$50") || b.text.includes("+ $50")) {
+              return b.el;
+            }
+          }
+        }
         for (const b of allButtons) {
-          if (b.text.includes("+$") || b.text.includes("+ $") || b.text.includes("bid") && !b.text.includes("history")) {
+          if (b.text.includes("+$") || b.text.includes("+ $") || b.text.includes("+10") || b.text.includes("bid") && !b.text.includes("history")) {
             return b.el;
           }
         }
@@ -813,12 +833,14 @@
        */
       findModalMortgageButton() {
         const actionBtns = this.getPropertyCardActionButtons();
+        if (actionBtns.length === 1) {
+          return actionBtns[0];
+        }
         for (const btn of actionBtns) {
           const inner = (btn.innerHTML || "").toLowerCase();
           const text = normalizeText(btn);
-          if (text.includes("mortgage") || inner.includes("mortgage") || inner.includes("trash") || inner.includes("bin") || inner.includes("m19 7") || inner.includes("svg")) {
-            if (actionBtns.length >= 3 && btn === actionBtns[2]) return btn;
-            if (text.includes("mortgage") && !text.includes("unmortgage")) return btn;
+          if (text.includes("mortgage") || inner.includes("mortgage") || inner.includes("trash") || inner.includes("bin") || inner.includes("m19 7")) {
+            if (!text.includes("unmortgage") && !inner.includes("unmortgage")) return btn;
           }
         }
         if (actionBtns.length >= 3) {
@@ -829,6 +851,51 @@
           const inner = (b.el.innerHTML || "").toLowerCase();
           if ((text.includes("mortgage") || inner.includes("mortgage")) && !text.includes("unmortgage") && !inner.includes("unmortgage")) {
             return b.el;
+          }
+        }
+        return null;
+      },
+      /**
+       * Finds the Unmortgage button inside the property card popover/modal
+       */
+      findModalUnmortgageButton() {
+        const card = this.getOpenPropertyCard();
+        if (!card) return null;
+        const cardBtns = Array.from(card.el.querySelectorAll('button, [role="button"], [class*="button" i]')).filter((b) => {
+          if (hud && hud.contains(b)) return false;
+          if (!isVisibleAndEnabled(b)) return false;
+          return true;
+        });
+        for (const btn of cardBtns) {
+          const text = normalizeText(btn);
+          const inner = (btn.innerHTML || "").toLowerCase();
+          if (text.includes("unmortgage") || inner.includes("unmortgage") || text.includes("un-mortgage")) {
+            return btn;
+          }
+        }
+        const tileInfo = GameMemory.ownership[card.tile.id];
+        if (tileInfo && tileInfo.mortgaged) {
+          const actionBtns = this.getPropertyCardActionButtons();
+          if (actionBtns.length > 0) return actionBtns[0];
+        }
+        return null;
+      },
+      /**
+       * Finds the close button ([X]) inside the open property card popover/modal
+       */
+      findModalCloseButton() {
+        const card = this.getOpenPropertyCard();
+        if (!card) return null;
+        const allClose = card.el.querySelectorAll('button, [role="button"], span, div');
+        for (let i = 0; i < allClose.length; i++) {
+          const el = allClose[i];
+          if (hud && hud.contains(el)) continue;
+          if (!isVisibleAndEnabled(el)) continue;
+          const txt = normalizeText(el);
+          const aria = (el.getAttribute("aria-label") || "").toLowerCase();
+          const inner = (el.innerHTML || "").toLowerCase();
+          if (txt === "x" || txt === "\u2715" || txt === "\u2716" || txt === "close" || aria.includes("close") || inner.includes("close") || el.tagName === "BUTTON" && el.querySelector("svg") && el.getBoundingClientRect().width < 38) {
+            return el;
           }
         }
         return null;
@@ -926,8 +993,8 @@
   // src/dom/boardScanner.js
   function syncBoardStateFromDOM() {
     if (!document.body) return;
-    const wsHealthy = typeof GameMemory.isWsHealthy === "function" && GameMemory.isWsHealthy();
-    if (!wsHealthy || !GameMemory.myName) {
+    const wsHealthy = typeof GameMemory2.isWsHealthy === "function" && GameMemory2.isWsHealthy();
+    if (!wsHealthy || !GameMemory2.myName) {
       detectLobbySettingsAndIdentity();
     }
     detectLocalPlayerFromPlayerList();
@@ -964,9 +1031,9 @@
       }
     }
     if (detectedStartCash && !isNaN(detectedStartCash) && detectedStartCash >= 100 && detectedStartCash <= 1e4) {
-      GameMemory.roomSettings.startingCash = detectedStartCash;
-      if (!GameMemory.cashVerified) {
-        GameMemory.myCash = detectedStartCash;
+      GameMemory2.roomSettings.startingCash = detectedStartCash;
+      if (!GameMemory2.cashVerified) {
+        GameMemory2.myCash = detectedStartCash;
       }
     }
     try {
@@ -989,13 +1056,13 @@
           isChecked = cls.includes("active") || cls.includes("checked") || cls.includes("on") || cls.includes("enabled");
         }
         if (text.includes("don't collect rent while in prison")) {
-          GameMemory.roomSettings.collectRentInJail = !isChecked;
+          GameMemory2.roomSettings.collectRentInJail = !isChecked;
         } else if (text.includes("auction") && text.includes("skips purchasing")) {
-          GameMemory.roomSettings.auctionsEnabled = isChecked;
+          GameMemory2.roomSettings.auctionsEnabled = isChecked;
         } else if (text.includes("x2 rent on full-set")) {
-          GameMemory.roomSettings.doubleRentOnFullSet = isChecked;
+          GameMemory2.roomSettings.doubleRentOnFullSet = isChecked;
         } else if (text.includes("even build")) {
-          GameMemory.roomSettings.evenBuild = isChecked;
+          GameMemory2.roomSettings.evenBuild = isChecked;
         }
       }
     } catch (_) {
@@ -1022,15 +1089,15 @@
         if (foundName) break;
         parent = parent.parentElement;
       }
-      if (foundName && (!GameMemory.myName || GameMemory.myName.toLowerCase() !== foundName.toLowerCase())) {
-        GameMemory.setMyName(foundName);
+      if (foundName && (!GameMemory2.myName || GameMemory2.myName.toLowerCase() !== foundName.toLowerCase())) {
+        GameMemory2.setMyName(foundName);
       }
     }
-    if (!GameMemory.myName) {
+    if (!GameMemory2.myName) {
       try {
         const saved = localStorage.getItem("richup_bot_my_name");
         if (saved && !BOARD_LABELS_BLACKLIST.has(saved.toLowerCase())) {
-          GameMemory.setMyName(saved);
+          GameMemory2.setMyName(saved);
         }
       } catch (_) {
       }
@@ -1046,17 +1113,17 @@
       })
     );
     if (hasJailUI) {
-      GameMemory.myPos = 10;
-      GameMemory.inJail = true;
+      GameMemory2.myPos = 10;
+      GameMemory2.inJail = true;
     }
-    if (GameMemory.myName && (GameMemory.myName.toLowerCase().includes("share") || GameMemory.myName.toLowerCase().includes("copy") || BOARD_LABELS_BLACKLIST.has(GameMemory.myName.toLowerCase()))) {
-      GameMemory.myName = null;
+    if (GameMemory2.myName && (GameMemory2.myName.toLowerCase().includes("share") || GameMemory2.myName.toLowerCase().includes("copy") || BOARD_LABELS_BLACKLIST.has(GameMemory2.myName.toLowerCase()))) {
+      GameMemory2.myName = null;
       try {
         localStorage.removeItem("richup_bot_my_name");
       } catch (_) {
       }
     }
-    const currentName = GameMemory.myName;
+    const currentName = GameMemory2.myName;
     const allContainers = document.querySelectorAll("div, section, aside, ul");
     let bestScoreboardContainer = null;
     let maxDollarChildren = 0;
@@ -1115,26 +1182,26 @@
         const isBankrupt = rowText.toLowerCase().includes("bankrupt") || row.classList.contains("bankrupt");
         if (hasLeaveIcon || isKnownMe) {
           foundLocalPlayerInScoreboard = true;
-          GameMemory.setMyName(candidateName);
-          GameMemory.myCash = parsedCash;
-          GameMemory.cashVerified = true;
-          GameMemory.players[candidateName] = {
+          GameMemory2.setMyName(candidateName);
+          GameMemory2.myCash = parsedCash;
+          GameMemory2.cashVerified = true;
+          GameMemory2.players[candidateName] = {
             cash: parsedCash,
-            pos: GameMemory.myPos,
+            pos: GameMemory2.myPos,
             isMe: true,
             bankrupt: isBankrupt
           };
         } else {
-          GameMemory.players[candidateName] = {
+          GameMemory2.players[candidateName] = {
             cash: parsedCash,
-            pos: GameMemory.players[candidateName]?.pos || 0,
+            pos: GameMemory2.players[candidateName]?.pos || 0,
             isMe: false,
             bankrupt: isBankrupt
           };
         }
       }
     }
-    if (!foundLocalPlayerInScoreboard && !GameMemory.cashVerified && currentName) {
+    if (!foundLocalPlayerInScoreboard && !GameMemory2.cashVerified && currentName) {
       const currentLower = currentName.toLowerCase();
       const candidates = document.querySelectorAll("*");
       for (let i = 0; i < candidates.length; i++) {
@@ -1155,21 +1222,21 @@
             if (posMatch) parsedCash = parseInt(posMatch[1] || posMatch[2], 10);
           }
           if (typeof parsedCash === "number" && !isNaN(parsedCash)) {
-            GameMemory.myCash = parsedCash;
-            GameMemory.cashVerified = true;
-            GameMemory.players[currentName] = GameMemory.players[currentName] || { cash: parsedCash, pos: GameMemory.myPos, isMe: true };
-            GameMemory.players[currentName].cash = parsedCash;
-            GameMemory.players[currentName].isMe = true;
+            GameMemory2.myCash = parsedCash;
+            GameMemory2.cashVerified = true;
+            GameMemory2.players[currentName] = GameMemory2.players[currentName] || { cash: parsedCash, pos: GameMemory2.myPos, isMe: true };
+            GameMemory2.players[currentName].cash = parsedCash;
+            GameMemory2.players[currentName].isMe = true;
             break;
           }
         }
       }
     }
-    if (!foundLocalPlayerInScoreboard && GameMemory.myName && GameMemory.players[GameMemory.myName]) {
-      const storedCash = GameMemory.players[GameMemory.myName].cash;
+    if (!foundLocalPlayerInScoreboard && GameMemory2.myName && GameMemory2.players[GameMemory2.myName]) {
+      const storedCash = GameMemory2.players[GameMemory2.myName].cash;
       if (typeof storedCash === "number") {
-        GameMemory.myCash = storedCash;
-        GameMemory.cashVerified = true;
+        GameMemory2.myCash = storedCash;
+        GameMemory2.cashVerified = true;
       }
     }
   }
@@ -1194,10 +1261,10 @@
             }
           }
           const houseMatch = /(?:🏠\s*x?\s*|x\s*)(\d)/i.exec(text);
-          if (houseMatch && GameMemory.ownership[tile.id]) {
-            GameMemory.ownership[tile.id].houses = parseInt(houseMatch[1], 10);
-          } else if (/hotel/i.test(text) && GameMemory.ownership[tile.id]) {
-            GameMemory.ownership[tile.id].houses = 5;
+          if (houseMatch && GameMemory2.ownership[tile.id]) {
+            GameMemory2.ownership[tile.id].houses = parseInt(houseMatch[1], 10);
+          } else if (/hotel/i.test(text) && GameMemory2.ownership[tile.id]) {
+            GameMemory2.ownership[tile.id].houses = 5;
           }
         }
       }
@@ -1249,10 +1316,10 @@
         }
       }
       const ownerMatch = /Owner\s*([A-Za-z0-9_-]+)/i.exec(text);
-      if (ownerMatch && GameMemory.ownership[matchedTile.id]) {
+      if (ownerMatch && GameMemory2.ownership[matchedTile.id]) {
         const ownerName = ownerMatch[1].trim();
         if (ownerName && !ownerName.toLowerCase().includes("price")) {
-          GameMemory.ownership[matchedTile.id].owner = ownerName;
+          GameMemory2.ownership[matchedTile.id].owner = ownerName;
         }
       }
       break;
@@ -1275,12 +1342,12 @@
     if (!headerEl) return;
     const countMatch = /My properties\s*\((\d+)\)/i.exec(headerEl.innerText);
     const ownedCount = countMatch ? parseInt(countMatch[1], 10) : 0;
-    const myName = GameMemory.myName || "__ME__";
+    const myName = GameMemory2.myName || "__ME__";
     if (ownedCount === 0) {
-      for (const tileId of Object.keys(GameMemory.ownership)) {
-        if (GameMemory.isMe(GameMemory.ownership[tileId]?.owner)) {
-          GameMemory.ownership[tileId].owner = null;
-          GameMemory.ownership[tileId].houses = 0;
+      for (const tileId of Object.keys(GameMemory2.ownership)) {
+        if (GameMemory2.isMe(GameMemory2.ownership[tileId]?.owner)) {
+          GameMemory2.ownership[tileId].owner = null;
+          GameMemory2.ownership[tileId].houses = 0;
         }
       }
       return;
@@ -1300,32 +1367,34 @@
           break;
         }
       }
-      if (matchedTile && GameMemory.ownership[matchedTile.id]) {
+      if (matchedTile && GameMemory2.ownership[matchedTile.id]) {
         foundTileIds.add(matchedTile.id);
-        GameMemory.ownership[matchedTile.id].owner = myName;
+        GameMemory2.ownership[matchedTile.id].owner = myName;
         const houseMatch = /(?:x\s*|houses?\s*)(\d)/i.exec(line) || (i + 1 < lines.length ? /(?:x\s*|houses?\s*)(\d)/i.exec(lines[i + 1]) : null);
         if (houseMatch) {
-          GameMemory.ownership[matchedTile.id].houses = parseInt(houseMatch[1], 10);
+          GameMemory2.ownership[matchedTile.id].houses = parseInt(houseMatch[1], 10);
         } else if (lower.includes("hotel") || i + 1 < lines.length && lines[i + 1].toLowerCase().includes("hotel")) {
-          GameMemory.ownership[matchedTile.id].houses = 5;
+          GameMemory2.ownership[matchedTile.id].houses = 5;
         }
       }
     }
-    for (const tileId of Object.keys(GameMemory.ownership)) {
-      if (GameMemory.isMe(GameMemory.ownership[tileId]?.owner) && !foundTileIds.has(Number(tileId))) {
-        GameMemory.ownership[tileId].owner = null;
-        GameMemory.ownership[tileId].houses = 0;
+    for (const tileId of Object.keys(GameMemory2.ownership)) {
+      if (GameMemory2.isMe(GameMemory2.ownership[tileId]?.owner) && !foundTileIds.has(Number(tileId))) {
+        GameMemory2.ownership[tileId].owner = null;
+        GameMemory2.ownership[tileId].houses = 0;
       }
     }
   }
   function scanActivityLogsOnly() {
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     const hud = document.getElementById("rubot-hud-panel");
+    const feedContainer = document.querySelector('[class*="activity" i], [class*="feed" i], [class*="log" i], [class*="history" i]');
+    const root = feedContainer || document.body;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     let node = walker.nextNode();
     while (node) {
       if (!hud || !hud.contains(node.parentElement)) {
         const line = node.nodeValue ? node.nodeValue.trim() : "";
-        if (line.length > 8 && line.length < 120 && !GameMemory.processedLogs.has(line)) {
+        if (line.length > 8 && line.length < 120 && !GameMemory2.isLogProcessed(line)) {
           parseActivityLogLine(line);
         }
       }
@@ -1336,25 +1405,25 @@
     if (/got into prison|went to prison|sent to prison/i.test(line)) {
       const playerPart = line.split(/got into prison|went to prison|sent to prison/i)[0].trim();
       const cleanPlayer = playerPart.replace(/[^\w\s-]/g, "").trim();
-      if (GameMemory.isMe(cleanPlayer)) {
-        GameMemory.myPos = 10;
-        GameMemory.inJail = true;
-      } else if (cleanPlayer && GameMemory.players[cleanPlayer]) {
-        GameMemory.players[cleanPlayer].pos = 10;
-        GameMemory.players[cleanPlayer].inJail = true;
+      if (GameMemory2.isMe(cleanPlayer)) {
+        GameMemory2.myPos = 10;
+        GameMemory2.inJail = true;
+      } else if (cleanPlayer && GameMemory2.players[cleanPlayer]) {
+        GameMemory2.players[cleanPlayer].pos = 10;
+        GameMemory2.players[cleanPlayer].inJail = true;
       }
-      GameMemory.processedLogs.add(line);
+      GameMemory2.markLogProcessed(line);
       return;
     }
     if (/got free|left prison|paid.*jail|paid.*bail/i.test(line)) {
       const playerPart = line.split(/got free|left prison|paid/i)[0].trim();
       const cleanPlayer = playerPart.replace(/[^\w\s-]/g, "").trim();
-      if (GameMemory.isMe(cleanPlayer)) {
-        GameMemory.inJail = false;
-      } else if (cleanPlayer && GameMemory.players[cleanPlayer]) {
-        GameMemory.players[cleanPlayer].inJail = false;
+      if (GameMemory2.isMe(cleanPlayer)) {
+        GameMemory2.inJail = false;
+      } else if (cleanPlayer && GameMemory2.players[cleanPlayer]) {
+        GameMemory2.players[cleanPlayer].inJail = false;
       }
-      GameMemory.processedLogs.add(line);
+      GameMemory2.markLogProcessed(line);
       return;
     }
     const rollMatch = /^(.+?)\s+rolled\s+(\d+)/i.exec(line);
@@ -1362,13 +1431,16 @@
       const player = rollMatch[1].trim();
       const rollVal = parseInt(rollMatch[2], 10);
       if (!isNaN(rollVal) && rollVal >= 2 && rollVal <= 12) {
-        if (GameMemory.isMe(player)) {
-          GameMemory.myPos = (GameMemory.myPos + rollVal) % 40;
-        } else if (GameMemory.players[player]) {
-          GameMemory.players[player].pos = ((GameMemory.players[player].pos || 0) + rollVal) % 40;
+        const wsHealthy = typeof GameMemory2.isWsHealthy === "function" && GameMemory2.isWsHealthy();
+        if (!wsHealthy) {
+          if (GameMemory2.isMe(player)) {
+            GameMemory2.myPos = (GameMemory2.myPos + rollVal) % 40;
+          } else if (GameMemory2.players[player]) {
+            GameMemory2.players[player].pos = ((GameMemory2.players[player].pos || 0) + rollVal) % 40;
+          }
         }
       }
-      GameMemory.processedLogs.add(line);
+      GameMemory2.markLogProcessed(line);
       return;
     }
     if (line.includes("landed on")) {
@@ -1376,12 +1448,12 @@
         if (new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
           const playerPart = line.split(/landed on/i)[0].trim();
           const cleanPlayer = playerPart.replace(/[^\w\s-]/g, "").trim();
-          if (GameMemory.isMe(cleanPlayer)) {
-            GameMemory.myPos = tile.id;
-          } else if (cleanPlayer && GameMemory.players[cleanPlayer]) {
-            GameMemory.players[cleanPlayer].pos = tile.id;
+          if (GameMemory2.isMe(cleanPlayer)) {
+            GameMemory2.myPos = tile.id;
+          } else if (cleanPlayer && GameMemory2.players[cleanPlayer]) {
+            GameMemory2.players[cleanPlayer].pos = tile.id;
           }
-          GameMemory.processedLogs.add(line);
+          GameMemory2.markLogProcessed(line);
           return;
         }
       }
@@ -1391,13 +1463,13 @@
         if (tile.group && new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
           const buyerPart = line.split(/bought a house in/i)[0].trim();
           const cleanBuyer = buyerPart.replace(/[^\w\s-]/g, "").trim();
-          if (cleanBuyer && GameMemory.ownership[tile.id]) {
-            GameMemory.ownership[tile.id].owner = cleanBuyer;
-            GameMemory.ownership[tile.id].houses = Math.min(5, (GameMemory.ownership[tile.id].houses || 0) + 1);
-            if (GameMemory.isMe(cleanBuyer)) {
-              GameMemory.myPos = tile.id;
+          if (cleanBuyer && GameMemory2.ownership[tile.id]) {
+            GameMemory2.ownership[tile.id].owner = cleanBuyer;
+            GameMemory2.ownership[tile.id].houses = Math.min(5, (GameMemory2.ownership[tile.id].houses || 0) + 1);
+            if (GameMemory2.isMe(cleanBuyer)) {
+              GameMemory2.myPos = tile.id;
             }
-            GameMemory.processedLogs.add(line);
+            GameMemory2.markLogProcessed(line);
             return;
           }
         }
@@ -1408,13 +1480,13 @@
         if (tile.group && new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
           const buyerPart = line.split(/bought a hotel in/i)[0].trim();
           const cleanBuyer = buyerPart.replace(/[^\w\s-]/g, "").trim();
-          if (cleanBuyer && GameMemory.ownership[tile.id]) {
-            GameMemory.ownership[tile.id].owner = cleanBuyer;
-            GameMemory.ownership[tile.id].houses = 5;
-            if (GameMemory.isMe(cleanBuyer)) {
-              GameMemory.myPos = tile.id;
+          if (cleanBuyer && GameMemory2.ownership[tile.id]) {
+            GameMemory2.ownership[tile.id].owner = cleanBuyer;
+            GameMemory2.ownership[tile.id].houses = 5;
+            if (GameMemory2.isMe(cleanBuyer)) {
+              GameMemory2.myPos = tile.id;
             }
-            GameMemory.processedLogs.add(line);
+            GameMemory2.markLogProcessed(line);
             return;
           }
         }
@@ -1425,12 +1497,12 @@
         if (tile.group && new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
           const buyerPart = line.split(/bought/i)[0].trim();
           const cleanBuyer = buyerPart.replace(/[^\w\s-]/g, "").trim();
-          if (cleanBuyer && GameMemory.ownership[tile.id]) {
-            GameMemory.ownership[tile.id].owner = cleanBuyer;
-            if (GameMemory.isMe(cleanBuyer)) {
-              GameMemory.myPos = tile.id;
+          if (cleanBuyer && GameMemory2.ownership[tile.id]) {
+            GameMemory2.ownership[tile.id].owner = cleanBuyer;
+            if (GameMemory2.isMe(cleanBuyer)) {
+              GameMemory2.myPos = tile.id;
             }
-            GameMemory.processedLogs.add(line);
+            GameMemory2.markLogProcessed(line);
             return;
           }
         }
@@ -1439,22 +1511,22 @@
     let m = /^(.+?)\s+bankrupted/i.exec(line);
     if (m) {
       const bankruptPlayer = m[1].trim();
-      for (const id of Object.keys(GameMemory.ownership)) {
-        if (GameMemory.ownership[id].owner === bankruptPlayer) {
-          GameMemory.ownership[id].owner = null;
-          GameMemory.ownership[id].houses = 0;
-          GameMemory.ownership[id].mortgaged = false;
+      for (const id of Object.keys(GameMemory2.ownership)) {
+        if (GameMemory2.ownership[id].owner === bankruptPlayer) {
+          GameMemory2.ownership[id].owner = null;
+          GameMemory2.ownership[id].houses = 0;
+          GameMemory2.ownership[id].mortgaged = false;
         }
       }
-      GameMemory.processedLogs.add(line);
+      GameMemory2.markLogProcessed(line);
       return;
     }
     if (line.includes("mortgaged")) {
       for (const tile of BOARD_TILES) {
         if (tile.group && new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
-          if (GameMemory.ownership[tile.id]) {
-            GameMemory.ownership[tile.id].mortgaged = !line.includes("unmortgaged");
-            GameMemory.processedLogs.add(line);
+          if (GameMemory2.ownership[tile.id]) {
+            GameMemory2.ownership[tile.id].mortgaged = !line.includes("unmortgaged");
+            GameMemory2.markLogProcessed(line);
             return;
           }
         }
@@ -1464,9 +1536,9 @@
       for (const tile of BOARD_TILES) {
         if (tile.group && new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
           const matchTo = /to\s+([A-Za-z0-9_-]+)/i.exec(line);
-          if (matchTo && GameMemory.ownership[tile.id]) {
-            GameMemory.ownership[tile.id].owner = matchTo[1].trim();
-            GameMemory.processedLogs.add(line);
+          if (matchTo && GameMemory2.ownership[tile.id]) {
+            GameMemory2.ownership[tile.id].owner = matchTo[1].trim();
+            GameMemory2.markLogProcessed(line);
             return;
           }
         }
@@ -1491,13 +1563,13 @@
       if (t.length >= 2 && t.length <= 25 && !t.includes("$") && !t.toLowerCase().includes("trade") && !t.toLowerCase().includes("create") && !BOARD_LABELS_BLACKLIST.has(t.toLowerCase())) {
         const rect = el.getBoundingClientRect();
         const center = rect.left + rect.width / 2;
-        for (const pName of Object.keys(GameMemory.players)) {
+        for (const pName of Object.keys(GameMemory2.players)) {
           if (t.toLowerCase().includes(pName.toLowerCase()) || pName.toLowerCase().includes(t.toLowerCase())) {
             if (center < modalMidX && !leftPlayerName) leftPlayerName = pName;
             else if (center >= modalMidX && !rightPlayerName) rightPlayerName = pName;
           }
         }
-        if (GameMemory.isMe(t)) {
+        if (GameMemory2.isMe(t)) {
           if (center < modalMidX && !leftPlayerName) leftPlayerName = t;
           else if (center >= modalMidX && !rightPlayerName) rightPlayerName = t;
         }
@@ -1505,16 +1577,16 @@
     }
     let meIsOnLeft = false;
     let partnerName = "Opponent";
-    if (leftPlayerName && GameMemory.isMe(leftPlayerName)) {
+    if (leftPlayerName && GameMemory2.isMe(leftPlayerName)) {
       meIsOnLeft = true;
       partnerName = rightPlayerName || "Opponent";
-    } else if (rightPlayerName && GameMemory.isMe(rightPlayerName)) {
+    } else if (rightPlayerName && GameMemory2.isMe(rightPlayerName)) {
       meIsOnLeft = false;
       partnerName = leftPlayerName || "Opponent";
-    } else if (leftPlayerName && !GameMemory.isMe(leftPlayerName)) {
+    } else if (leftPlayerName && !GameMemory2.isMe(leftPlayerName)) {
       meIsOnLeft = false;
       partnerName = leftPlayerName;
-    } else if (rightPlayerName && !GameMemory.isMe(rightPlayerName)) {
+    } else if (rightPlayerName && !GameMemory2.isMe(rightPlayerName)) {
       meIsOnLeft = true;
       partnerName = rightPlayerName;
     } else {
@@ -1608,24 +1680,24 @@
      * Comprehensive scan of all opponents
      */
     analyzeOpponents() {
-      const myName = GameMemory.myName || "__ME__";
+      const myName = GameMemory2.myName || "__ME__";
       const analysis = {};
-      const playerNames = new Set(Object.keys(GameMemory.players));
-      for (const info of Object.values(GameMemory.ownership)) {
-        if (info?.owner && !GameMemory.isMe(info.owner)) {
+      const playerNames = new Set(Object.keys(GameMemory2.players));
+      for (const info of Object.values(GameMemory2.ownership)) {
+        if (info?.owner && !GameMemory2.isMe(info.owner)) {
           playerNames.add(info.owner);
         }
       }
       for (const pName of playerNames) {
-        if (GameMemory.isMe(pName)) continue;
-        const pData = GameMemory.players[pName] || { cash: 500, pos: 0, bankrupt: false };
+        if (GameMemory2.isMe(pName)) continue;
+        const pData = GameMemory2.players[pName] || { cash: 500, pos: 0, bankrupt: false };
         if (pData.bankrupt) continue;
         const ownedTiles = [];
         const hungrySets = [];
         let totalPropertyNetWorth = 0;
         for (const tile of BOARD_TILES) {
           if (!tile.group) continue;
-          const info = GameMemory.ownership[tile.id];
+          const info = GameMemory2.ownership[tile.id];
           if (info && info.owner === pName) {
             ownedTiles.push(tile);
             totalPropertyNetWorth += tile.price;
@@ -1633,17 +1705,17 @@
         }
         for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
           if (tiles[0].type !== "property") continue;
-          const ownedCount = tiles.filter((t) => GameMemory.ownership[t.id]?.owner === pName).length;
+          const ownedCount = tiles.filter((t) => GameMemory2.ownership[t.id]?.owner === pName).length;
           if (ownedCount === tiles.length - 1) {
-            const missingTile = tiles.find((t) => GameMemory.ownership[t.id]?.owner !== pName);
-            const holder = GameMemory.ownership[missingTile?.id]?.owner || "Unowned";
+            const missingTile = tiles.find((t) => GameMemory2.ownership[t.id]?.owner !== pName);
+            const holder = GameMemory2.ownership[missingTile?.id]?.owner || "Unowned";
             hungrySets.push({
               group: groupName,
               ownedCount,
               total: tiles.length,
               missingTile,
               heldBy: holder,
-              weHoldIt: GameMemory.isMe(holder),
+              weHoldIt: GameMemory2.isMe(holder),
               houseCost: missingTile?.houseCost || 100,
               affordableHouses: Math.floor((pData.cash || 0) / (missingTile?.houseCost || 100))
             });
@@ -1692,10 +1764,10 @@
       const myMissing = [];
       for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
         if (tiles[0].type !== "property" && tiles[0].type !== "airport") continue;
-        const myCount = tiles.filter((t) => GameMemory.isMe(GameMemory.ownership[t.id]?.owner)).length;
+        const myCount = tiles.filter((t) => GameMemory2.isMe(GameMemory2.ownership[t.id]?.owner)).length;
         if (myCount === tiles.length - 1) {
-          const missing = tiles.find((t) => !GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
-          const holder = GameMemory.ownership[missing.id]?.owner || null;
+          const missing = tiles.find((t) => !GameMemory2.isMe(GameMemory2.ownership[t.id]?.owner));
+          const holder = GameMemory2.ownership[missing.id]?.owner || null;
           myMissing.push({
             group: groupName,
             missingTile: missing,
@@ -1716,13 +1788,13 @@
       const needs = [];
       for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
         if (tiles[0].type !== "property" || tiles.length !== 3) continue;
-        const myCount = tiles.filter((t) => GameMemory.isMe(GameMemory.ownership[t.id]?.owner)).length;
+        const myCount = tiles.filter((t) => GameMemory2.isMe(GameMemory2.ownership[t.id]?.owner)).length;
         if (myCount === 1) {
-          const myTile = tiles.find((t) => GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
-          const otherTiles = tiles.filter((t) => !GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
+          const myTile = tiles.find((t) => GameMemory2.isMe(GameMemory2.ownership[t.id]?.owner));
+          const otherTiles = tiles.filter((t) => !GameMemory2.isMe(GameMemory2.ownership[t.id]?.owner));
           for (const other of otherTiles) {
-            const holder = GameMemory.ownership[other.id]?.owner;
-            if (holder && !GameMemory.isMe(holder)) {
+            const holder = GameMemory2.ownership[other.id]?.owner;
+            if (holder && !GameMemory2.isMe(holder)) {
               needs.push({
                 group: groupName,
                 myTile,
@@ -1745,9 +1817,9 @@
       const tradable = [];
       for (const tile of BOARD_TILES) {
         if (!tile.group) continue;
-        const info = GameMemory.ownership[tile.id];
-        if (info && GameMemory.isMe(info.owner) && info.houses === 0) {
-          const { owned, total } = GameMemory.getGroupCount(tile.group, "__ME__");
+        const info = GameMemory2.ownership[tile.id];
+        if (info && GameMemory2.isMe(info.owner) && info.houses === 0) {
+          const { owned, total } = GameMemory2.getGroupCount(tile.group, "__ME__");
           if (owned < total - 1) {
             if (!blockers.has(tile.id)) {
               safe.push(tile);
@@ -1779,7 +1851,7 @@
       for (let roll = 2; roll <= 12; roll++) {
         const prob = DICE_PROB[roll];
         const targetTile = (currentPos + roll) % 40;
-        const rent = GameMemory.getTileCurrentRent(targetTile);
+        const rent = GameMemory2.getTileCurrentRent(targetTile);
         expectedLoss1Turn += prob * rent;
         if (roll >= 5 && roll <= 9 && rent > maxDangerWindowLoss) {
           maxDangerWindowLoss = rent;
@@ -1792,11 +1864,11 @@
       for (let step = 13; step <= 21; step++) {
         const targetTile = (currentPos + step) % 40;
         const tileData = BOARD_TILES[targetTile];
-        const rent = GameMemory.getTileCurrentRent(targetTile);
+        const rent = GameMemory2.getTileCurrentRent(targetTile);
         const markovWeight = tileData.markov * 0.45;
         expectedLoss3Turns += markovWeight * rent;
       }
-      GameMemory.lastDangerEV = Math.round(expectedLoss1Turn);
+      GameMemory2.lastDangerEV = Math.round(expectedLoss1Turn);
       return {
         expectedLoss1Turn: Math.round(expectedLoss1Turn),
         expectedLoss3Turns: Math.round(expectedLoss3Turns),
@@ -1810,8 +1882,8 @@
       const dynamicReserve = Math.round(
         CONFIG.BASE_MIN_RESERVE + CONFIG.RISK_AVERSION_FACTOR * danger.expectedLoss1Turn + CONFIG.WORST_CASE_WEIGHT * danger.maxDangerWindowLoss
       );
-      GameMemory.lastDynamicReserve = Math.max(CONFIG.BASE_MIN_RESERVE, dynamicReserve);
-      return GameMemory.lastDynamicReserve;
+      GameMemory2.lastDynamicReserve = Math.max(CONFIG.BASE_MIN_RESERVE, dynamicReserve);
+      return GameMemory2.lastDynamicReserve;
     },
     /**
      * Evaluates property purchase when landing on unowned tile.
@@ -1824,7 +1896,7 @@
           reason: `Cannot afford ${tile ? tile.name : "property"} ($${price} > $${myCash})`
         };
       }
-      const mySet = tile?.group ? GameMemory.getGroupCount(tile.group, "__ME__") : null;
+      const mySet = tile?.group ? GameMemory2.getGroupCount(tile.group, "__ME__") : null;
       if (mySet && (mySet.owned === mySet.total - 1 || tile.group === "USA" || tile.group === "Brazil")) {
         return {
           buy: true,
@@ -1849,10 +1921,10 @@
       if (tile && (tile.group === "Utility" || tile.group === "Utilities" || tile.type === "utility")) {
         return { buy: true, reason: `Cashflow Asset: ${tile.name} (Utility)` };
       }
-      const unownedRemaining = BOARD_TILES.filter((t) => t.group && (!GameMemory.ownership[t.id] || !GameMemory.ownership[t.id].owner)).length;
-      const isFinaleEndGame = unownedRemaining === 0 || GameMemory.turnCount > 30 && myCash < 300;
+      const unownedRemaining = BOARD_TILES.filter((t) => t.group && (!GameMemory2.ownership[t.id] || !GameMemory2.ownership[t.id].owner)).length;
+      const isFinaleEndGame = unownedRemaining === 0 || GameMemory2.turnCount > 30 && myCash < 300;
       if (isFinaleEndGame) {
-        const danger = this.analyzeDangerAhead(GameMemory.myPos);
+        const danger = this.analyzeDangerAhead(GameMemory2.myPos);
         const postCash = myCash - price;
         if (danger.maxDangerWindowLoss >= 300 && postCash < 60) {
           return {
@@ -1873,15 +1945,15 @@
     shouldPayToLeaveJail(myCash) {
       const totalOpponentHouses = this.countOpponentHouses();
       if (totalOpponentHouses === 0 && myCash >= 50) {
-        GameMemory.lastJailMode = "SAFE_EXIT";
+        GameMemory2.lastJailMode = "SAFE_EXIT";
         return {
           exit: true,
           reason: `Board Safe (0 enemy houses): Leaving cell to circle board & collect +$200 at Start`
         };
       }
-      const unownedCount = GameMemory.getUnownedPropertyCount();
+      const unownedCount = GameMemory2.getUnownedPropertyCount();
       if (unownedCount >= 4 && myCash >= 50) {
-        GameMemory.lastJailMode = "AGR_EXIT";
+        GameMemory2.lastJailMode = "AGR_EXIT";
         return {
           exit: true,
           reason: `Early Game Land Grab: ${unownedCount} unowned properties remaining on board`
@@ -1889,11 +1961,11 @@
       }
       const dangerOutside = MarkovRisk.analyzeDangerAhead(10);
       const reserve = MarkovRisk.computeDynamicReserve(10);
-      const canCollectRentInJail = GameMemory.roomSettings.collectRentInJail;
+      const canCollectRentInJail = GameMemory2.roomSettings.collectRentInJail;
       if (!canCollectRentInJail) {
         const opponentsApproachingOurHotels = this.areOpponentsApproachingOurProperties();
         if (opponentsApproachingOurHotels && myCash >= 50) {
-          GameMemory.lastJailMode = "RENT_HUNT_EXIT";
+          GameMemory2.lastJailMode = "RENT_HUNT_EXIT";
           return {
             exit: true,
             reason: `Room Setting Alert: Cannot collect rent in jail! Opponents entering our hotel strike zone.`
@@ -1901,20 +1973,20 @@
         }
       }
       if (dangerOutside.expectedLoss1Turn > 60 || dangerOutside.maxDangerWindowLoss > 200) {
-        GameMemory.lastJailMode = "SAFE_STAY";
+        GameMemory2.lastJailMode = "SAFE_STAY";
         return {
           exit: false,
           reason: `Fortress Mode: Safe in Jail collecting rent. High danger ($${dangerOutside.expectedLoss1Turn} EV) outside.`
         };
       }
       if (myCash >= 50 && (myCash - 50 >= reserve * 0.7 || dangerOutside.expectedLoss1Turn < 40)) {
-        GameMemory.lastJailMode = "SAFE_EXIT";
+        GameMemory2.lastJailMode = "SAFE_EXIT";
         return {
           exit: true,
           reason: `Board Safe: Low danger EV ($${dangerOutside.expectedLoss1Turn}) ahead. Circling for +$200 Start.`
         };
       }
-      GameMemory.lastJailMode = "SAFE_STAY";
+      GameMemory2.lastJailMode = "SAFE_STAY";
       return {
         exit: false,
         reason: `Preserving $50 cash: Remaining safe in Jail`
@@ -1927,14 +1999,14 @@
     areOpponentsApproachingOurProperties() {
       const myHotels = [];
       for (const tile of BOARD_TILES) {
-        const info = GameMemory.ownership[tile.id];
-        if (info && GameMemory.isMe(info.owner) && info.houses >= 1) {
+        const info = GameMemory2.ownership[tile.id];
+        if (info && GameMemory2.isMe(info.owner) && info.houses >= 1) {
           myHotels.push(tile.id);
         }
       }
       if (myHotels.length === 0) return false;
-      for (const [pName, pData] of Object.entries(GameMemory.players)) {
-        if (GameMemory.isMe(pName) || pData.bankrupt || pData.inJail) continue;
+      for (const [pName, pData] of Object.entries(GameMemory2.players)) {
+        if (GameMemory2.isMe(pName) || pData.bankrupt || pData.inJail) continue;
         const oppPos = pData.pos || 0;
         for (const hotelTileId of myHotels) {
           const distance = (hotelTileId - oppPos + 40) % 40;
@@ -1951,8 +2023,8 @@
     countOpponentHouses() {
       let count = 0;
       for (const tile of BOARD_TILES) {
-        const info = GameMemory.ownership[tile.id];
-        if (info && info.owner && !GameMemory.isMe(info.owner)) {
+        const info = GameMemory2.ownership[tile.id];
+        if (info && info.owner && !GameMemory2.isMe(info.owner)) {
           count += info.houses || 0;
         }
       }
@@ -1969,7 +2041,7 @@
       if (!tile) return { maxBid: 0, multiplier: 0.8, reason: "Unknown tile" };
       let multiplier = 0.85;
       let reason = "Standard Asset Discount Bid";
-      const mySet = GameMemory.getGroupCount(tile.group, "__ME__");
+      const mySet = GameMemory2.getGroupCount(tile.group, "__ME__");
       if (tile.group && mySet.owned === mySet.total - 1) {
         multiplier = 2.5;
         reason = `MUST-HAVE: Completes our ${tile.group} Monopoly!`;
@@ -2011,12 +2083,20 @@
      */
     evaluateAuctionStep(tile, currentBid, myCash) {
       const { maxBid, reason } = this.calculateCeilingBid(tile, myCash);
+      if (maxBid - currentBid >= 100 && currentBid + 50 <= maxBid && currentBid + 50 <= myCash - 30) {
+        return {
+          shouldBid: true,
+          increment: 50,
+          maxBid,
+          reason: `Aggressive Jump +$50 -> $${currentBid + 50} <= Max $${maxBid} (${reason})`
+        };
+      }
       if (currentBid + 10 <= maxBid && currentBid + 10 <= myCash - 30) {
         return {
           shouldBid: true,
           increment: 10,
           maxBid,
-          reason: `Bidding $${currentBid + 10} <= Max $${maxBid} (${reason})`
+          reason: `Bidding +$10 -> $${currentBid + 10} <= Max $${maxBid} (${reason})`
         };
       }
       return {
@@ -2034,8 +2114,8 @@
       if (!tile) return 0;
       const baseEV = tile.price * (1 + tile.markov * 18);
       if (!tile.group) return baseEV;
-      const isMe = GameMemory.isMe(playerName);
-      const { owned, total } = GameMemory.getGroupCount(tile.group, isMe ? "__ME__" : playerName);
+      const isMe = GameMemory2.isMe(playerName);
+      const { owned, total } = GameMemory2.getGroupCount(tile.group, isMe ? "__ME__" : playerName);
       let synergy = 1;
       if (tile.type === "property") {
         if (owned >= total - 1) synergy = 6.2;
@@ -2064,19 +2144,19 @@
       const receivedIds = new Set(receivedTiles.map((t) => t.id));
       const runTrajectory = (isAccepted) => {
         const simOwnership = {};
-        for (const [id, info] of Object.entries(GameMemory.ownership)) {
+        for (const [id, info] of Object.entries(GameMemory2.ownership)) {
           let owner = info.owner;
           if (isAccepted) {
             if (givenIds.has(Number(id))) owner = partnerName;
-            if (receivedIds.has(Number(id))) owner = GameMemory.myName || "__ME__";
+            if (receivedIds.has(Number(id))) owner = GameMemory2.myName || "__ME__";
           }
           simOwnership[id] = { owner, houses: info.houses || 0, mortgaged: info.mortgaged || false };
         }
-        let myCash = isAccepted ? GameMemory.myCash - givenCash + receivedCash : GameMemory.myCash;
-        let oppBase = GameMemory.players[partnerName]?.cash ?? 500;
+        let myCash = isAccepted ? GameMemory2.myCash - givenCash + receivedCash : GameMemory2.myCash;
+        let oppBase = GameMemory2.players[partnerName]?.cash ?? 500;
         let oppCash = isAccepted ? oppBase - receivedCash + givenCash : oppBase;
-        let myPos = GameMemory.myPos || 0;
-        let oppPos = GameMemory.players[partnerName]?.pos || 0;
+        let myPos = GameMemory2.myPos || 0;
+        let oppPos = GameMemory2.players[partnerName]?.pos || 0;
         let myBankrupt = myCash < 0;
         let oppBankrupt = oppCash < 0;
         for (let r = 1; r <= numRounds; r++) {
@@ -2110,12 +2190,12 @@
             const tile = BOARD_TILES[oppPos];
             if (tile?.group) {
               const info = simOwnership[tile.id];
-              if (info && GameMemory.isMe(info.owner) && !info.mortgaged) {
+              if (info && GameMemory2.isMe(info.owner) && !info.mortgaged) {
                 let rent = tile.price ? Math.round(tile.price * 0.1) : 20;
                 if (tile.type === "property" && tile.rent) {
                   rent = tile.rent[info.houses || 0] || tile.rent[0];
                 } else if (tile.type === "airport") {
-                  const count = Object.values(simOwnership).filter((x) => GameMemory.isMe(x.owner) && BOARD_TILES[x.id]?.type === "airport").length;
+                  const count = Object.values(simOwnership).filter((x) => GameMemory2.isMe(x.owner) && BOARD_TILES[x.id]?.type === "airport").length;
                   rent = 25 * Math.pow(2, Math.max(0, count - 1));
                 }
                 oppCash -= rent;
@@ -2159,9 +2239,9 @@
       if (partnerMissingCard && partnerMissingCard.missingTile) {
         const requestedTile = givenTiles[0] || OpponentTracker.getSafeTradeSacrifices()[0]?.tile;
         if (requestedTile) {
-          const oppSet = requestedTile.group ? GameMemory.getGroupCount(requestedTile.group, partnerName) : null;
+          const oppSet = requestedTile.group ? GameMemory2.getGroupCount(requestedTile.group, partnerName) : null;
           const givesThemMonopoly = oppSet && oppSet.owned === oppSet.total - 1;
-          const oppCash = GameMemory.players[partnerName]?.cash ?? 500;
+          const oppCash = GameMemory2.players[partnerName]?.cash ?? 500;
           let cashDemand = 0;
           if (givesThemMonopoly) {
             cashDemand = Math.max(80, Math.min(Math.max(0, oppCash - 50), 150));
@@ -2194,7 +2274,7 @@
       let givenBlockerTile = null;
       for (const tile of givenTiles) {
         if (tile.group && tile.type === "property") {
-          const oppSet = GameMemory.getGroupCount(tile.group, partnerName);
+          const oppSet = GameMemory2.getGroupCount(tile.group, partnerName);
           if (oppSet.owned === oppSet.total - 1) {
             givesOppMonopoly = true;
             oppGroupName = tile.group;
@@ -2207,7 +2287,7 @@
       let myCompletedGroup = "";
       for (const tile of receivedTiles) {
         if (tile.group && tile.type === "property") {
-          const mySet = GameMemory.getGroupCount(tile.group, "__ME__");
+          const mySet = GameMemory2.getGroupCount(tile.group, "__ME__");
           if (mySet.owned === mySet.total - 1) {
             completesMyMonopoly = true;
             myCompletedGroup = tile.group;
@@ -2234,7 +2314,7 @@
         };
       }
       if (completesMyMonopoly) {
-        const myCashAfter = GameMemory.myCash + receivedCash - givenCash;
+        const myCashAfter = GameMemory2.myCash + receivedCash - givenCash;
         if (myCashAfter < 30) {
           return {
             accept: false,
@@ -2306,7 +2386,7 @@
         };
       }
       const acceptable = myGain > 0 && (myGain >= oppGain * CONFIG.TRADE_MIN_ADVANTAGE_RATIO || completesMyMonopoly) && sim.isSimulationEVPlus;
-      GameMemory.lastTradeVerdict = acceptable ? "ACCEPTABLE" : "UNFAVORABLE";
+      GameMemory2.lastTradeVerdict = acceptable ? "ACCEPTABLE" : "UNFAVORABLE";
       const givenName = givenTiles[0]?.name || "property";
       return {
         accept: acceptable,
@@ -2343,7 +2423,7 @@
             if (cashDiff > 0) {
               cashDemand = Math.min(targetOpp.cash, Math.round(cashDiff * 0.4));
             } else if (cashDiff < 0) {
-              cashOffer = Math.min(Math.max(0, GameMemory.myCash - 100), Math.round(Math.abs(cashDiff) * 0.4));
+              cashOffer = Math.min(Math.max(0, GameMemory2.myCash - 100), Math.round(Math.abs(cashDiff) * 0.4));
             }
             opportunities.push({
               targetOwner: targetOppName,
@@ -2363,7 +2443,7 @@
         if (opportunities.some((o) => o.targetOwner === targetOppName && o.myReceivedTile.id === myNeed.missingTile.id)) continue;
         const sacrificeTile = safeSacrifices.length > 0 ? safeSacrifices[0] : null;
         if (sacrificeTile) {
-          const cashOffer = Math.min(Math.max(0, GameMemory.myCash - 200), Math.max(50, Math.round(myNeed.missingTile.price * 0.6)));
+          const cashOffer = Math.min(Math.max(0, GameMemory2.myCash - 200), Math.max(50, Math.round(myNeed.missingTile.price * 0.6)));
           opportunities.push({
             targetOwner: targetOppName,
             myGivenTile: sacrificeTile,
@@ -2373,8 +2453,8 @@
             summary: `MONOPOLY ACQUISITION: Give ${sacrificeTile.name} + $${cashOffer} -> Get ${myNeed.missingTile.name}`,
             pitch: `@${targetOppName} I will trade ${sacrificeTile.name} + $${cashOffer} for your ${myNeed.missingTile.name}!`
           });
-        } else if (GameMemory.myCash >= myNeed.missingTile.price + 150) {
-          const cashOffer = Math.min(GameMemory.myCash - 100, Math.round(myNeed.missingTile.price * 1.8));
+        } else if (GameMemory2.myCash >= myNeed.missingTile.price + 150) {
+          const cashOffer = Math.min(GameMemory2.myCash - 100, Math.round(myNeed.missingTile.price * 1.8));
           opportunities.push({
             targetOwner: targetOppName,
             myGivenTile: null,
@@ -2392,7 +2472,7 @@
         if (opportunities.some((o) => o.targetOwner === targetOppName && o.myReceivedTile.id === need.wantedTile.id)) continue;
         const sacrificeTile = safeSacrifices.find((s) => s.id !== need.myTile.id) || null;
         if (sacrificeTile) {
-          const cashOffer = Math.min(Math.max(0, GameMemory.myCash - 200), Math.round(need.wantedTile.price * 0.3));
+          const cashOffer = Math.min(Math.max(0, GameMemory2.myCash - 200), Math.round(need.wantedTile.price * 0.3));
           opportunities.push({
             targetOwner: targetOppName,
             myGivenTile: sacrificeTile,
@@ -2402,8 +2482,8 @@
             summary: `SET CONSOLIDATION: Give ${sacrificeTile.name} -> Get ${need.wantedTile.name}`,
             pitch: `@${targetOppName} Let's trade: I'll give you ${sacrificeTile.name} for your ${need.wantedTile.name}!`
           });
-        } else if (GameMemory.myCash >= need.wantedTile.price + 200) {
-          const cashOffer = Math.min(GameMemory.myCash - 150, Math.round(need.wantedTile.price * 1.5));
+        } else if (GameMemory2.myCash >= need.wantedTile.price + 200) {
+          const cashOffer = Math.min(GameMemory2.myCash - 150, Math.round(need.wantedTile.price * 1.5));
           opportunities.push({
             targetOwner: targetOppName,
             myGivenTile: null,
@@ -2415,13 +2495,13 @@
           });
         }
       }
-      const myAirports = BOARD_TILES.filter((t) => t.type === "airport" && GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
+      const myAirports = BOARD_TILES.filter((t) => t.type === "airport" && GameMemory2.isMe(GameMemory2.ownership[t.id]?.owner));
       if (myAirports.length >= 1 && myAirports.length < 4) {
-        const otherAirports = BOARD_TILES.filter((t) => t.type === "airport" && !GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
+        const otherAirports = BOARD_TILES.filter((t) => t.type === "airport" && !GameMemory2.isMe(GameMemory2.ownership[t.id]?.owner));
         for (const air of otherAirports) {
-          const holder = GameMemory.ownership[air.id]?.owner;
+          const holder = GameMemory2.ownership[air.id]?.owner;
           if (holder && !opportunities.some((o) => o.targetOwner === holder && o.myReceivedTile.id === air.id)) {
-            const cashOffer = Math.min(Math.max(0, GameMemory.myCash - 200), Math.round(air.price * 1.4));
+            const cashOffer = Math.min(Math.max(0, GameMemory2.myCash - 200), Math.round(air.price * 1.4));
             if (cashOffer >= 100) {
               opportunities.push({
                 targetOwner: holder,
@@ -2517,12 +2597,13 @@
     },
     /**
      * Executes chat completion with multi-tier model priority:
-     * 1st priority: Primary configured model (e.g. llama3.2-vision:latest)
-     * 2nd priority: qwen2.5:7b (automatic fallback if primary fails)
+     * 1st priority: Primary configured model (default: qwen2.5:7b)
+     * 2nd priority: llama3.2:3b (ultra-fast fallback if primary fails)
+     * 3rd priority: Minimax Markov math engine (automatic zero-latency fallback)
      */
     async sendChatCompletion(messages, options = { temperature: 0.1, num_predict: 120 }) {
-      const primaryModel = CONFIG.OLLAMA_MODEL || "llama3.2-vision:latest";
-      const fallbackModel = "qwen2.5:7b";
+      const primaryModel = CONFIG.OLLAMA_MODEL || "qwen2.5:7b";
+      const fallbackModel = primaryModel === "llama3.2:3b" ? "qwen2.5:7b" : "llama3.2:3b";
       try {
         const data = await this.httpRequest({
           method: "POST",
@@ -2553,7 +2634,7 @@
                 stream: false,
                 options
               },
-              timeout: CONFIG.OLLAMA_TIMEOUT_MS || 6e3
+              timeout: Math.min(CONFIG.OLLAMA_TIMEOUT_MS || 6e3, 3500)
             });
             if (fallbackData?.message?.content) {
               return { content: fallbackData.message.content, modelUsed: fallbackModel };
@@ -2567,7 +2648,7 @@
       return null;
     },
     /**
-     * Evaluates incoming trade with local LLM (1st priority: llama3.2-vision, 2nd: qwen2.5:7b, 3rd: Minimax)
+     * Evaluates incoming trade with local LLM (1st priority: qwen2.5:7b, 2nd: llama3.2:3b, 3rd: Minimax)
      */
     async evaluateTradeWithLLM(tradeData) {
       const ruleVerdict = TradeEngine.evaluateIncomingTrade(tradeData);
@@ -2608,10 +2689,10 @@
     },
     buildPrompt(tradeData) {
       const partner = tradeData.partnerName || "Opponent";
-      const partnerObj = GameMemory.players[partner] || { cash: "Unknown", pos: 0, inJail: false };
+      const partnerObj = GameMemory2.players[partner] || { cash: "Unknown", pos: 0, inJail: false };
       const partnerCash = partnerObj.cash;
       const playerStats = {};
-      for (const [pName, pData] of Object.entries(GameMemory.players)) {
+      for (const [pName, pData] of Object.entries(GameMemory2.players)) {
         playerStats[pName] = {
           cash: pData.cash,
           pos: pData.pos,
@@ -2623,12 +2704,12 @@
           mortgaged: []
         };
       }
-      const myName = GameMemory.myName || "Me";
+      const myName = GameMemory2.myName || "Me";
       if (!playerStats[myName]) {
         playerStats[myName] = {
-          cash: GameMemory.myCash,
-          pos: GameMemory.myPos,
-          inJail: GameMemory.inJail,
+          cash: GameMemory2.myCash,
+          pos: GameMemory2.myPos,
+          inJail: GameMemory2.inJail,
           monopolies: [],
           properties: [],
           totalHouses: 0,
@@ -2636,16 +2717,16 @@
           mortgaged: []
         };
       } else {
-        playerStats[myName].cash = GameMemory.myCash;
-        playerStats[myName].pos = GameMemory.myPos;
-        playerStats[myName].inJail = GameMemory.inJail;
+        playerStats[myName].cash = GameMemory2.myCash;
+        playerStats[myName].pos = GameMemory2.myPos;
+        playerStats[myName].inJail = GameMemory2.inJail;
       }
-      for (const [tileId, ownInfo] of Object.entries(GameMemory.ownership)) {
+      for (const [tileId, ownInfo] of Object.entries(GameMemory2.ownership)) {
         if (!ownInfo || !ownInfo.owner) continue;
         const tile = BOARD_TILES[tileId];
         if (!tile) continue;
         const ownerKey = Object.keys(playerStats).find(
-          (k) => GameMemory.isMe(ownInfo.owner) ? k === myName || GameMemory.isMe(k) : k.toLowerCase() === ownInfo.owner.toLowerCase()
+          (k) => GameMemory2.isMe(ownInfo.owner) ? k === myName || GameMemory2.isMe(k) : k.toLowerCase() === ownInfo.owner.toLowerCase()
         ) || ownInfo.owner;
         if (!playerStats[ownerKey]) {
           playerStats[ownerKey] = {
@@ -2672,17 +2753,17 @@
         for (const [groupName, groupTiles] of Object.entries(GROUP_TILES)) {
           if (groupName === "Airport" || groupName === "Utility") continue;
           const ownsAll = groupTiles.every((t) => {
-            const o = GameMemory.ownership[t.id];
-            return o && (GameMemory.isMe(pName) ? GameMemory.isMe(o.owner) : o.owner?.toLowerCase() === pName.toLowerCase());
+            const o = GameMemory2.ownership[t.id];
+            return o && (GameMemory2.isMe(pName) ? GameMemory2.isMe(o.owner) : o.owner?.toLowerCase() === pName.toLowerCase());
           });
           if (ownsAll) {
-            const houseCounts = groupTiles.map((t) => `${t.name}: ${GameMemory.ownership[t.id]?.houses || 0}h`).join(", ");
+            const houseCounts = groupTiles.map((t) => `${t.name}: ${GameMemory2.ownership[t.id]?.houses || 0}h`).join(", ");
             pEntry.monopolies.push(`${groupName} (${houseCounts})`);
           }
         }
       }
       const playersFormatted = Object.entries(playerStats).map(([pName, p]) => {
-        const isMeText = GameMemory.isMe(pName) ? " (ME)" : pName === partner ? " (TRADE PARTNER)" : "";
+        const isMeText = GameMemory2.isMe(pName) ? " (ME)" : pName === partner ? " (TRADE PARTNER)" : "";
         const monoText = p.monopolies.length > 0 ? p.monopolies.join(" | ") : "None";
         const mortgagedText = p.mortgaged.length > 0 ? ` | Mortgaged: [${p.mortgaged.join(", ")}]` : "";
         return `- ${pName}${isMeText}:
@@ -2703,7 +2784,7 @@
         if (t.group && GROUP_TILES[t.group]) {
           const groupTiles = GROUP_TILES[t.group];
           const othersOwned = groupTiles.filter((gid) => gid !== t.id).every((gid) => {
-            const o = GameMemory.ownership[gid];
+            const o = GameMemory2.ownership[gid];
             return o && o.owner?.toLowerCase() === partner.toLowerCase();
           });
           if (othersOwned) partnerCompletedGroups.push(t.group);
@@ -2714,21 +2795,21 @@
         if (t.group && GROUP_TILES[t.group]) {
           const groupTiles = GROUP_TILES[t.group];
           const othersOwned = groupTiles.filter((gid) => gid !== t.id).every((gid) => {
-            const o = GameMemory.ownership[gid];
-            return o && GameMemory.isMe(o.owner);
+            const o = GameMemory2.ownership[gid];
+            return o && GameMemory2.isMe(o.owner);
           });
           if (othersOwned) myCompletedGroups.push(t.group);
         }
       }
       const partnerCanBuild = partnerCompletedGroups.length > 0 && typeof partnerCash === "number" && partnerCash >= 300;
-      const myPostCash = GameMemory.myCash + (tradeData.receivedCash || 0) - (tradeData.givenCash || 0);
+      const myPostCash = GameMemory2.myCash + (tradeData.receivedCash || 0) - (tradeData.givenCash || 0);
       const sim = TradeEngine.simulateFutureTradeRounds(tradeData, 20, 60);
       return `=== RICHUP FULL GAME-STATE BRIEFING ===
 MY IDENTITY: ${myName}
 LIVE FINANCIALS:
-- My Live Cash: $${GameMemory.myCash}
-- My Dynamic Survival Reserve: $${GameMemory.lastDynamicReserve} (Required cash floor to survive incoming rent hits)
-- Next Turn Danger EV: $${GameMemory.lastDangerEV}
+- My Live Cash: $${GameMemory2.myCash}
+- My Dynamic Survival Reserve: $${GameMemory2.lastDynamicReserve} (Required cash floor to survive incoming rent hits)
+- Next Turn Danger EV: $${GameMemory2.lastDangerEV}
 
 ALL PLAYERS IN MATCH (MONEY, HOUSES, POSITIONS):
 ${playersFormatted}
@@ -2790,7 +2871,7 @@ Respond ONLY with valid JSON:
       if (!CONFIG.OLLAMA_ENABLED || this.status === "offline") {
         return this.getFallbackChatReply(sender, messageText);
       }
-      const prompt = `You are playing RichUp (online Monopoly) under the nickname "${GameMemory.myName || "matrix"}".
+      const prompt = `You are playing RichUp (online Monopoly) under the nickname "${GameMemory2.myName || "matrix"}".
 Opponent "${sender}" just wrote in room chat: "${messageText}".
 
 Generate a brief, natural, authentic gamer reply.
@@ -2846,11 +2927,11 @@ Guidelines:
       const monopolies = [];
       for (const [groupName, groupTiles] of Object.entries(GROUP_TILES)) {
         if (groupName === "Airport" || groupName === "Utility") continue;
-        const ownsAll = groupTiles.every((t) => GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
+        const ownsAll = groupTiles.every((t) => GameMemory2.isMe(GameMemory2.ownership[t.id]?.owner));
         if (ownsAll) monopolies.push(groupName);
       }
-      const oppSummaries = Object.entries(GameMemory.players).filter(([pName]) => !GameMemory.isMe(pName)).map(([pName, p]) => `${pName}: $${p.cash} (Pos #${p.pos || 0})`).join(", ") || "None";
-      const prompt = `Player ${GameMemory.myName || "Me"}: Cash $${GameMemory.myCash}, Monopolies: [${monopolies.join(", ") || "None"}], Next turn danger: $${GameMemory.lastDangerEV}, Opponents: [${oppSummaries}].
+      const oppSummaries = Object.entries(GameMemory2.players).filter(([pName]) => !GameMemory2.isMe(pName)).map(([pName, p]) => `${pName}: $${p.cash} (Pos #${p.pos || 0})`).join(", ") || "None";
+      const prompt = `Player ${GameMemory2.myName || "Me"}: Cash $${GameMemory2.myCash}, Monopolies: [${monopolies.join(", ") || "None"}], Next turn danger: $${GameMemory2.lastDangerEV}, Opponents: [${oppSummaries}].
 Is it optimal to END_TURN now or UPGRADE_HOUSES?
 Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "under 10 words"}`;
       try {
@@ -2912,7 +2993,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         if (lines.length >= 2) {
           const sender = lines[0];
           const msgText = lines.slice(1).join(" ").trim();
-          if (GameMemory.isMe(sender) || !sender || sender.length > 20) continue;
+          if (GameMemory2.isMe(sender) || !sender || sender.length > 20) continue;
           const msgId = `${sender}:${msgText}`;
           if (this.processedChatIds.has(msgId)) continue;
           this.processedChatIds.add(msgId);
@@ -3099,6 +3180,33 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         if (swap.cashDemand > 0 && theirSlider) {
           this.setReactInputValue(theirSlider, swap.cashDemand);
         }
+        if (!ourSlider && !theirSlider) {
+          const buttons = Array.from(modal.querySelectorAll('button, [role="button"], span, div')).filter((el) => {
+            const t = (el.innerText || "").trim();
+            return t === "+" || t === "+10" || t === "+$10" || t.includes("+") || t.includes("add");
+          });
+          for (const btn of buttons) {
+            const rect = btn.getBoundingClientRect();
+            const center = rect.left + rect.width / 2;
+            if (swap.cashOffer > 0 && center < modalCenter) {
+              const clicks = Math.min(10, Math.max(1, Math.round(swap.cashOffer / 20)));
+              for (let c = 0; c < clicks; c++) {
+                try {
+                  btn.click();
+                } catch (_) {
+                }
+              }
+            } else if (swap.cashDemand > 0 && center >= modalCenter) {
+              const clicks = Math.min(10, Math.max(1, Math.round(swap.cashDemand / 20)));
+              for (let c = 0; c < clicks; c++) {
+                try {
+                  btn.click();
+                } catch (_) {
+                }
+              }
+            }
+          }
+        }
       } catch (err) {
         logToBot(`Cash adjust note: ${err}`);
       }
@@ -3144,13 +3252,13 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
      * property that has 3+ houses or a hotel.
      */
     isPlayerInEnemyHotelZone() {
-      const myPos = GameMemory.myPos || 0;
+      const myPos = GameMemory2.myPos || 0;
       for (let roll = 2; roll <= 12; roll++) {
         const targetTileId = (myPos + roll) % 40;
         const tile = BOARD_TILES[targetTileId];
         if (!tile || !tile.group) continue;
-        const info = GameMemory.ownership[targetTileId];
-        if (info && !GameMemory.isMe(info.owner) && info.houses >= 3 && !info.mortgaged) {
+        const info = GameMemory2.ownership[targetTileId];
+        if (info && !GameMemory2.isMe(info.owner) && info.houses >= 3 && !info.mortgaged) {
           const rent = tile.rent[info.houses] || 0;
           if (rent > 250) {
             return { inDanger: true, tile, rent, distance: roll };
@@ -3165,8 +3273,8 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
      */
     areOpponentsInStrikeZone(groupTiles) {
       const tileIds = new Set(groupTiles.map((t) => t.id));
-      for (const [pName, pData] of Object.entries(GameMemory.players)) {
-        if (GameMemory.isMe(pName) || pData.bankrupt || pData.inJail) continue;
+      for (const [pName, pData] of Object.entries(GameMemory2.players)) {
+        if (GameMemory2.isMe(pName) || pData.bankrupt || pData.inJail) continue;
         const oppPos = pData.pos || 0;
         for (const tileId of tileIds) {
           const dist = (tileId - oppPos + 40) % 40;
@@ -3178,7 +3286,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       return { oppApproaching: false };
     },
     rankHouseUpgrades(myCash) {
-      const reserve = MarkovRisk.computeDynamicReserve(GameMemory.myPos);
+      const reserve = MarkovRisk.computeDynamicReserve(GameMemory2.myPos);
       const candidates = [];
       if (myCash <= reserve) return candidates;
       if (CONFIG.AMBUSH_BUILD_ONLY) {
@@ -3189,11 +3297,11 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       }
       for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
         if (tiles[0].type !== "property") continue;
-        const { owned, total } = GameMemory.getGroupCount(groupName, "__ME__");
+        const { owned, total } = GameMemory2.getGroupCount(groupName, "__ME__");
         if (owned !== total) continue;
-        const anyMortgaged = tiles.some((t) => GameMemory.ownership[t.id]?.mortgaged);
+        const anyMortgaged = tiles.some((t) => GameMemory2.ownership[t.id]?.mortgaged);
         if (anyMortgaged) continue;
-        const houseCounts = tiles.map((t) => GameMemory.ownership[t.id]?.houses || 0);
+        const houseCounts = tiles.map((t) => GameMemory2.ownership[t.id]?.houses || 0);
         const minHouses = Math.min(...houseCounts);
         const strikeCheck = this.areOpponentsInStrikeZone(tiles);
         const isAmbushWindow = strikeCheck.oppApproaching;
@@ -3203,7 +3311,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
           continue;
         }
         for (const tile of tiles) {
-          const info = GameMemory.ownership[tile.id];
+          const info = GameMemory2.ownership[tile.id];
           if (!info || info.houses >= 5) continue;
           if (info.houses > minHouses) continue;
           const cost = tile.houseCost;
@@ -3238,9 +3346,9 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       const blockers = new Set(OpponentTracker.getCriticalBlockers().map((b) => b.tile.id));
       for (const tile of BOARD_TILES) {
         if (!tile.group) continue;
-        const info = GameMemory.ownership[tile.id];
-        if (!info || !GameMemory.isMe(info.owner) || info.mortgaged) continue;
-        const { owned, total } = GameMemory.getGroupCount(tile.group, "__ME__");
+        const info = GameMemory2.ownership[tile.id];
+        if (!info || !GameMemory2.isMe(info.owner) || info.mortgaged) continue;
+        const { owned, total } = GameMemory2.getGroupCount(tile.group, "__ME__");
         let sacrificeScore = tile.price * (1 + tile.markov * 10);
         if (owned === total) {
           sacrificeScore *= 10;
@@ -3270,6 +3378,36 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     findStrategicMortgageCandidates() {
       const targets = this.rankLiquidationTargets();
       return targets.filter((t) => t.houses === 0 && t.sacrificeScore < 300);
+    },
+    /**
+     * Identifies mortgaged properties owned by local player that can be
+     * safely unmortgaged when cash is surplus.
+     */
+    rankUnmortgageCandidates(myCash, reserve) {
+      const candidates = [];
+      for (const tile of BOARD_TILES) {
+        if (!tile.group) continue;
+        const info = GameMemory2.ownership[tile.id];
+        if (!info || !GameMemory2.isMe(info.owner) || !info.mortgaged) continue;
+        const unmortgageCost = Math.round(tile.price * 0.55);
+        if (myCash - unmortgageCost < reserve + 120) continue;
+        const { owned, total } = GameMemory2.getGroupCount(tile.group, "__ME__");
+        let priority = tile.price * (1 + tile.markov * 8);
+        if (owned === total) {
+          priority *= 12;
+        } else if (owned === total - 1) {
+          priority *= 4;
+        } else if (tile.type === "airport") {
+          priority *= 3;
+        }
+        candidates.push({
+          tile,
+          unmortgageCost,
+          priority
+        });
+      }
+      candidates.sort((a, b) => b.priority - a.priority);
+      return candidates;
     }
   };
 
@@ -3567,14 +3705,14 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
                     <div class="rubot-field-group">
                         <label class="rubot-field-label">Model Selection (Auto-Fallback Hierarchy)</label>
                         <select class="rubot-select" id="rubot-select-model">
-                            <option value="llama3.2-vision:latest" ${CONFIG.OLLAMA_MODEL === "llama3.2-vision:latest" ? "selected" : ""}>llama3.2-vision:latest (1st Priority Vision)</option>
-                            <option value="qwen2.5:7b" ${CONFIG.OLLAMA_MODEL === "qwen2.5:7b" ? "selected" : ""}>qwen2.5:7b (2nd Priority Reasoning)</option>
-                            <option value="llama3.2:3b" ${CONFIG.OLLAMA_MODEL === "llama3.2:3b" ? "selected" : ""}>llama3.2:3b (Fastest 3B)</option>
+                            <option value="qwen2.5:7b" ${CONFIG.OLLAMA_MODEL === "qwen2.5:7b" ? "selected" : ""}>qwen2.5:7b (1st Priority Logic & Math)</option>
+                            <option value="llama3.2:3b" ${CONFIG.OLLAMA_MODEL === "llama3.2:3b" ? "selected" : ""}>llama3.2:3b (2nd Priority Fast Fallback)</option>
                             <option value="llama3.1:8b" ${CONFIG.OLLAMA_MODEL === "llama3.1:8b" ? "selected" : ""}>llama3.1:8b (Deep Valuation)</option>
-                            <option value="qwen3.5:4b" ${CONFIG.OLLAMA_MODEL === "qwen3.5:4b" ? "selected" : ""}>qwen3.5:4b (Vision & Thinking)</option>
+                            <option value="qwen3.5:4b" ${CONFIG.OLLAMA_MODEL === "qwen3.5:4b" ? "selected" : ""}>qwen3.5:4b (Thinking & Reasoning)</option>
+                            <option value="llama3.2-vision:latest" ${CONFIG.OLLAMA_MODEL === "llama3.2-vision:latest" ? "selected" : ""}>llama3.2-vision:latest (Vision Capable)</option>
                             <option value="custom">Custom model...</option>
                         </select>
-                        <input type="text" class="rubot-input" id="rubot-custom-model" style="display:none; margin-top: 4px;" placeholder="Model tag (e.g. llama3.2-vision:latest)" value="${CONFIG.OLLAMA_MODEL}" />
+                        <input type="text" class="rubot-input" id="rubot-custom-model" style="display:none; margin-top: 4px;" placeholder="Model tag (e.g. qwen2.5:7b)" value="${CONFIG.OLLAMA_MODEL}" />
                     </div>
 
                     <button class="rubot-btn-test" id="rubot-btn-ping">\u26A1 Test & Connect Ollama</button>
@@ -3781,24 +3919,31 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       this.elements.btnPing.addEventListener("click", testOllama);
       document.getElementById("rubot-chk-buy").addEventListener("change", (e) => {
         CONFIG.ALWAYS_BUY_AFFORDABLE = e.target.checked;
+        localStorage.setItem("richup_cfg_buy", String(e.target.checked));
       });
       document.getElementById("rubot-chk-trade").addEventListener("change", (e) => {
         CONFIG.AUTO_TRADE_ENABLED = e.target.checked;
+        localStorage.setItem("richup_cfg_trade", String(e.target.checked));
       });
       document.getElementById("rubot-chk-build").addEventListener("change", (e) => {
         CONFIG.AUTO_BUILD_ENABLED = e.target.checked;
+        localStorage.setItem("richup_cfg_build", String(e.target.checked));
       });
       document.getElementById("rubot-chk-mortgage").addEventListener("change", (e) => {
         CONFIG.AUTO_MORTGAGE_ENABLED = e.target.checked;
+        localStorage.setItem("richup_cfg_mortgage", String(e.target.checked));
       });
       document.getElementById("rubot-chk-auction").addEventListener("change", (e) => {
         CONFIG.AUTO_AUCTION_ENABLED = e.target.checked;
+        localStorage.setItem("richup_cfg_auction", String(e.target.checked));
       });
       document.getElementById("rubot-chk-reserve").addEventListener("change", (e) => {
         CONFIG.SMART_RESERVE_ENABLED = e.target.checked;
+        localStorage.setItem("richup_cfg_reserve", String(e.target.checked));
       });
       document.getElementById("rubot-chk-chat").addEventListener("change", (e) => {
         CONFIG.CHAT_ENABLED = e.target.checked;
+        localStorage.setItem("richup_cfg_chat", String(e.target.checked));
       });
       this.initDragAndPersistence();
       window.__richupLogTerminal = (msg) => this.logTerminal(msg);
@@ -4106,9 +4251,9 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       const payBailBtn = snapshot.findExactOrIncludes(["get free for", "pay $50", "pay 50"]);
       const rollBtn = snapshot.findExactOrIncludes(["roll the dice", "roll again", "roll"]);
       if (!pardonBtn && !payBailBtn) return false;
-      GameMemory.myPos = 10;
-      GameMemory.inJail = true;
-      const decision = JailStrategy.shouldPayToLeaveJail(GameMemory.myCash);
+      GameMemory2.myPos = 10;
+      GameMemory2.inJail = true;
+      const decision = JailStrategy.shouldPayToLeaveJail(GameMemory2.myCash);
       if (decision.exit) {
         if (pardonBtn) {
           return executeOrAdvise({
@@ -4116,7 +4261,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
             title: "USE PARDON CARD",
             reason: decision.reason,
             onExecute: () => {
-              GameMemory.inJail = false;
+              GameMemory2.inJail = false;
               delayClick(pardonBtn, decision.reason);
             }
           });
@@ -4127,8 +4272,8 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
             title: "PAY $50 JAIL BAIL",
             reason: decision.reason,
             onExecute: () => {
-              if (GameMemory.myCash >= 50) GameMemory.myCash -= 50;
-              GameMemory.inJail = false;
+              if (GameMemory2.myCash >= 50) GameMemory2.myCash -= 50;
+              GameMemory2.inJail = false;
               delayClick(payBailBtn, decision.reason);
             }
           });
@@ -4158,7 +4303,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
           for (const t of BOARD_TILES) {
             if (t.group && new RegExp(`\\b${t.name}\\b`, "i").test(cText)) {
               tile = t;
-              GameMemory.myPos = t.id;
+              GameMemory2.myPos = t.id;
               break;
             }
           }
@@ -4166,20 +4311,20 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
           container = container.parentElement;
         }
       }
-      if (!tile && BOARD_TILES[GameMemory.myPos]?.group) {
-        tile = BOARD_TILES[GameMemory.myPos];
+      if (!tile && BOARD_TILES[GameMemory2.myPos]?.group) {
+        tile = BOARD_TILES[GameMemory2.myPos];
       }
       if (buyBtn) {
         const btnText = normalizeText(buyBtn);
         const priceMatch = /\$?\s*(\d{2,4})|(\d{2,4})\s*\$/.exec(btnText);
         const price = priceMatch ? parseInt(priceMatch[1] || priceMatch[2], 10) : tile?.price || 60;
-        if (GameMemory.myName && GameMemory.players[GameMemory.myName]?.cash !== void 0) {
-          const sbCash = GameMemory.players[GameMemory.myName].cash;
+        if (GameMemory2.myName && GameMemory2.players[GameMemory2.myName]?.cash !== void 0) {
+          const sbCash = GameMemory2.players[GameMemory2.myName].cash;
           if (typeof sbCash === "number") {
-            GameMemory.myCash = sbCash;
+            GameMemory2.myCash = sbCash;
           }
         }
-        const effectiveCash = Math.max(GameMemory.myCash, GameMemory.players[GameMemory.myName]?.cash || 0, price);
+        const effectiveCash = Math.max(GameMemory2.myCash, GameMemory2.players[GameMemory2.myName]?.cash || 0, price);
         const decision = MarkovRisk.shouldBuyProperty(tile, price, effectiveCash);
         if (decision.buy) {
           return executeOrAdvise({
@@ -4187,11 +4332,11 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
             title: `BUY ${tile ? tile.name.toUpperCase() : "PROPERTY"} ($${price})`,
             reason: decision.reason,
             onExecute: () => {
-              if (tile && GameMemory.ownership[tile.id]) {
-                GameMemory.ownership[tile.id].owner = GameMemory.myName || "__ME__";
+              if (tile && GameMemory2.ownership[tile.id]) {
+                GameMemory2.ownership[tile.id].owner = GameMemory2.myName || "__ME__";
               }
-              if (price > 0 && GameMemory.myCash >= price) {
-                GameMemory.myCash -= price;
+              if (price > 0 && GameMemory2.myCash >= price) {
+                GameMemory2.myCash -= price;
               }
               delayClick(buyBtn, decision.reason);
             }
@@ -4219,7 +4364,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     },
     handleAuction(snapshot) {
       if (!CONFIG.AUTO_AUCTION_ENABLED) return false;
-      const bidBtn = snapshot.findAuctionBidButton();
+      let bidBtn = snapshot.findAuctionBidButton();
       const passBtn = snapshot.findAuctionPassButton();
       if (!bidBtn && !passBtn) return false;
       const modal = document.querySelector('[role="dialog"], [class*="modal"], [class*="auction"]');
@@ -4232,11 +4377,12 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         }
       }
       if (!auctionedTile) {
-        auctionedTile = BOARD_TILES[GameMemory.myPos] || null;
+        auctionedTile = BOARD_TILES[GameMemory2.myPos] || null;
       }
       const bidMatch = /highest bid:?\s*\$?(\d+)|current bid:?\s*\$?(\d+)/i.exec(modalText);
       const currentBid = bidMatch ? parseInt(bidMatch[1] || bidMatch[2], 10) : 50;
-      const decision = AuctionSniper.evaluateAuctionStep(auctionedTile, currentBid, GameMemory.myCash);
+      const decision = AuctionSniper.evaluateAuctionStep(auctionedTile, currentBid, GameMemory2.myCash);
+      bidBtn = snapshot.findAuctionBidButton(decision.increment) || bidBtn;
       if (decision.shouldBid && bidBtn) {
         return executeOrAdvise({
           el: bidBtn,
@@ -4258,6 +4404,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     handleHouseBuilding(snapshot) {
       if (!CONFIG.AUTO_BUILD_ENABLED) return false;
       const modalUpgradeBtn = snapshot.findModalUpgradeButton();
+      const openCard = snapshot.getOpenPropertyCard ? snapshot.getOpenPropertyCard() : null;
       if (modalUpgradeBtn) {
         return executeOrAdvise({
           el: modalUpgradeBtn,
@@ -4266,20 +4413,26 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
           onExecute: () => delayClick(modalUpgradeBtn, "Clicking [\u2191] to build house")
         });
       }
-      const upgrades = HouseBuilder.rankHouseUpgrades(GameMemory.myCash);
+      if (openCard) {
+        const closeBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
+        if (closeBtn) {
+          delayClick(closeBtn, "Closing property card after build completion");
+          return true;
+        }
+      }
+      const upgrades = HouseBuilder.rankHouseUpgrades(GameMemory2.myCash);
       if (upgrades.length === 0) {
         if (CONFIG.AUTO_MORTGAGE_ENABLED) {
           for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
             if (tiles[0].type !== "property") continue;
-            const { owned, total } = GameMemory.getGroupCount(groupName, "__ME__");
+            const { owned, total } = GameMemory2.getGroupCount(groupName, "__ME__");
             if (owned === total) {
-              const houseCounts = tiles.map((t) => GameMemory.ownership[t.id]?.houses || 0);
+              const houseCounts = tiles.map((t) => GameMemory2.ownership[t.id]?.houses || 0);
               const minHouses = Math.min(...houseCounts);
               if (minHouses < 3) {
                 const candidates = DebtRecovery.findStrategicMortgageCandidates();
                 if (candidates.length > 0) {
                   const modalMortgageBtn = snapshot.findModalMortgageButton();
-                  const openCard = snapshot.getOpenPropertyCard ? snapshot.getOpenPropertyCard() : null;
                   if (modalMortgageBtn) {
                     const matchingCandidate = candidates.find((c) => openCard && c.tile.id === openCard.tile.id);
                     if (matchingCandidate || !openCard) {
@@ -4289,8 +4442,8 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
                         title: `MORTGAGE: ${tileToMortgage.name.toUpperCase()}`,
                         reason: `Mortgaging dead asset (+$${matchingCandidate ? matchingCandidate.mortgageValue : candidates[0].mortgageValue}) to fund 3-house rush on ${groupName}`,
                         onExecute: () => {
-                          if (GameMemory.ownership[tileToMortgage.id]) {
-                            GameMemory.ownership[tileToMortgage.id].mortgaged = true;
+                          if (GameMemory2.ownership[tileToMortgage.id]) {
+                            GameMemory2.ownership[tileToMortgage.id].mortgaged = true;
                           }
                           delayClick(modalMortgageBtn, `Mortgaging ${tileToMortgage.name} for strategic rush`);
                         }
@@ -4328,11 +4481,47 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       }
       return false;
     },
+    /**
+     * Autonomous Unmortgaging: Reclaims mortgaged properties when player has cash surplus
+     */
+    handleUnmortgage(snapshot) {
+      if (!CONFIG.AUTO_MORTGAGE_ENABLED || GameMemory2.myCash <= 0) return false;
+      const reserve = MarkovRisk.computeDynamicReserve(GameMemory2.myPos);
+      const candidates = DebtRecovery.rankUnmortgageCandidates(GameMemory2.myCash, reserve);
+      if (candidates.length === 0) return false;
+      const unmortgageBtn = snapshot.findModalUnmortgageButton ? snapshot.findModalUnmortgageButton() : null;
+      const openCard = snapshot.getOpenPropertyCard ? snapshot.getOpenPropertyCard() : null;
+      if (unmortgageBtn && openCard) {
+        const tileName = openCard.tile.name;
+        return executeOrAdvise({
+          el: unmortgageBtn,
+          title: `UNMORTGAGE: ${tileName.toUpperCase()}`,
+          reason: `Surplus cash ($${GameMemory2.myCash} > $${reserve + 200}). Reclaiming ${tileName} to collect full rent!`,
+          onExecute: () => {
+            if (GameMemory2.ownership[openCard.tile.id]) {
+              GameMemory2.ownership[openCard.tile.id].mortgaged = false;
+            }
+            delayClick(unmortgageBtn, `Unmortgaging ${tileName}`);
+          }
+        });
+      }
+      const target = candidates[0];
+      const sidebarProp = snapshot.findSidebarPropertyItem(target.tile.name);
+      if (sidebarProp) {
+        return executeOrAdvise({
+          el: sidebarProp,
+          title: `OPEN ${target.tile.name.toUpperCase()} TO UNMORTGAGE`,
+          reason: `Surplus funds available ($${GameMemory2.myCash}). Selecting mortgaged property to restore.`,
+          onExecute: () => delayClick(sidebarProp, `Opening ${target.tile.name} to unmortgage`)
+        });
+      }
+      return false;
+    },
     handleDebtRecovery(snapshot) {
       if (!CONFIG.AUTO_MORTGAGE_ENABLED) return false;
-      const isDebt = GameMemory.myCash < 0;
+      const isDebt = GameMemory2.myCash < 0;
       if (!isDebt) return false;
-      logToBot(`[DEBT RECOVERY] Negative balance ($${GameMemory.myCash}). Liquidating assets to survive...`);
+      logToBot(`[DEBT RECOVERY] Negative balance ($${GameMemory2.myCash}). Liquidating assets to survive...`);
       const mortgageBtn = snapshot.findModalMortgageButton();
       const sellHouseBtn = snapshot.findModalSellHouseButton();
       if (mortgageBtn) {
@@ -4341,10 +4530,10 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         return executeOrAdvise({
           el: mortgageBtn,
           title: `MORTGAGE: ${tileName.toUpperCase()}`,
-          reason: `In debt ($${GameMemory.myCash})! Mortgaging asset to clear debt immediately.`,
+          reason: `In debt ($${GameMemory2.myCash})! Mortgaging asset to clear debt immediately.`,
           onExecute: () => {
-            if (openCard && GameMemory.ownership[openCard.tile.id]) {
-              GameMemory.ownership[openCard.tile.id].mortgaged = true;
+            if (openCard && GameMemory2.ownership[openCard.tile.id]) {
+              GameMemory2.ownership[openCard.tile.id].mortgaged = true;
             }
             delayClick(mortgageBtn, `Clicking Mortgage button to clear debt`);
           }
@@ -4354,7 +4543,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         return executeOrAdvise({
           el: sellHouseBtn,
           title: "SELL HOUSE [\u2193]",
-          reason: `In debt ($${GameMemory.myCash})! Selling house to clear debt immediately.`,
+          reason: `In debt ($${GameMemory2.myCash})! Selling house to clear debt immediately.`,
           onExecute: () => delayClick(sellHouseBtn, "Clicking [\u2193] to sell house")
         });
       }
@@ -4368,7 +4557,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
             return executeOrAdvise({
               el: sidebarProp,
               title: `OPEN ${bestTarget.tile.name.toUpperCase()} TO LIQUIDATE`,
-              reason: `In debt ($${GameMemory.myCash}). Selecting lowest sacrifice asset to mortgage.`,
+              reason: `In debt ($${GameMemory2.myCash}). Selecting lowest sacrifice asset to mortgage.`,
               onExecute: () => delayClick(sidebarProp, `Opening ${bestTarget.tile.name} for debt recovery`)
             });
           }
@@ -4386,7 +4575,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
             return executeOrAdvise({
               el,
               title: `EMERGENCY LIQUIDATE: ${t.toUpperCase()}`,
-              reason: `In debt ($${GameMemory.myCash}). Emergency opening sidebar property to mortgage.`,
+              reason: `In debt ($${GameMemory2.myCash}). Emergency opening sidebar property to mortgage.`,
               onExecute: () => delayClick(el, `Emergency clicking ${t} to liquidate`)
             });
           }
@@ -4397,13 +4586,13 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     handleRollDice(snapshot) {
       const rollBtn = snapshot.findExactOrIncludes(["roll the dice", "roll again"]);
       if (rollBtn) {
-        GameMemory.isMyTurn = true;
+        GameMemory2.isMyTurn = true;
         return executeOrAdvise({
           el: rollBtn,
-          title: `ROLL THE DICE (Turn #${GameMemory.turnCount + 1})`,
-          reason: `My turn! Cash: $${GameMemory.myCash} | Pos: Tile #${GameMemory.myPos}`,
+          title: `ROLL THE DICE (Turn #${GameMemory2.turnCount + 1})`,
+          reason: `My turn! Cash: $${GameMemory2.myCash} | Pos: Tile #${GameMemory2.myPos}`,
           onExecute: () => {
-            GameMemory.turnCount++;
+            GameMemory2.turnCount++;
             delayClick(rollBtn, `Rolling dice`);
           }
         });
@@ -4414,8 +4603,8 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     async deliberateBeforeEndTurn(snapshot) {
       const endTurnBtn = snapshot.findExactOrIncludes(["end turn", "done", "continue", "ok"]);
       if (!endTurnBtn) return false;
-      if (CONFIG.DELIBERATE_BEFORE_END_TURN && CONFIG.OLLAMA_ENABLED && this.lastDeliberatedTurn !== GameMemory.turnCount) {
-        this.lastDeliberatedTurn = GameMemory.turnCount;
+      if (CONFIG.DELIBERATE_BEFORE_END_TURN && CONFIG.OLLAMA_ENABLED && this.lastDeliberatedTurn !== GameMemory2.turnCount) {
+        this.lastDeliberatedTurn = GameMemory2.turnCount;
         logToBot("[STRATEGY] Ollama turn review before ending...");
         const verdict = await OllamaClient.deliberateEndTurnStrategy();
         logToBot(`[STRATEGY] Deliberation: ${verdict.action} - ${verdict.rationale}`);
@@ -4430,7 +4619,14 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     handleEndTurn(snapshot) {
       const endTurnBtn = snapshot.findExactOrIncludes(["end turn", "done", "continue", "ok"]);
       if (endTurnBtn) {
-        GameMemory.isMyTurn = false;
+        const modalCloseBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
+        if (modalCloseBtn) {
+          try {
+            modalCloseBtn.click();
+          } catch (_) {
+          }
+        }
+        GameMemory2.isMyTurn = false;
         return executeOrAdvise({
           el: endTurnBtn,
           title: "END TURN",
@@ -4543,6 +4739,11 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         if (ActionExecutor.handleHouseBuilding(snapshot)) return;
       } catch (err) {
         logToBot(`[Build Step Warning] ${err}`);
+      }
+      try {
+        if (ActionExecutor.handleUnmortgage(snapshot)) return;
+      } catch (err) {
+        logToBot(`[Unmortgage Step Warning] ${err}`);
       }
       try {
         if (ActionExecutor.handleProactiveTrade(snapshot)) return;

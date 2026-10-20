@@ -60,6 +60,44 @@ export const DebtRecovery = {
     findStrategicMortgageCandidates() {
         const targets = this.rankLiquidationTargets();
         return targets.filter(t => t.houses === 0 && t.sacrificeScore < 300);
+    },
+
+    /**
+     * Identifies mortgaged properties owned by local player that can be
+     * safely unmortgaged when cash is surplus.
+     */
+    rankUnmortgageCandidates(myCash, reserve) {
+        const candidates = [];
+        for (const tile of BOARD_TILES) {
+            if (!tile.group) continue;
+            const info = GameMemory.ownership[tile.id];
+            if (!info || !GameMemory.isMe(info.owner) || !info.mortgaged) continue;
+
+            // In RichUp, unmortgaging costs mortgage value + 10% interest (55% of property price)
+            const unmortgageCost = Math.round(tile.price * 0.55);
+            if (myCash - unmortgageCost < reserve + 120) continue; // Must maintain safety cash buffer
+
+            const { owned, total } = GameMemory.getGroupCount(tile.group, '__ME__');
+            let priority = tile.price * (1 + tile.markov * 8);
+
+            // Top priority: unmortgaging a monopoly piece unlocks house construction!
+            if (owned === total) {
+                priority *= 12.0;
+            } else if (owned === total - 1) {
+                priority *= 4.0;
+            } else if (tile.type === 'airport') {
+                priority *= 3.0;
+            }
+
+            candidates.push({
+                tile,
+                unmortgageCost,
+                priority
+            });
+        }
+
+        candidates.sort((a, b) => b.priority - a.priority);
+        return candidates;
     }
 };
 

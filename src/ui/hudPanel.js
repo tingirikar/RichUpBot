@@ -314,14 +314,14 @@ export const HUDPanel = {
                     <div class="rubot-field-group">
                         <label class="rubot-field-label">Model Selection (Auto-Fallback Hierarchy)</label>
                         <select class="rubot-select" id="rubot-select-model">
-                            <option value="llama3.2-vision:latest" ${CONFIG.OLLAMA_MODEL === 'llama3.2-vision:latest' ? 'selected' : ''}>llama3.2-vision:latest (1st Priority Vision)</option>
-                            <option value="qwen2.5:7b" ${CONFIG.OLLAMA_MODEL === 'qwen2.5:7b' ? 'selected' : ''}>qwen2.5:7b (2nd Priority Reasoning)</option>
-                            <option value="llama3.2:3b" ${CONFIG.OLLAMA_MODEL === 'llama3.2:3b' ? 'selected' : ''}>llama3.2:3b (Fastest 3B)</option>
+                            <option value="qwen2.5:7b" ${CONFIG.OLLAMA_MODEL === 'qwen2.5:7b' ? 'selected' : ''}>qwen2.5:7b (1st Priority Logic & Math)</option>
+                            <option value="llama3.2:3b" ${CONFIG.OLLAMA_MODEL === 'llama3.2:3b' ? 'selected' : ''}>llama3.2:3b (2nd Priority Fast Fallback)</option>
                             <option value="llama3.1:8b" ${CONFIG.OLLAMA_MODEL === 'llama3.1:8b' ? 'selected' : ''}>llama3.1:8b (Deep Valuation)</option>
-                            <option value="qwen3.5:4b" ${CONFIG.OLLAMA_MODEL === 'qwen3.5:4b' ? 'selected' : ''}>qwen3.5:4b (Vision & Thinking)</option>
+                            <option value="qwen3.5:4b" ${CONFIG.OLLAMA_MODEL === 'qwen3.5:4b' ? 'selected' : ''}>qwen3.5:4b (Thinking & Reasoning)</option>
+                            <option value="llama3.2-vision:latest" ${CONFIG.OLLAMA_MODEL === 'llama3.2-vision:latest' ? 'selected' : ''}>llama3.2-vision:latest (Vision Capable)</option>
                             <option value="custom">Custom model...</option>
                         </select>
-                        <input type="text" class="rubot-input" id="rubot-custom-model" style="display:none; margin-top: 4px;" placeholder="Model tag (e.g. llama3.2-vision:latest)" value="${CONFIG.OLLAMA_MODEL}" />
+                        <input type="text" class="rubot-input" id="rubot-custom-model" style="display:none; margin-top: 4px;" placeholder="Model tag (e.g. qwen2.5:7b)" value="${CONFIG.OLLAMA_MODEL}" />
                     </div>
 
                     <button class="rubot-btn-test" id="rubot-btn-ping">⚡ Test & Connect Ollama</button>
@@ -548,14 +548,35 @@ export const HUDPanel = {
 
         this.elements.btnPing.addEventListener('click', testOllama);
 
-        // Feature Toggles listeners
-        document.getElementById('rubot-chk-buy').addEventListener('change', e => { CONFIG.ALWAYS_BUY_AFFORDABLE = e.target.checked; });
-        document.getElementById('rubot-chk-trade').addEventListener('change', e => { CONFIG.AUTO_TRADE_ENABLED = e.target.checked; });
-        document.getElementById('rubot-chk-build').addEventListener('change', e => { CONFIG.AUTO_BUILD_ENABLED = e.target.checked; });
-        document.getElementById('rubot-chk-mortgage').addEventListener('change', e => { CONFIG.AUTO_MORTGAGE_ENABLED = e.target.checked; });
-        document.getElementById('rubot-chk-auction').addEventListener('change', e => { CONFIG.AUTO_AUCTION_ENABLED = e.target.checked; });
-        document.getElementById('rubot-chk-reserve').addEventListener('change', e => { CONFIG.SMART_RESERVE_ENABLED = e.target.checked; });
-        document.getElementById('rubot-chk-chat').addEventListener('change', e => { CONFIG.CHAT_ENABLED = e.target.checked; });
+        // Feature Toggles listeners (persisted to localStorage)
+        document.getElementById('rubot-chk-buy').addEventListener('change', e => { 
+            CONFIG.ALWAYS_BUY_AFFORDABLE = e.target.checked; 
+            localStorage.setItem('richup_cfg_buy', String(e.target.checked));
+        });
+        document.getElementById('rubot-chk-trade').addEventListener('change', e => { 
+            CONFIG.AUTO_TRADE_ENABLED = e.target.checked; 
+            localStorage.setItem('richup_cfg_trade', String(e.target.checked));
+        });
+        document.getElementById('rubot-chk-build').addEventListener('change', e => { 
+            CONFIG.AUTO_BUILD_ENABLED = e.target.checked; 
+            localStorage.setItem('richup_cfg_build', String(e.target.checked));
+        });
+        document.getElementById('rubot-chk-mortgage').addEventListener('change', e => { 
+            CONFIG.AUTO_MORTGAGE_ENABLED = e.target.checked; 
+            localStorage.setItem('richup_cfg_mortgage', String(e.target.checked));
+        });
+        document.getElementById('rubot-chk-auction').addEventListener('change', e => { 
+            CONFIG.AUTO_AUCTION_ENABLED = e.target.checked; 
+            localStorage.setItem('richup_cfg_auction', String(e.target.checked));
+        });
+        document.getElementById('rubot-chk-reserve').addEventListener('change', e => { 
+            CONFIG.SMART_RESERVE_ENABLED = e.target.checked; 
+            localStorage.setItem('richup_cfg_reserve', String(e.target.checked));
+        });
+        document.getElementById('rubot-chk-chat').addEventListener('change', e => { 
+            CONFIG.CHAT_ENABLED = e.target.checked; 
+            localStorage.setItem('richup_cfg_chat', String(e.target.checked));
+        });
 
         this.initDragAndPersistence();
 

@@ -166,6 +166,29 @@ export const TradeProposalExecutor = {
             if (swap.cashDemand > 0 && theirSlider) {
                 this.setReactInputValue(theirSlider, swap.cashDemand);
             }
+
+            // Fallback for custom button steppers (+ / - or +$10)
+            if (!ourSlider && !theirSlider) {
+                const buttons = Array.from(modal.querySelectorAll('button, [role="button"], span, div')).filter(el => {
+                    const t = (el.innerText || '').trim();
+                    return t === '+' || t === '+10' || t === '+$10' || t.includes('+') || t.includes('add');
+                });
+                for (const btn of buttons) {
+                    const rect = btn.getBoundingClientRect();
+                    const center = rect.left + rect.width / 2;
+                    if (swap.cashOffer > 0 && center < modalCenter) {
+                        const clicks = Math.min(10, Math.max(1, Math.round(swap.cashOffer / 20)));
+                        for (let c = 0; c < clicks; c++) {
+                            try { btn.click(); } catch (_) {}
+                        }
+                    } else if (swap.cashDemand > 0 && center >= modalCenter) {
+                        const clicks = Math.min(10, Math.max(1, Math.round(swap.cashDemand / 20)));
+                        for (let c = 0; c < clicks; c++) {
+                            try { btn.click(); } catch (_) {}
+                        }
+                    }
+                }
+            }
         } catch (err) {
             logToBot(`Cash adjust note: ${err}`);
         }

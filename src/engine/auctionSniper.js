@@ -75,13 +75,23 @@ export const AuctionSniper = {
     evaluateAuctionStep(tile, currentBid, myCash) {
         const { maxBid, reason } = this.calculateCeilingBid(tile, myCash);
 
-        // Can we afford to increment bid by $10?
+        // Aggressive +$50 jump bid if ceiling is far above current bid and we have sufficient funds
+        if (maxBid - currentBid >= 100 && currentBid + 50 <= maxBid && currentBid + 50 <= myCash - 30) {
+            return {
+                shouldBid: true,
+                increment: 50,
+                maxBid,
+                reason: `Aggressive Jump +$50 -> $${currentBid + 50} <= Max $${maxBid} (${reason})`
+            };
+        }
+
+        // Standard +$10 bid
         if (currentBid + 10 <= maxBid && currentBid + 10 <= myCash - 30) {
             return {
                 shouldBid: true,
                 increment: 10,
                 maxBid,
-                reason: `Bidding $${currentBid + 10} <= Max $${maxBid} (${reason})`
+                reason: `Bidding +$10 -> $${currentBid + 10} <= Max $${maxBid} (${reason})`
             };
         }
 

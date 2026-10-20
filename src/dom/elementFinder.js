@@ -120,11 +120,19 @@ export function createDOMSnapshot() {
             return null;
         },
 
-        findAuctionBidButton() {
+        findAuctionBidButton(preferredIncrement = 10) {
+            if (preferredIncrement >= 50) {
+                for (const b of allButtons) {
+                    if (b.text.includes('+50') || b.text.includes('+ 50') || b.text.includes('+$50') || b.text.includes('+ $50')) {
+                        return b.el;
+                    }
+                }
+            }
             for (const b of allButtons) {
                 if (
                     b.text.includes('+$') ||
                     b.text.includes('+ $') ||
+                    b.text.includes('+10') ||
                     (b.text.includes('bid') && !b.text.includes('history'))
                 ) {
                     return b.el;
@@ -365,20 +373,25 @@ export function createDOMSnapshot() {
          */
         findModalMortgageButton() {
             const actionBtns = this.getPropertyCardActionButtons();
+            
+            // 1. If property has 0 houses / singleton, RichUp only renders 1 action button: Mortgage!
+            if (actionBtns.length === 1) {
+                return actionBtns[0];
+            }
+
             for (const btn of actionBtns) {
                 const inner = (btn.innerHTML || '').toLowerCase();
                 const text = normalizeText(btn);
                 if (
                     text.includes('mortgage') || inner.includes('mortgage') ||
                     inner.includes('trash') || inner.includes('bin') ||
-                    inner.includes('m19 7') || inner.includes('svg')
+                    inner.includes('m19 7')
                 ) {
-                    // Check if it's the 3rd button or contains mortgage/trash
-                    if (actionBtns.length >= 3 && btn === actionBtns[2]) return btn;
-                    if (text.includes('mortgage') && !text.includes('unmortgage')) return btn;
+                    if (!text.includes('unmortgage') && !inner.includes('unmortgage')) return btn;
                 }
             }
-            // RichUp position-based action: 3rd button in the 3-button action group is ALWAYS Mortgage!
+
+            // RichUp position-based action: In a 3-button action group ([↑], [↓], [🗑️]), 3rd button is Mortgage!
             if (actionBtns.length >= 3) {
                 return actionBtns[2];
             }
@@ -391,6 +404,62 @@ export function createDOMSnapshot() {
                     !text.includes('unmortgage') && !inner.includes('unmortgage')
                 ) {
                     return b.el;
+                }
+            }
+            return null;
+        },
+
+        /**
+         * Finds the Unmortgage button inside the property card popover/modal
+         */
+        findModalUnmortgageButton() {
+            const card = this.getOpenPropertyCard();
+            if (!card) return null;
+
+            const cardBtns = Array.from(card.el.querySelectorAll('button, [role="button"], [class*="button" i]')).filter(b => {
+                if (hud && hud.contains(b)) return false;
+                if (!isVisibleAndEnabled(b)) return false;
+                return true;
+            });
+
+            for (const btn of cardBtns) {
+                const text = normalizeText(btn);
+                const inner = (btn.innerHTML || '').toLowerCase();
+                if (text.includes('unmortgage') || inner.includes('unmortgage') || text.includes('un-mortgage')) {
+                    return btn;
+                }
+            }
+
+            // If tile is marked mortgaged and card is open, the action button is the unmortgage trigger
+            const tileInfo = GameMemory.ownership[card.tile.id];
+            if (tileInfo && tileInfo.mortgaged) {
+                const actionBtns = this.getPropertyCardActionButtons();
+                if (actionBtns.length > 0) return actionBtns[0];
+            }
+            return null;
+        },
+
+        /**
+         * Finds the close button ([X]) inside the open property card popover/modal
+         */
+        findModalCloseButton() {
+            const card = this.getOpenPropertyCard();
+            if (!card) return null;
+
+            const allClose = card.el.querySelectorAll('button, [role="button"], span, div');
+            for (let i = 0; i < allClose.length; i++) {
+                const el = allClose[i];
+                if (hud && hud.contains(el)) continue;
+                if (!isVisibleAndEnabled(el)) continue;
+                const txt = normalizeText(el);
+                const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+                const inner = (el.innerHTML || '').toLowerCase();
+                if (
+                    txt === 'x' || txt === '✕' || txt === '✖' || txt === 'close' ||
+                    aria.includes('close') || inner.includes('close') ||
+                    (el.tagName === 'BUTTON' && el.querySelector('svg') && el.getBoundingClientRect().width < 38)
+                ) {
+                    return el;
                 }
             }
             return null;

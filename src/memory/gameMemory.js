@@ -40,7 +40,7 @@ export const GameMemory = {
     ownership: {},
 
     // Diagnostic & tracking logs
-    processedLogs: new Set(),
+    processedLogs: new Map(),
     wsActive: false,
     wsLastMessageTime: 0,
     wsMessages: [],
@@ -49,6 +49,28 @@ export const GameMemory = {
     lastDynamicReserve: CONFIG.BASE_MIN_RESERVE,
     lastJailMode: 'AGR_EXIT',
     lastTradeVerdict: 'READY',
+
+    isLogProcessed(line, ttlMs = 8000) {
+        if (!line) return true;
+        const last = this.processedLogs.get(line);
+        if (!last) return false;
+        if (Date.now() - last > ttlMs) {
+            this.processedLogs.delete(line);
+            return false;
+        }
+        return true;
+    },
+
+    markLogProcessed(line) {
+        if (!line) return;
+        const now = Date.now();
+        this.processedLogs.set(line, now);
+        if (this.processedLogs.size > 100) {
+            for (const [k, v] of this.processedLogs.entries()) {
+                if (now - v > 20000) this.processedLogs.delete(k);
+            }
+        }
+    },
 
     isWsHealthy() {
         return Boolean(this.wsActive && (Date.now() - this.wsLastMessageTime < 15000) && this.cashVerified && this.myName);

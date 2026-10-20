@@ -569,14 +569,18 @@ function syncMyPropertiesFromSidebar() {
 }
 
 function scanActivityLogsOnly() {
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     const hud = document.getElementById('rubot-hud-panel');
+    // Prefer scoping to activity log feed container to reduce full DOM tree overhead
+    const feedContainer = document.querySelector('[class*="activity" i], [class*="feed" i], [class*="log" i], [class*="history" i]');
+    const root = feedContainer || document.body;
+
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
 
     let node = walker.nextNode();
     while (node) {
         if (!hud || !hud.contains(node.parentElement)) {
             const line = node.nodeValue ? node.nodeValue.trim() : '';
-            if (line.length > 8 && line.length < 120 && !GameMemory.processedLogs.has(line)) {
+            if (line.length > 8 && line.length < 120 && !GameMemory.isLogProcessed(line)) {
                 parseActivityLogLine(line);
             }
         }
@@ -600,7 +604,7 @@ function parseActivityLogLine(line) {
             GameMemory.players[cleanPlayer].pos = 10;
             GameMemory.players[cleanPlayer].inJail = true;
         }
-        GameMemory.processedLogs.add(line);
+        GameMemory.markLogProcessed(line);
         return;
     }
 
@@ -613,7 +617,7 @@ function parseActivityLogLine(line) {
         } else if (cleanPlayer && GameMemory.players[cleanPlayer]) {
             GameMemory.players[cleanPlayer].inJail = false;
         }
-        GameMemory.processedLogs.add(line);
+        GameMemory.markLogProcessed(line);
         return;
     }
 
@@ -623,13 +627,18 @@ function parseActivityLogLine(line) {
         const player = rollMatch[1].trim();
         const rollVal = parseInt(rollMatch[2], 10);
         if (!isNaN(rollVal) && rollVal >= 2 && rollVal <= 12) {
-            if (GameMemory.isMe(player)) {
-                GameMemory.myPos = (GameMemory.myPos + rollVal) % 40;
-            } else if (GameMemory.players[player]) {
-                GameMemory.players[player].pos = ((GameMemory.players[player].pos || 0) + rollVal) % 40;
+            // Only advance position from text logs if WebSocket is NOT active/healthy!
+            // When WebSocket is active, socketHook.js already advanced position with 0ms latency.
+            const wsHealthy = typeof GameMemory.isWsHealthy === 'function' && GameMemory.isWsHealthy();
+            if (!wsHealthy) {
+                if (GameMemory.isMe(player)) {
+                    GameMemory.myPos = (GameMemory.myPos + rollVal) % 40;
+                } else if (GameMemory.players[player]) {
+                    GameMemory.players[player].pos = ((GameMemory.players[player].pos || 0) + rollVal) % 40;
+                }
             }
         }
-        GameMemory.processedLogs.add(line);
+        GameMemory.markLogProcessed(line);
         return;
     }
 
@@ -644,7 +653,7 @@ function parseActivityLogLine(line) {
                 } else if (cleanPlayer && GameMemory.players[cleanPlayer]) {
                     GameMemory.players[cleanPlayer].pos = tile.id;
                 }
-                GameMemory.processedLogs.add(line);
+                GameMemory.markLogProcessed(line);
                 return;
             }
         }
@@ -661,7 +670,7 @@ function parseActivityLogLine(line) {
                     if (GameMemory.isMe(cleanBuyer)) {
                         GameMemory.myPos = tile.id;
                     }
-                    GameMemory.processedLogs.add(line);
+                    GameMemory.markLogProcessed(line);
                     return;
                 }
             }
@@ -679,7 +688,7 @@ function parseActivityLogLine(line) {
                     if (GameMemory.isMe(cleanBuyer)) {
                         GameMemory.myPos = tile.id;
                     }
-                    GameMemory.processedLogs.add(line);
+                    GameMemory.markLogProcessed(line);
                     return;
                 }
             }
@@ -696,7 +705,7 @@ function parseActivityLogLine(line) {
                     if (GameMemory.isMe(cleanBuyer)) {
                         GameMemory.myPos = tile.id;
                     }
-                    GameMemory.processedLogs.add(line);
+                    GameMemory.markLogProcessed(line);
                     return;
                 }
             }
@@ -713,7 +722,7 @@ function parseActivityLogLine(line) {
                 GameMemory.ownership[id].mortgaged = false;
             }
         }
-        GameMemory.processedLogs.add(line);
+        GameMemory.markLogProcessed(line);
         return;
     }
 
@@ -722,7 +731,7 @@ function parseActivityLogLine(line) {
             if (tile.group && new RegExp(`\\b${tile.name}\\b`, 'i').test(line)) {
                 if (GameMemory.ownership[tile.id]) {
                     GameMemory.ownership[tile.id].mortgaged = !line.includes('unmortgaged');
-                    GameMemory.processedLogs.add(line);
+                    GameMemory.markLogProcessed(line);
                     return;
                 }
             }
@@ -735,7 +744,7 @@ function parseActivityLogLine(line) {
                 const matchTo = /to\s+([A-Za-z0-9_-]+)/i.exec(line);
                 if (matchTo && GameMemory.ownership[tile.id]) {
                     GameMemory.ownership[tile.id].owner = matchTo[1].trim();
-                    GameMemory.processedLogs.add(line);
+                    GameMemory.markLogProcessed(line);
                     return;
                 }
             }

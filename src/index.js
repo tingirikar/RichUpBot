@@ -141,14 +141,21 @@ async function evaluateAndAct() {
             logToBot(`[Build Step Warning] ${err}`);
         }
 
-        // 8. Check for Proactive Mutual Monopoly Swaps
+        // 8. Check for Autonomous Unmortgaging (when cash is surplus)
+        try {
+            if (ActionExecutor.handleUnmortgage(snapshot)) return;
+        } catch (err) {
+            logToBot(`[Unmortgage Step Warning] ${err}`);
+        }
+
+        // 9. Check for Proactive Mutual Monopoly Swaps
         try {
             if (ActionExecutor.handleProactiveTrade(snapshot)) return;
         } catch (err) {
             logToBot(`[Proactive Trade Step Warning] ${err}`);
         }
 
-        // 9. Deliberate Strategic Review & Turn Completion (End Turn)
+        // 10. Deliberate Strategic Review & Turn Completion (End Turn)
         try {
             await ActionExecutor.deliberateBeforeEndTurn(snapshot);
         } catch (err) {
