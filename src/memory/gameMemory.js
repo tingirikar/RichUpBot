@@ -22,6 +22,24 @@ export const GameMemory = {
     turnCount: 0,
     isMyTurn: false,
     isNegativeDebt: false,
+    currentRoomId: null,
+
+    checkRoomTransition() {
+        const match = (typeof window !== 'undefined' && window.location) 
+            ? window.location.pathname.match(/\/room\/([a-zA-Z0-9_-]+)/i) 
+            : null;
+        const newRoomId = match ? match[1] : null;
+
+        if (this.currentRoomId !== newRoomId) {
+            const prevRoom = this.currentRoomId;
+            this.currentRoomId = newRoomId;
+            if (prevRoom !== null || newRoomId !== null) {
+                this.reset();
+                return true;
+            }
+        }
+        return false;
+    },
 
     // Room Settings (Sniffed from match start or DOM)
     roomSettings: {

@@ -15,40 +15,12 @@ import { TradeProposalExecutor } from '../engine/tradeProposalExecutor.js';
 export function syncBoardStateFromDOM() {
     if (!document.body) return;
 
-    const wsHealthy = typeof GameMemory.isWsHealthy === 'function' && GameMemory.isWsHealthy();
-
-    // 1. Detect Lobby Settings & Player Identity (run only if WS hasn't verified identity)
-    if (!wsHealthy || !GameMemory.myName) {
-        detectLobbySettingsAndIdentity();
+    // 0. Detect Room Navigation / Transition (e.g. exit room, join new room)
+    if (GameMemory.checkRoomTransition()) {
+        logToBot(`[ROOM SWITCH] Joined room '${GameMemory.currentRoomId || 'Lobby/Menu'}'. Cleared previous game state.`);
     }
 
-    // 2. Always verify Live Player Balances from Scoreboard List
-    detectLocalPlayerFromPlayerList();
-
-    // 3. Dynamically read exact property prices and live house badges from board tiles
-    syncBoardTilePricesAndBadgesFromDOM();
-
-    // 4. Dynamically scrape live rent table and house costs if any property card modal is open
-    syncPropertyCardModalFromDOM();
-
-    // 5. Sync Properties & House Counts from "My properties" Sidebar
-    syncMyPropertiesFromSidebar();
-
-    // 6. Visual DOM Coordinate Scraper: read pixel coordinates of floating avatar tokens (Gap 2)
-    scanPlayerTokenPositionsFromDOM();
-
-    // 7. Activity Logs: Safely parse activity log events without corrupting verified cash
-    scanActivityLogsOnly();
-}
-
-/**
- * Detects starting cash and local username in the pre-game lobby
- */
-function detectLobbySettingsAndIdentity() {
-    const hud = document.getElementById('rubot-hud-panel');
     const pageText = document.body.innerText || '';
-
-    // Only run lobby detection if the match has NOT started yet
     const isInGame = Boolean(
         pageText.includes('is playing') ||
         pageText.includes('Roll the dice') ||
@@ -56,9 +28,55 @@ function detectLobbySettingsAndIdentity() {
         pageText.includes('Game started') ||
         document.querySelector('[class*="bankrupt" i]')
     );
-    if (isInGame) return;
 
-    // 1. Starting Cash Setting: Dynamically read whatever value is selected in the dropdown ($500 - $3000+)
+    // If game has NOT started yet, run dedicated lobby synchronization & pruning
+    if (!isInGame) {
+        syncLobbyStateAndPlayers();
+        return;
+    }
+
+    // --- IN-GAME SCANNING ---
+    // 1. Always verify Live Player Balances from Scoreboard List
+    detectLocalPlayerFromPlayerList();
+
+    // 2. Dynamically read exact property prices and live house badges from board tiles
+    syncBoardTilePricesAndBadgesFromDOM();
+
+    // 3. Dynamically scrape live rent table and house costs if any property card modal is open
+    syncPropertyCardModalFromDOM();
+
+    // 4. Sync Properties & House Counts from "My properties" Sidebar
+    syncMyPropertiesFromSidebar();
+
+    // 5. Visual DOM Coordinate Scraper: read pixel coordinates of floating avatar tokens
+    scanPlayerTokenPositionsFromDOM();
+
+    // 6. Activity Logs: Safely parse activity log events without corrupting verified cash
+    scanActivityLogsOnly();
+}
+
+/**
+ * Synchronizes lobby settings and players when match has not yet started.
+ * Accurately extracts all players currently sitting in the lobby and prunes stale players from previous games.
+ */
+function syncLobbyStateAndPlayers() {
+    const hud = document.getElementById('rubot-hud-panel');
+    const pageText = document.body.innerText || '';
+
+    // 1. Reset board tile ownership & turn state in lobby
+    for (const tileId of Object.keys(GameMemory.ownership)) {
+        if (GameMemory.ownership[tileId]?.owner) {
+            GameMemory.ownership[tileId].owner = null;
+            GameMemory.ownership[tileId].houses = 0;
+            GameMemory.ownership[tileId].mortgaged = false;
+        }
+    }
+    GameMemory.myPos = 0;
+    GameMemory.inJail = false;
+    GameMemory.isMyTurn = false;
+    GameMemory.turnCount = 0;
+
+    // 2. Scan Starting Cash Setting from Lobby dropdown ($500 - $3000+)
     const startingCashRow = Array.from(document.querySelectorAll('div, li, p, section, tr')).find(el => {
         if (hud && hud.contains(el)) return false;
         const t = (el.innerText || '').toLowerCase();
@@ -67,7 +85,6 @@ function detectLobbySettingsAndIdentity() {
 
     let detectedStartCash = null;
     if (startingCashRow) {
-        // Look specifically for the selected dropdown trigger button or select box
         const trigger = startingCashRow.querySelector('button, [role="button"], [class*="select" i], [class*="dropdown" i]');
         const targetText = trigger ? trigger.innerText : startingCashRow.innerText;
         const cashMatch = /\$\s*(\d{2,5})|(\d{2,5})\s*\$/.exec(targetText);
@@ -75,22 +92,19 @@ function detectLobbySettingsAndIdentity() {
             detectedStartCash = parseInt(cashMatch[1] || cashMatch[2], 10);
         }
     }
-
     if (!detectedStartCash) {
         const fallbackMatch = /Starting cash[\s\S]*?\$(\d{2,5})/i.exec(pageText);
         if (fallbackMatch) {
             detectedStartCash = parseInt(fallbackMatch[1], 10);
         }
     }
-
     if (detectedStartCash && !isNaN(detectedStartCash) && detectedStartCash >= 100 && detectedStartCash <= 10000) {
         GameMemory.roomSettings.startingCash = detectedStartCash;
-        if (!GameMemory.cashVerified) {
-            GameMemory.myCash = detectedStartCash;
-        }
     }
+    const startCash = GameMemory.roomSettings.startingCash || 1500;
+    GameMemory.myCash = startCash;
 
-    // 2. Scan Gameplay Rules Toggles from Lobby (as shown in assets/gameplay-rules.png)
+    // 3. Scan Gameplay Rules Toggles from Lobby
     try {
         const candidateRows = Array.from(document.querySelectorAll('div, li, p, section, tr')).filter(el => {
             if (hud && hud.contains(el)) return false;
@@ -120,7 +134,6 @@ function detectLobbySettingsAndIdentity() {
             }
 
             if (text.includes("don't collect rent while in prison")) {
-                // When toggle is ON ("Don't collect rent"), collectRentInJail is FALSE
                 GameMemory.roomSettings.collectRentInJail = !isChecked;
             } else if (text.includes("auction") && text.includes("skips purchasing")) {
                 GameMemory.roomSettings.auctionsEnabled = isChecked;
@@ -132,56 +145,123 @@ function detectLobbySettingsAndIdentity() {
         }
     } catch (_) {}
 
-    if (isInGame) return;
-
-    // 2. Lobby Player Identity: In RichUp lobby, only the local player has the "Change appearance" button!
-    const allEls = Array.from(document.querySelectorAll('button, a, div, span'));
-    const changeApp = allEls.find(b => {
+    // 4. Locate Lobby Player Rows in Top-Right
+    const changeApp = Array.from(document.querySelectorAll('button, a, div, span')).find(b => {
         if (hud && hud.contains(b)) return false;
         return (b.innerText || '').trim().toLowerCase() === 'change appearance';
     });
 
+    let playerRows = [];
     if (changeApp) {
-        // Walk up parents (up to 5 levels) to find the player container, avoiding changeApp itself
         let parent = changeApp.parentElement;
-        let foundName = null;
-
         for (let depth = 0; depth < 5 && parent && parent !== document.body; depth++) {
-            const childElements = Array.from(parent.querySelectorAll('div, span, p, h1, h2, h3, h4, strong, b'));
-            for (const child of childElements) {
-                if (hud && hud.contains(child) || child.contains(changeApp)) continue;
-                const txt = (child.innerText || '').trim();
-                if (
-                    txt.length >= 2 && txt.length <= 24 &&
-                    !txt.toLowerCase().includes('change appearance') &&
-                    !txt.toLowerCase().includes('host') &&
-                    !txt.toLowerCase().includes('rules') &&
-                    !txt.includes('$') &&
-                    !txt.includes('->') &&
-                    !txt.includes('\n') &&
-                    !BOARD_LABELS_BLACKLIST.has(txt.toLowerCase())
-                ) {
-                    foundName = txt;
-                    break;
-                }
+            const children = Array.from(parent.children).filter(c => {
+                if (c.contains(changeApp)) return true;
+                const t = (c.innerText || '').trim().toLowerCase();
+                return t.length > 0 && !t.includes('game settings') && !t.includes('maximum players') && !t.includes('chat');
+            });
+            const pText = (parent.innerText || '').toLowerCase();
+            if (children.length >= 2 || (children.length >= 1 && (pText.includes('host') || children[0].contains(changeApp)))) {
+                playerRows = children;
+                break;
             }
-            if (foundName) break;
             parent = parent.parentElement;
-        }
-
-        if (foundName && (!GameMemory.myName || GameMemory.myName.toLowerCase() !== foundName.toLowerCase())) {
-            GameMemory.setMyName(foundName);
         }
     }
 
-    // Fallback: Restore from localStorage if still not set
+    if (playerRows.length === 0) {
+        const candidateContainers = document.querySelectorAll('div, ul, section');
+        for (const c of candidateContainers) {
+            if (hud && hud.contains(c)) continue;
+            const rect = c.getBoundingClientRect();
+            if (rect.left < window.innerWidth * 0.55 || rect.top > window.innerHeight * 0.45) continue;
+            if (rect.width < 90 || rect.height < 35 || rect.height > 350) continue;
+            const txt = (c.innerText || '').toLowerCase();
+            if (txt.includes('game settings') || txt.includes('maximum players')) continue;
+            if (txt.includes('host') || txt.includes('change appearance')) {
+                const kids = Array.from(c.children).filter(k => {
+                    const kt = (k.innerText || '').trim().toLowerCase();
+                    return kt.length > 0 && !kt.includes('game settings');
+                });
+                if (kids.length >= 1 && kids.length <= 8) {
+                    playerRows = kids;
+                    break;
+                }
+            }
+        }
+    }
+
+    const currentLobbyPlayers = new Set();
+
+    for (const row of playerRows) {
+        const rawText = row.innerText || '';
+        if (rawText.toLowerCase().includes('game settings')) continue;
+
+        const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
+        let detectedName = null;
+        for (const line of lines) {
+            const clean = line
+                .replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '')
+                .replace(/change appearance/gi, '')
+                .replace(/\bhost\b/gi, '')
+                .replace(/[->\]\[→←\|👑]/g, '')
+                .trim();
+            if (
+                clean.length >= 2 && clean.length <= 24 &&
+                !BOARD_LABELS_BLACKLIST.has(clean.toLowerCase()) &&
+                !clean.toLowerCase().includes('rules') &&
+                !clean.toLowerCase().includes('settings') &&
+                !clean.toLowerCase().includes('players')
+            ) {
+                detectedName = clean;
+                break;
+            }
+        }
+
+        if (!detectedName) continue;
+
+        currentLobbyPlayers.add(detectedName);
+        const isMeRow = rawText.toLowerCase().includes('change appearance') || (GameMemory.myName && detectedName.toLowerCase() === GameMemory.myName.toLowerCase());
+
+        if (isMeRow) {
+            GameMemory.setMyName(detectedName);
+            GameMemory.players[detectedName] = {
+                cash: startCash,
+                pos: 0,
+                isMe: true,
+                bankrupt: false
+            };
+        } else {
+            GameMemory.players[detectedName] = {
+                cash: startCash,
+                pos: 0,
+                isMe: false,
+                bankrupt: false
+            };
+        }
+    }
+
+    // Restore from localStorage if local name wasn't detected in rows
     if (!GameMemory.myName) {
         try {
             const saved = localStorage.getItem('richup_bot_my_name');
             if (saved && !BOARD_LABELS_BLACKLIST.has(saved.toLowerCase())) {
                 GameMemory.setMyName(saved);
+                if (!GameMemory.players[saved]) {
+                    GameMemory.players[saved] = { cash: startCash, pos: 0, isMe: true, bankrupt: false };
+                }
             }
         } catch (_) {}
+    }
+
+    // 5. CRITICAL FIX: Prune all stale players from previous match!
+    if (currentLobbyPlayers.size > 0) {
+        for (const existingName of Object.keys(GameMemory.players)) {
+            if (!currentLobbyPlayers.has(existingName)) {
+                logToBot(`[LOBBY PRUNE] Removed stale opponent '${existingName}' from previous match.`);
+                delete GameMemory.players[existingName];
+            }
+        }
     }
 }
 

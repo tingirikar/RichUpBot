@@ -102,9 +102,11 @@ function parseSocketIOFrame(raw) {
                     GameMemory.setMyName(me.name || me.username);
                 }
 
+                const validNames = new Set();
                 for (const p of playersList) {
                     const pName = p.name || p.username;
                     if (!pName) continue;
+                    validNames.add(pName);
                     const rawMoney = typeof p.money === 'number' ? p.money : 
                                      (typeof p.cash === 'number' ? p.cash : 
                                      (typeof p.balance === 'number' ? p.balance : null));
@@ -131,6 +133,23 @@ function parseSocketIOFrame(raw) {
                         }
                     }
                 }
+
+                // Prune any disconnected or stale players not in current room playersList
+                if (validNames.size > 0) {
+                    for (const existing of Object.keys(GameMemory.players)) {
+                        if (!validNames.has(existing)) {
+                            delete GameMemory.players[existing];
+                        }
+                    }
+                }
+            }
+        }
+
+        // Handle player leave/disconnect events
+        if (eventName.includes('leave') || eventName.includes('left') || eventName.includes('disconnect')) {
+            const pName = payload.playerName || payload.username || payload.name || payload.player;
+            if (pName && GameMemory.players[pName] && !GameMemory.isMe(pName)) {
+                delete GameMemory.players[pName];
             }
         }
 

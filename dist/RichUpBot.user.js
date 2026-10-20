@@ -261,6 +261,20 @@
     turnCount: 0,
     isMyTurn: false,
     isNegativeDebt: false,
+    currentRoomId: null,
+    checkRoomTransition() {
+      const match = typeof window !== "undefined" && window.location ? window.location.pathname.match(/\/room\/([a-zA-Z0-9_-]+)/i) : null;
+      const newRoomId = match ? match[1] : null;
+      if (this.currentRoomId !== newRoomId) {
+        const prevRoom = this.currentRoomId;
+        this.currentRoomId = newRoomId;
+        if (prevRoom !== null || newRoomId !== null) {
+          this.reset();
+          return true;
+        }
+      }
+      return false;
+    },
     // Room Settings (Sniffed from match start or DOM)
     roomSettings: {
       startingCash: 1500,
@@ -2829,9 +2843,16 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
   // src/dom/boardScanner.js
   function syncBoardStateFromDOM() {
     if (!document.body) return;
-    const wsHealthy = typeof GameMemory2.isWsHealthy === "function" && GameMemory2.isWsHealthy();
-    if (!wsHealthy || !GameMemory2.myName) {
-      detectLobbySettingsAndIdentity();
+    if (GameMemory2.checkRoomTransition()) {
+      logToBot(`[ROOM SWITCH] Joined room '${GameMemory2.currentRoomId || "Lobby/Menu"}'. Cleared previous game state.`);
+    }
+    const pageText = document.body.innerText || "";
+    const isInGame = Boolean(
+      pageText.includes("is playing") || pageText.includes("Roll the dice") || pageText.includes("End turn") || pageText.includes("Game started") || document.querySelector('[class*="bankrupt" i]')
+    );
+    if (!isInGame) {
+      syncLobbyStateAndPlayers();
+      return;
     }
     detectLocalPlayerFromPlayerList();
     syncBoardTilePricesAndBadgesFromDOM();
@@ -2840,13 +2861,20 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     scanPlayerTokenPositionsFromDOM();
     scanActivityLogsOnly();
   }
-  function detectLobbySettingsAndIdentity() {
+  function syncLobbyStateAndPlayers() {
     const hud = document.getElementById("rubot-hud-panel");
     const pageText = document.body.innerText || "";
-    const isInGame = Boolean(
-      pageText.includes("is playing") || pageText.includes("Roll the dice") || pageText.includes("End turn") || pageText.includes("Game started") || document.querySelector('[class*="bankrupt" i]')
-    );
-    if (isInGame) return;
+    for (const tileId of Object.keys(GameMemory2.ownership)) {
+      if (GameMemory2.ownership[tileId]?.owner) {
+        GameMemory2.ownership[tileId].owner = null;
+        GameMemory2.ownership[tileId].houses = 0;
+        GameMemory2.ownership[tileId].mortgaged = false;
+      }
+    }
+    GameMemory2.myPos = 0;
+    GameMemory2.inJail = false;
+    GameMemory2.isMyTurn = false;
+    GameMemory2.turnCount = 0;
     const startingCashRow = Array.from(document.querySelectorAll("div, li, p, section, tr")).find((el) => {
       if (hud && hud.contains(el)) return false;
       const t = (el.innerText || "").toLowerCase();
@@ -2869,10 +2897,9 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     }
     if (detectedStartCash && !isNaN(detectedStartCash) && detectedStartCash >= 100 && detectedStartCash <= 1e4) {
       GameMemory2.roomSettings.startingCash = detectedStartCash;
-      if (!GameMemory2.cashVerified) {
-        GameMemory2.myCash = detectedStartCash;
-      }
     }
+    const startCash = GameMemory2.roomSettings.startingCash || 1500;
+    GameMemory2.myCash = startCash;
     try {
       const candidateRows = Array.from(document.querySelectorAll("div, li, p, section, tr")).filter((el) => {
         if (hud && hud.contains(el)) return false;
@@ -2904,30 +2931,79 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       }
     } catch (_) {
     }
-    if (isInGame) return;
-    const allEls = Array.from(document.querySelectorAll("button, a, div, span"));
-    const changeApp = allEls.find((b) => {
+    const changeApp = Array.from(document.querySelectorAll("button, a, div, span")).find((b) => {
       if (hud && hud.contains(b)) return false;
       return (b.innerText || "").trim().toLowerCase() === "change appearance";
     });
+    let playerRows = [];
     if (changeApp) {
       let parent = changeApp.parentElement;
-      let foundName = null;
       for (let depth = 0; depth < 5 && parent && parent !== document.body; depth++) {
-        const childElements = Array.from(parent.querySelectorAll("div, span, p, h1, h2, h3, h4, strong, b"));
-        for (const child of childElements) {
-          if (hud && hud.contains(child) || child.contains(changeApp)) continue;
-          const txt = (child.innerText || "").trim();
-          if (txt.length >= 2 && txt.length <= 24 && !txt.toLowerCase().includes("change appearance") && !txt.toLowerCase().includes("host") && !txt.toLowerCase().includes("rules") && !txt.includes("$") && !txt.includes("->") && !txt.includes("\n") && !BOARD_LABELS_BLACKLIST.has(txt.toLowerCase())) {
-            foundName = txt;
+        const children = Array.from(parent.children).filter((c) => {
+          if (c.contains(changeApp)) return true;
+          const t = (c.innerText || "").trim().toLowerCase();
+          return t.length > 0 && !t.includes("game settings") && !t.includes("maximum players") && !t.includes("chat");
+        });
+        const pText = (parent.innerText || "").toLowerCase();
+        if (children.length >= 2 || children.length >= 1 && (pText.includes("host") || children[0].contains(changeApp))) {
+          playerRows = children;
+          break;
+        }
+        parent = parent.parentElement;
+      }
+    }
+    if (playerRows.length === 0) {
+      const candidateContainers = document.querySelectorAll("div, ul, section");
+      for (const c of candidateContainers) {
+        if (hud && hud.contains(c)) continue;
+        const rect = c.getBoundingClientRect();
+        if (rect.left < window.innerWidth * 0.55 || rect.top > window.innerHeight * 0.45) continue;
+        if (rect.width < 90 || rect.height < 35 || rect.height > 350) continue;
+        const txt = (c.innerText || "").toLowerCase();
+        if (txt.includes("game settings") || txt.includes("maximum players")) continue;
+        if (txt.includes("host") || txt.includes("change appearance")) {
+          const kids = Array.from(c.children).filter((k) => {
+            const kt = (k.innerText || "").trim().toLowerCase();
+            return kt.length > 0 && !kt.includes("game settings");
+          });
+          if (kids.length >= 1 && kids.length <= 8) {
+            playerRows = kids;
             break;
           }
         }
-        if (foundName) break;
-        parent = parent.parentElement;
       }
-      if (foundName && (!GameMemory2.myName || GameMemory2.myName.toLowerCase() !== foundName.toLowerCase())) {
-        GameMemory2.setMyName(foundName);
+    }
+    const currentLobbyPlayers = /* @__PURE__ */ new Set();
+    for (const row of playerRows) {
+      const rawText = row.innerText || "";
+      if (rawText.toLowerCase().includes("game settings")) continue;
+      const lines = rawText.split("\n").map((l) => l.trim()).filter(Boolean);
+      let detectedName = null;
+      for (const line of lines) {
+        const clean = line.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/change appearance/gi, "").replace(/\bhost\b/gi, "").replace(/[->\]\[→←\|👑]/g, "").trim();
+        if (clean.length >= 2 && clean.length <= 24 && !BOARD_LABELS_BLACKLIST.has(clean.toLowerCase()) && !clean.toLowerCase().includes("rules") && !clean.toLowerCase().includes("settings") && !clean.toLowerCase().includes("players")) {
+          detectedName = clean;
+          break;
+        }
+      }
+      if (!detectedName) continue;
+      currentLobbyPlayers.add(detectedName);
+      const isMeRow = rawText.toLowerCase().includes("change appearance") || GameMemory2.myName && detectedName.toLowerCase() === GameMemory2.myName.toLowerCase();
+      if (isMeRow) {
+        GameMemory2.setMyName(detectedName);
+        GameMemory2.players[detectedName] = {
+          cash: startCash,
+          pos: 0,
+          isMe: true,
+          bankrupt: false
+        };
+      } else {
+        GameMemory2.players[detectedName] = {
+          cash: startCash,
+          pos: 0,
+          isMe: false,
+          bankrupt: false
+        };
       }
     }
     if (!GameMemory2.myName) {
@@ -2935,8 +3011,19 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         const saved = localStorage.getItem("richup_bot_my_name");
         if (saved && !BOARD_LABELS_BLACKLIST.has(saved.toLowerCase())) {
           GameMemory2.setMyName(saved);
+          if (!GameMemory2.players[saved]) {
+            GameMemory2.players[saved] = { cash: startCash, pos: 0, isMe: true, bankrupt: false };
+          }
         }
       } catch (_) {
+      }
+    }
+    if (currentLobbyPlayers.size > 0) {
+      for (const existingName of Object.keys(GameMemory2.players)) {
+        if (!currentLobbyPlayers.has(existingName)) {
+          logToBot(`[LOBBY PRUNE] Removed stale opponent '${existingName}' from previous match.`);
+          delete GameMemory2.players[existingName];
+        }
       }
     }
   }
@@ -5530,9 +5617,11 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
           if (me && (me.name || me.username)) {
             GameMemory2.setMyName(me.name || me.username);
           }
+          const validNames = /* @__PURE__ */ new Set();
           for (const p of playersList) {
             const pName = p.name || p.username;
             if (!pName) continue;
+            validNames.add(pName);
             const rawMoney = typeof p.money === "number" ? p.money : typeof p.cash === "number" ? p.cash : typeof p.balance === "number" ? p.balance : null;
             const isThisPlayerMe = GameMemory2.isMe(pName) || myId && p.id === myId || Boolean(p.isMe || p.is_me);
             const playerPos = typeof p.position === "number" ? p.position : typeof p.pos === "number" ? p.pos : GameMemory2.players[pName]?.pos || 0;
@@ -5553,6 +5642,19 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
               }
             }
           }
+          if (validNames.size > 0) {
+            for (const existing of Object.keys(GameMemory2.players)) {
+              if (!validNames.has(existing)) {
+                delete GameMemory2.players[existing];
+              }
+            }
+          }
+        }
+      }
+      if (eventName.includes("leave") || eventName.includes("left") || eventName.includes("disconnect")) {
+        const pName = payload.playerName || payload.username || payload.name || payload.player;
+        if (pName && GameMemory2.players[pName] && !GameMemory2.isMe(pName)) {
+          delete GameMemory2.players[pName];
         }
       }
       if (eventName.includes("roll") || eventName.includes("dice")) {
