@@ -581,17 +581,50 @@ function syncMyPropertiesFromSidebar() {
 
 function scanActivityLogsOnly() {
     const hud = document.getElementById('rubot-hud-panel');
-    // Prefer scoping to activity log feed container to reduce full DOM tree overhead
-    const feedContainer = document.querySelector('[class*="activity" i], [class*="feed" i], [class*="log" i], [class*="history" i]');
+    const feedContainer = document.querySelector('[class*="activity" i], [class*="feed" i], [class*="log" i], [class*="history" i], [class*="chat" i]');
     const root = feedContainer || document.body;
 
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const processedLines = new Set();
 
+    // 1. Primary: Scan full paragraph, div, and row elements to get complete unbroken sentences
+    const lineElements = root.querySelectorAll('p, div, li, [class*="row" i], [class*="item" i], [class*="message" i]');
+    for (let i = 0; i < lineElements.length; i++) {
+        const el = lineElements[i];
+        if (hud && hud.contains(el)) continue;
+        if (el.children.length > 5) continue; // Skip large parent containers
+
+        const line = (el.innerText || '').replace(/\s+/g, ' ').trim();
+        if (line.length >= 6 && line.length <= 180 && !processedLines.has(line)) {
+            processedLines.add(line);
+            if (!GameMemory.isLogProcessed(line)) {
+                parseActivityLogLine(line);
+            }
+        }
+    }
+
+    // 2. Center board fallback: Any center text elements
+    const centerEls = document.querySelectorAll('main p, main div, [class*="board" i] p, [class*="board" i] div');
+    for (let i = 0; i < centerEls.length; i++) {
+        const el = centerEls[i];
+        if (hud && hud.contains(el)) continue;
+        if (el.children.length > 4) continue;
+        const line = (el.innerText || '').replace(/\s+/g, ' ').trim();
+        if (line.length >= 6 && line.length <= 180 && !processedLines.has(line)) {
+            processedLines.add(line);
+            if (!GameMemory.isLogProcessed(line)) {
+                parseActivityLogLine(line);
+            }
+        }
+    }
+
+    // 3. TreeWalker fallback for standalone text nodes
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     let node = walker.nextNode();
     while (node) {
         if (!hud || !hud.contains(node.parentElement)) {
-            const line = node.nodeValue ? node.nodeValue.trim() : '';
-            if (line.length > 8 && line.length < 120 && !GameMemory.isLogProcessed(line)) {
+            const line = node.nodeValue ? node.nodeValue.replace(/\s+/g, ' ').trim() : '';
+            if (line.length > 8 && line.length < 150 && !processedLines.has(line) && !GameMemory.isLogProcessed(line)) {
+                processedLines.add(line);
                 parseActivityLogLine(line);
             }
         }
@@ -604,6 +637,67 @@ function scanTextNodesAndActivityLogs() {
 }
 
 function parseActivityLogLine(line) {
+    // 0. Trade Creation & Activity Watch (Market Dynamics)
+    if (/created a trade with/i.test(line)) {
+        const parts = line.split(/created a trade with/i);
+        const p1 = parts[0].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim();
+        const p2 = parts[1].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim();
+        logToBot(`[TRADE INTEL] Negotiation initiated: ${p1} ↔️ ${p2}`);
+        GameMemory.markLogProcessed(line);
+        return;
+    }
+
+    if (/is looking at a trade/i.test(line)) {
+        const p = line.split(/is looking at a trade/i)[0].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim();
+        logToBot(`[TRADE INTEL] ${p} is reviewing trade proposal...`);
+        GameMemory.markLogProcessed(line);
+        return;
+    }
+
+    if (/declined trade/i.test(line)) {
+        logToBot(`[TRADE INTEL] Trade declined: ${line}`);
+        GameMemory.markLogProcessed(line);
+        return;
+    }
+
+    if (/traded/i.test(line) || /accepted trade/i.test(line)) {
+        logToBot(`[TRADE INTEL] Deal executed: ${line}`);
+        GameMemory.markLogProcessed(line);
+        return;
+    }
+
+    // Rent / Cash transfers
+    const payMatch = /(.+?)\s+paid\s+\$?(\d+)\s+to\s+(.+)/i.exec(line);
+    if (payMatch) {
+        const payer = payMatch[1].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim();
+        const amount = parseInt(payMatch[2], 10);
+        const recipient = payMatch[3].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim();
+        if (GameMemory.players[payer] && typeof GameMemory.players[payer].cash === 'number') {
+            GameMemory.players[payer].cash -= amount;
+        }
+        if (GameMemory.players[recipient] && typeof GameMemory.players[recipient].cash === 'number') {
+            GameMemory.players[recipient].cash += amount;
+        }
+        logToBot(`[CASH FLOW] ${payer} paid $${amount} to ${recipient}`);
+        GameMemory.markLogProcessed(line);
+        return;
+    }
+
+    // Auction wins
+    if (/won.*in auction|bought.*in auction/i.test(line)) {
+        for (const tile of BOARD_TILES) {
+            if (tile.group && new RegExp(`\\b${tile.name}\\b`, 'i').test(line)) {
+                const buyerPart = line.split(/won|bought/i)[0].trim();
+                const cleanBuyer = buyerPart.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim();
+                if (cleanBuyer && GameMemory.ownership[tile.id]) {
+                    GameMemory.ownership[tile.id].owner = cleanBuyer;
+                    logToBot(`[MARKET INTEL] ${cleanBuyer} won ${tile.name} at auction!`);
+                    GameMemory.markLogProcessed(line);
+                    return;
+                }
+            }
+        }
+    }
     // 1. In Prison / Go to Prison events
     if (/got into prison|went to prison|sent to prison/i.test(line)) {
         const playerPart = line.split(/got into prison|went to prison|sent to prison/i)[0].trim();
@@ -710,11 +804,14 @@ function parseActivityLogLine(line) {
         for (const tile of BOARD_TILES) {
             if (tile.group && new RegExp(`\\b${tile.name}\\b`, 'i').test(line)) {
                 const buyerPart = line.split(/bought/i)[0].trim();
-                const cleanBuyer = buyerPart.replace(/[^\w\s-]/g, '').trim();
+                const cleanBuyer = buyerPart.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim();
                 if (cleanBuyer && GameMemory.ownership[tile.id]) {
                     GameMemory.ownership[tile.id].owner = cleanBuyer;
                     if (GameMemory.isMe(cleanBuyer)) {
                         GameMemory.myPos = tile.id;
+                    } else {
+                        GameMemory.players[cleanBuyer] = GameMemory.players[cleanBuyer] || { name: cleanBuyer, cash: 1500, pos: 0, isMe: false };
+                        logToBot(`[MARKET INTEL] ${cleanBuyer} bought ${tile.name} (${tile.group})`);
                     }
                     GameMemory.markLogProcessed(line);
                     return;

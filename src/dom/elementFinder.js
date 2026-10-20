@@ -554,14 +554,17 @@ export function createDOMSnapshot() {
                     if ((column === 'theirs' || column === 'right') && elCenter < modalCenter) continue;
                 }
 
-                const text = normalizeText(el);
+                const rawText = normalizeText(el);
+                const cleanText = rawText.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, ' ').replace(/\s+/g, ' ').trim();
                 if (
-                    text === lowerName || 
-                    text.startsWith(lowerName) || 
-                    text.endsWith(lowerName) ||
-                    (text.includes(lowerName) && text.length < lowerName.length + 35)
+                    cleanText === lowerName || 
+                    cleanText.startsWith(lowerName) || 
+                    cleanText.endsWith(lowerName) ||
+                    rawText.includes(lowerName) ||
+                    (cleanText.includes(lowerName) && cleanText.length < lowerName.length + 35)
                 ) {
-                    return el;
+                    const clickable = el.closest('button, [role="button"], li, div[class*="card" i], div[class*="property" i]') || el;
+                    return clickable;
                 }
             }
             return null;

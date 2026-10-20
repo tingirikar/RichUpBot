@@ -418,7 +418,10 @@ export const HUDPanel = {
                     <div class="rubot-log-page">
                         <div class="rubot-log-toolbar">
                             <span class="rubot-log-title">Live Action Stream</span>
-                            <button class="rubot-btn-clear" id="rubot-btn-clear-log">Clear</button>
+                            <div style="display:flex;gap:5px;">
+                                <button class="rubot-btn-clear" id="rubot-btn-copy-log">Copy</button>
+                                <button class="rubot-btn-clear" id="rubot-btn-clear-log">Clear</button>
+                            </div>
                         </div>
                         <div class="rubot-terminal" id="rubot-terminal"></div>
                     </div>
@@ -503,6 +506,36 @@ export const HUDPanel = {
         document.getElementById('rubot-btn-clear-log').addEventListener('click', () => {
             if (this.elements.terminal) this.elements.terminal.innerHTML = '';
         });
+
+        // Copy Log to Clipboard
+        const copyBtn = document.getElementById('rubot-btn-copy-log');
+        if (copyBtn) {
+            copyBtn.addEventListener('click', async () => {
+                const term = this.elements.terminal;
+                if (!term) return;
+                const lineEls = Array.from(term.querySelectorAll('.log-line'));
+                const text = lineEls.reverse().map(l => l.innerText).join('\n') || term.innerText;
+                try {
+                    await navigator.clipboard.writeText(text);
+                } catch (_) {
+                    const ta = document.createElement('textarea');
+                    ta.value = text;
+                    document.body.appendChild(ta);
+                    ta.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(ta);
+                }
+                const oldText = copyBtn.innerText;
+                copyBtn.innerText = 'Copied!';
+                copyBtn.style.color = '#34d399';
+                copyBtn.style.borderColor = 'rgba(52,211,153,0.5)';
+                setTimeout(() => {
+                    copyBtn.innerText = oldText;
+                    copyBtn.style.color = '';
+                    copyBtn.style.borderColor = '';
+                }, 1500);
+            });
+        }
 
         // Ollama Settings
         this.elements.hostInput.addEventListener('change', (e) => {

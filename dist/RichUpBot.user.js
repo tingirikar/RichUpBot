@@ -955,9 +955,11 @@
             if ((column === "mine" || column === "left") && elCenter > modalCenter) continue;
             if ((column === "theirs" || column === "right") && elCenter < modalCenter) continue;
           }
-          const text = normalizeText(el);
-          if (text === lowerName || text.startsWith(lowerName) || text.endsWith(lowerName) || text.includes(lowerName) && text.length < lowerName.length + 35) {
-            return el;
+          const rawText = normalizeText(el);
+          const cleanText = rawText.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, " ").replace(/\s+/g, " ").trim();
+          if (cleanText === lowerName || cleanText.startsWith(lowerName) || cleanText.endsWith(lowerName) || rawText.includes(lowerName) || cleanText.includes(lowerName) && cleanText.length < lowerName.length + 35) {
+            const clickable = el.closest('button, [role="button"], li, div[class*="card" i], div[class*="property" i]') || el;
+            return clickable;
           }
         }
         return null;
@@ -1410,14 +1412,42 @@
   }
   function scanActivityLogsOnly() {
     const hud = document.getElementById("rubot-hud-panel");
-    const feedContainer = document.querySelector('[class*="activity" i], [class*="feed" i], [class*="log" i], [class*="history" i]');
+    const feedContainer = document.querySelector('[class*="activity" i], [class*="feed" i], [class*="log" i], [class*="history" i], [class*="chat" i]');
     const root = feedContainer || document.body;
+    const processedLines = /* @__PURE__ */ new Set();
+    const lineElements = root.querySelectorAll('p, div, li, [class*="row" i], [class*="item" i], [class*="message" i]');
+    for (let i = 0; i < lineElements.length; i++) {
+      const el = lineElements[i];
+      if (hud && hud.contains(el)) continue;
+      if (el.children.length > 5) continue;
+      const line = (el.innerText || "").replace(/\s+/g, " ").trim();
+      if (line.length >= 6 && line.length <= 180 && !processedLines.has(line)) {
+        processedLines.add(line);
+        if (!GameMemory2.isLogProcessed(line)) {
+          parseActivityLogLine(line);
+        }
+      }
+    }
+    const centerEls = document.querySelectorAll('main p, main div, [class*="board" i] p, [class*="board" i] div');
+    for (let i = 0; i < centerEls.length; i++) {
+      const el = centerEls[i];
+      if (hud && hud.contains(el)) continue;
+      if (el.children.length > 4) continue;
+      const line = (el.innerText || "").replace(/\s+/g, " ").trim();
+      if (line.length >= 6 && line.length <= 180 && !processedLines.has(line)) {
+        processedLines.add(line);
+        if (!GameMemory2.isLogProcessed(line)) {
+          parseActivityLogLine(line);
+        }
+      }
+    }
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     let node = walker.nextNode();
     while (node) {
       if (!hud || !hud.contains(node.parentElement)) {
-        const line = node.nodeValue ? node.nodeValue.trim() : "";
-        if (line.length > 8 && line.length < 120 && !GameMemory2.isLogProcessed(line)) {
+        const line = node.nodeValue ? node.nodeValue.replace(/\s+/g, " ").trim() : "";
+        if (line.length > 8 && line.length < 150 && !processedLines.has(line) && !GameMemory2.isLogProcessed(line)) {
+          processedLines.add(line);
           parseActivityLogLine(line);
         }
       }
@@ -1425,6 +1455,59 @@
     }
   }
   function parseActivityLogLine(line) {
+    if (/created a trade with/i.test(line)) {
+      const parts = line.split(/created a trade with/i);
+      const p1 = parts[0].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, "").trim();
+      const p2 = parts[1].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, "").trim();
+      logToBot(`[TRADE INTEL] Negotiation initiated: ${p1} \u2194\uFE0F ${p2}`);
+      GameMemory2.markLogProcessed(line);
+      return;
+    }
+    if (/is looking at a trade/i.test(line)) {
+      const p = line.split(/is looking at a trade/i)[0].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, "").trim();
+      logToBot(`[TRADE INTEL] ${p} is reviewing trade proposal...`);
+      GameMemory2.markLogProcessed(line);
+      return;
+    }
+    if (/declined trade/i.test(line)) {
+      logToBot(`[TRADE INTEL] Trade declined: ${line}`);
+      GameMemory2.markLogProcessed(line);
+      return;
+    }
+    if (/traded/i.test(line) || /accepted trade/i.test(line)) {
+      logToBot(`[TRADE INTEL] Deal executed: ${line}`);
+      GameMemory2.markLogProcessed(line);
+      return;
+    }
+    const payMatch = /(.+?)\s+paid\s+\$?(\d+)\s+to\s+(.+)/i.exec(line);
+    if (payMatch) {
+      const payer = payMatch[1].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, "").trim();
+      const amount = parseInt(payMatch[2], 10);
+      const recipient = payMatch[3].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, "").trim();
+      if (GameMemory2.players[payer] && typeof GameMemory2.players[payer].cash === "number") {
+        GameMemory2.players[payer].cash -= amount;
+      }
+      if (GameMemory2.players[recipient] && typeof GameMemory2.players[recipient].cash === "number") {
+        GameMemory2.players[recipient].cash += amount;
+      }
+      logToBot(`[CASH FLOW] ${payer} paid $${amount} to ${recipient}`);
+      GameMemory2.markLogProcessed(line);
+      return;
+    }
+    if (/won.*in auction|bought.*in auction/i.test(line)) {
+      for (const tile of BOARD_TILES) {
+        if (tile.group && new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
+          const buyerPart = line.split(/won|bought/i)[0].trim();
+          const cleanBuyer = buyerPart.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, "").trim();
+          if (cleanBuyer && GameMemory2.ownership[tile.id]) {
+            GameMemory2.ownership[tile.id].owner = cleanBuyer;
+            logToBot(`[MARKET INTEL] ${cleanBuyer} won ${tile.name} at auction!`);
+            GameMemory2.markLogProcessed(line);
+            return;
+          }
+        }
+      }
+    }
     if (/got into prison|went to prison|sent to prison/i.test(line)) {
       const playerPart = line.split(/got into prison|went to prison|sent to prison/i)[0].trim();
       const cleanPlayer = playerPart.replace(/[^\w\s-]/g, "").trim();
@@ -1519,11 +1602,14 @@
       for (const tile of BOARD_TILES) {
         if (tile.group && new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
           const buyerPart = line.split(/bought/i)[0].trim();
-          const cleanBuyer = buyerPart.replace(/[^\w\s-]/g, "").trim();
+          const cleanBuyer = buyerPart.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, "").trim();
           if (cleanBuyer && GameMemory2.ownership[tile.id]) {
             GameMemory2.ownership[tile.id].owner = cleanBuyer;
             if (GameMemory2.isMe(cleanBuyer)) {
               GameMemory2.myPos = tile.id;
+            } else {
+              GameMemory2.players[cleanBuyer] = GameMemory2.players[cleanBuyer] || { name: cleanBuyer, cash: 1500, pos: 0, isMe: false };
+              logToBot(`[MARKET INTEL] ${cleanBuyer} bought ${tile.name} (${tile.group})`);
             }
             GameMemory2.markLogProcessed(line);
             return;
@@ -2495,26 +2581,27 @@
         if (opportunities.some((o) => o.targetOwner === targetOppName && o.myReceivedTile.id === need.wantedTile.id)) continue;
         const sacrificeTile = safeSacrifices.find((s) => s.id !== need.myTile.id) || null;
         if (sacrificeTile) {
-          const cashOffer = Math.min(Math.max(0, GameMemory2.myCash - 200), Math.round(need.wantedTile.price * 0.3));
+          const cashOffer = Math.min(Math.max(0, GameMemory2.myCash - 150), Math.max(20, Math.round(need.wantedTile.price * 0.25)));
+          const cashLabel = cashOffer > 0 ? ` + $${cashOffer}` : "";
           opportunities.push({
             targetOwner: targetOppName,
             myGivenTile: sacrificeTile,
             myReceivedTile: need.wantedTile,
             cashOffer: Math.max(0, cashOffer),
             cashDemand: 0,
-            summary: `SET CONSOLIDATION: Give ${sacrificeTile.name} -> Get ${need.wantedTile.name}`,
-            pitch: `@${targetOppName} Let's trade: I'll give you ${sacrificeTile.name} for your ${need.wantedTile.name}!`
+            summary: `SET CONSOLIDATION: Give ${sacrificeTile.name}${cashLabel} -> Get ${need.wantedTile.name}`,
+            pitch: cashOffer > 0 ? `@${targetOppName} I'll trade you ${sacrificeTile.name} + $${cashOffer} cash for ${need.wantedTile.name}!` : `@${targetOppName} Let's swap: I'll give you ${sacrificeTile.name} for your ${need.wantedTile.name}!`
           });
-        } else if (GameMemory2.myCash >= need.wantedTile.price + 200) {
-          const cashOffer = Math.min(GameMemory2.myCash - 150, Math.round(need.wantedTile.price * 1.5));
+        } else if (GameMemory2.myCash >= need.wantedTile.price + 100) {
+          const cashOffer = Math.min(GameMemory2.myCash - 80, Math.round(need.wantedTile.price * 1.4));
           opportunities.push({
             targetOwner: targetOppName,
             myGivenTile: null,
             myReceivedTile: need.wantedTile,
-            cashOffer: Math.max(80, cashOffer),
+            cashOffer: Math.max(70, cashOffer),
             cashDemand: 0,
             summary: `CASH ACQUISITION: Offer $${cashOffer} -> Get ${need.wantedTile.name}`,
-            pitch: `@${targetOppName} Offering $${cashOffer} cash for your ${need.wantedTile.name}!`
+            pitch: `@${targetOppName} Offering $${cashOffer} cash right now for your ${need.wantedTile.name}!`
           });
         }
       }
@@ -3021,7 +3108,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
           if (this.processedChatIds.has(msgId)) continue;
           this.processedChatIds.add(msgId);
           this.lastRepliedTime = now;
-          logToBot(`[CHAT DETECTED] ${sender}: "${msgText}". Engaging with AI reply...`);
+          logToBot2(`[CHAT DETECTED] ${sender}: "${msgText}". Engaging with AI reply...`);
           const reply = await OllamaClient.generateChatResponse(sender, msgText);
           if (reply) {
             this.sendChatMessage(null, reply);
@@ -3049,7 +3136,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       if (!input) return false;
       this.lastSentTime = now;
       this.lastSentText = message;
-      logToBot(`[CHAT SEND] "${message}"`);
+      logToBot2(`[CHAT SEND] "${message}"`);
       setTimeout(() => {
         try {
           input.focus();
@@ -3073,7 +3160,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
             }
           }, 90);
         } catch (err) {
-          logToBot(`Chat error: ${err}`);
+          logToBot2(`Chat error: ${err}`);
         }
       }, 320);
       return true;
@@ -3102,11 +3189,11 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     async executeProposal(swap, onComplete) {
       if (this.isExecuting) return;
       this.isExecuting = true;
-      logToBot(`[TRADE CREATOR] Starting automated proposal for ${swap.targetOwner}...`);
+      logToBot2(`[TRADE CREATOR] Starting automated proposal for ${swap.targetOwner}...`);
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       const safetyTimer = setTimeout(() => {
         if (this.isExecuting) {
-          logToBot("[TRADE CREATOR] Safety timeout triggered. Closing modal and resetting lock.");
+          logToBot2("[TRADE CREATOR] Safety timeout triggered. Closing modal and resetting lock.");
           this.closeTradeModal();
           this.isExecuting = false;
           if (onComplete) onComplete(false);
@@ -3116,7 +3203,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         const snap1 = createDOMSnapshot();
         const createBtn = snap1.findCreateTradeButton();
         if (!createBtn) {
-          logToBot("[TRADE CREATOR] Could not find [+ Create] trade button.");
+          logToBot2("[TRADE CREATOR] Could not find [+ Create] trade button.");
           return;
         }
         createBtn.click();
@@ -3129,7 +3216,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
           await sleep(350);
         }
         if (!playerBtn) {
-          logToBot(`[TRADE CREATOR] Could not find player button for "${swap.targetOwner}".`);
+          logToBot2(`[TRADE CREATOR] Could not find player button for "${swap.targetOwner}".`);
           this.closeTradeModal();
           return;
         }
@@ -3140,10 +3227,10 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
           const myPropCard = snap3.findTradePropertyCard(swap.myGivenTile.name, "mine");
           if (myPropCard) {
             myPropCard.click();
-            logToBot(`[TRADE CREATOR] Selected offer property: ${swap.myGivenTile.name}`);
+            logToBot2(`[TRADE CREATOR] Selected offer property: ${swap.myGivenTile.name}`);
             await sleep(400);
           } else {
-            logToBot(`[TRADE CREATOR] Could not find offer property: ${swap.myGivenTile.name}`);
+            logToBot2(`[TRADE CREATOR] Could not find offer property: ${swap.myGivenTile.name}`);
           }
         }
         const snap4 = createDOMSnapshot();
@@ -3151,10 +3238,10 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
           const theirPropCard = snap4.findTradePropertyCard(swap.myReceivedTile.name, "theirs");
           if (theirPropCard) {
             theirPropCard.click();
-            logToBot(`[TRADE CREATOR] Selected request property: ${swap.myReceivedTile.name}`);
+            logToBot2(`[TRADE CREATOR] Selected request property: ${swap.myReceivedTile.name}`);
             await sleep(400);
           } else {
-            logToBot(`[TRADE CREATOR] Could not find request property: ${swap.myReceivedTile.name}`);
+            logToBot2(`[TRADE CREATOR] Could not find request property: ${swap.myReceivedTile.name}`);
           }
         }
         this.adjustCashInTradeModal(swap);
@@ -3163,18 +3250,18 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         const sendBtn = snap5.findSendTradeButton();
         if (sendBtn) {
           sendBtn.click();
-          logToBot(`[TRADE CREATOR] Trade proposal sent to ${swap.targetOwner}!`);
+          logToBot2(`[TRADE CREATOR] Trade proposal sent to ${swap.targetOwner}!`);
           this.lastProposedTimes.set(swap.targetOwner, Date.now());
           await sleep(600);
           ChatEngine.sendChatMessage("tradeOffer", swap.pitch);
           if (onComplete) onComplete(true);
         } else {
-          logToBot("[TRADE CREATOR] Could not find [Send trade] button.");
+          logToBot2("[TRADE CREATOR] Could not find [Send trade] button.");
           this.closeTradeModal();
           if (onComplete) onComplete(false);
         }
       } catch (err) {
-        logToBot(`[TRADE CREATOR Error] ${err}`);
+        logToBot2(`[TRADE CREATOR Error] ${err}`);
         this.closeTradeModal();
         if (onComplete) onComplete(false);
       } finally {
@@ -3231,7 +3318,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
           }
         }
       } catch (err) {
-        logToBot(`Cash adjust note: ${err}`);
+        logToBot2(`Cash adjust note: ${err}`);
       }
     },
     setReactInputValue(input, val) {
@@ -3738,7 +3825,10 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
                     <div class="rubot-log-page">
                         <div class="rubot-log-toolbar">
                             <span class="rubot-log-title">Live Action Stream</span>
-                            <button class="rubot-btn-clear" id="rubot-btn-clear-log">Clear</button>
+                            <div style="display:flex;gap:5px;">
+                                <button class="rubot-btn-clear" id="rubot-btn-copy-log">Copy</button>
+                                <button class="rubot-btn-clear" id="rubot-btn-clear-log">Clear</button>
+                            </div>
                         </div>
                         <div class="rubot-terminal" id="rubot-terminal"></div>
                     </div>
@@ -3808,6 +3898,34 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       document.getElementById("rubot-btn-clear-log").addEventListener("click", () => {
         if (this.elements.terminal) this.elements.terminal.innerHTML = "";
       });
+      const copyBtn = document.getElementById("rubot-btn-copy-log");
+      if (copyBtn) {
+        copyBtn.addEventListener("click", async () => {
+          const term = this.elements.terminal;
+          if (!term) return;
+          const lineEls = Array.from(term.querySelectorAll(".log-line"));
+          const text = lineEls.reverse().map((l) => l.innerText).join("\n") || term.innerText;
+          try {
+            await navigator.clipboard.writeText(text);
+          } catch (_) {
+            const ta = document.createElement("textarea");
+            ta.value = text;
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand("copy");
+            document.body.removeChild(ta);
+          }
+          const oldText = copyBtn.innerText;
+          copyBtn.innerText = "Copied!";
+          copyBtn.style.color = "#34d399";
+          copyBtn.style.borderColor = "rgba(52,211,153,0.5)";
+          setTimeout(() => {
+            copyBtn.innerText = oldText;
+            copyBtn.style.color = "";
+            copyBtn.style.borderColor = "";
+          }, 1500);
+        });
+      }
       this.elements.hostInput.addEventListener("change", (e) => {
         CONFIG.OLLAMA_HOST = e.target.value.trim();
         localStorage.setItem("richup_ollama_host", CONFIG.OLLAMA_HOST);
@@ -4007,7 +4125,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
   function getIsActing() {
     return isActing;
   }
-  function logToBot(msg) {
+  function logToBot2(msg) {
     console.log(`[RichUp AI] ${(/* @__PURE__ */ new Date()).toISOString()} - ${msg}`);
     if (window.__richupLogTerminal) {
       window.__richupLogTerminal(msg);
@@ -4017,7 +4135,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     if (!el || isActing) return false;
     isActing = true;
     const delay = Math.floor(Math.random() * (CONFIG.ACTION_DELAY_MAX - CONFIG.ACTION_DELAY_MIN + 1)) + CONFIG.ACTION_DELAY_MIN;
-    logToBot(`[ACTION] ${reason} (in ${delay}ms)`);
+    logToBot2(`[ACTION] ${reason} (in ${delay}ms)`);
     setTimeout(() => {
       try {
         if (typeof el.scrollIntoView === "function") {
@@ -4033,7 +4151,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         }
         el.click();
       } catch (err) {
-        logToBot(`Click error: ${err}`);
+        logToBot2(`Click error: ${err}`);
       } finally {
         setTimeout(() => {
           isActing = false;
@@ -4058,7 +4176,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         },
         () => {
           HUDPanel.hideAdvisorBox();
-          logToBot(`[ADVISOR] Action skipped by user.`);
+          logToBot2(`[ADVISOR] Action skipped by user.`);
           if (onSkip) onSkip();
         }
       );
@@ -4075,7 +4193,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       const declineBtn = snapshot.findTradeDeclineButton();
       const negotiateBtn = snapshot.findTradeNegotiateButton();
       if (!confirmBtn && !declineBtn && sidebarTrade) {
-        logToBot("[TRADE] Incoming trade row detected in sidebar. Opening trade modal...");
+        logToBot2("[TRADE] Incoming trade row detected in sidebar. Opening trade modal...");
         delayClick(sidebarTrade, "Open incoming trade from sidebar");
         return true;
       }
@@ -4101,9 +4219,9 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       isEvaluatingTrade = true;
       processedTradeSignatures.set(sig, now);
       try {
-        logToBot("[TRADE] Evaluating incoming trade with Hybrid Brain...");
+        logToBot2("[TRADE] Evaluating incoming trade with Hybrid Brain...");
         const verdict = await OllamaClient.evaluateTradeWithLLM(tradeData);
-        logToBot(`Trade Verdict: ${verdict.reason}`);
+        logToBot2(`Trade Verdict: ${verdict.reason}`);
         if (verdict.negotiate && negotiateBtn) {
           return executeOrAdvise({
             el: negotiateBtn,
@@ -4135,7 +4253,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
               if (verdict.chatReply) ChatEngine.sendChatMessage("tradeReject", verdict.chatReply);
               delayClick(declineBtn, `Declining trade (${verdict.reason})`);
               if (verdict.counterSwap && CONFIG.AUTO_TRADE_ENABLED) {
-                logToBot(`[COUNTER TRADE] Scheduling counter-proposal for ${verdict.counterSwap.targetOwner}...`);
+                logToBot2(`[COUNTER TRADE] Scheduling counter-proposal for ${verdict.counterSwap.targetOwner}...`);
                 setTimeout(() => {
                   if (!TradeProposalExecutor.isExecuting) {
                     TradeProposalExecutor.executeProposal(verdict.counterSwap);
@@ -4209,7 +4327,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
           });
         }
       } else {
-        logToBot(`Jail: Staying safe in cell (${decision.reason})`);
+        logToBot2(`Jail: Staying safe in cell (${decision.reason})`);
       }
       if (rollBtn) {
         return executeOrAdvise({
@@ -4458,7 +4576,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       if (!CONFIG.AUTO_MORTGAGE_ENABLED) return false;
       const isDebt = GameMemory2.myCash < 0 || GameMemory2.isNegativeDebt;
       if (!isDebt) return false;
-      logToBot(`[DEBT RECOVERY] Negative balance ($${GameMemory2.myCash}). Liquidating assets to survive...`);
+      logToBot2(`[DEBT RECOVERY] Negative balance ($${GameMemory2.myCash}). Liquidating assets to survive...`);
       const openCard = snapshot.getOpenPropertyCard ? snapshot.getOpenPropertyCard() : null;
       if (openCard && GameMemory2.ownership[openCard.tile.id]?.mortgaged) {
         const targets2 = DebtRecovery.rankLiquidationTargets();
@@ -4551,9 +4669,9 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       }
       if (CONFIG.DELIBERATE_BEFORE_END_TURN && CONFIG.OLLAMA_ENABLED && this.lastDeliberatedTurn !== GameMemory2.turnCount) {
         this.lastDeliberatedTurn = GameMemory2.turnCount;
-        logToBot("[STRATEGY] Ollama turn review before ending...");
+        logToBot2("[STRATEGY] Ollama turn review before ending...");
         const verdict = await OllamaClient.deliberateEndTurnStrategy();
-        logToBot(`[STRATEGY] Deliberation: ${verdict.action} - ${verdict.rationale}`);
+        logToBot2(`[STRATEGY] Deliberation: ${verdict.action} - ${verdict.rationale}`);
         if (verdict.action === "UPGRADE") {
           if (this.handleHouseBuilding(snapshot)) {
             return true;
@@ -4642,81 +4760,81 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       try {
         syncBoardStateFromDOM();
       } catch (err) {
-        logToBot(`[DOM Sync Warning] ${err}`);
+        logToBot2(`[DOM Sync Warning] ${err}`);
       }
       try {
         HUDPanel.updateTelemetry();
       } catch (err) {
-        logToBot(`[Telemetry Warning] ${err}`);
+        logToBot2(`[Telemetry Warning] ${err}`);
       }
       try {
         await ChatEngine.scanAndRespondToOpponentChat();
       } catch (err) {
-        logToBot(`[Chat Scan Warning] ${err}`);
+        logToBot2(`[Chat Scan Warning] ${err}`);
       }
       let snapshot;
       try {
         snapshot = createDOMSnapshot();
       } catch (err) {
-        logToBot(`[DOM Snapshot Error] ${err}`);
+        logToBot2(`[DOM Snapshot Error] ${err}`);
         return;
       }
       try {
         if (await ActionExecutor.handleTrade(snapshot)) return;
       } catch (err) {
-        logToBot(`[Trade Step Warning] ${err}`);
+        logToBot2(`[Trade Step Warning] ${err}`);
       }
       try {
         if (ActionExecutor.handleDebtRecovery(snapshot)) return;
       } catch (err) {
-        logToBot(`[Debt Step Warning] ${err}`);
+        logToBot2(`[Debt Step Warning] ${err}`);
       }
       try {
         if (ActionExecutor.handleJail(snapshot)) return;
       } catch (err) {
-        logToBot(`[Jail Step Warning] ${err}`);
+        logToBot2(`[Jail Step Warning] ${err}`);
       }
       try {
         if (ActionExecutor.handleRollDice(snapshot)) return;
       } catch (err) {
-        logToBot(`[Roll Step Warning] ${err}`);
+        logToBot2(`[Roll Step Warning] ${err}`);
       }
       try {
         if (ActionExecutor.handleBuyOrAuction(snapshot)) return;
       } catch (err) {
-        logToBot(`[Buy/Auction Step Warning] ${err}`);
+        logToBot2(`[Buy/Auction Step Warning] ${err}`);
       }
       try {
         if (ActionExecutor.handleAuction(snapshot)) return;
       } catch (err) {
-        logToBot(`[Auction Bid Step Warning] ${err}`);
+        logToBot2(`[Auction Bid Step Warning] ${err}`);
       }
       try {
         if (ActionExecutor.handleHouseBuilding(snapshot)) return;
       } catch (err) {
-        logToBot(`[Build Step Warning] ${err}`);
+        logToBot2(`[Build Step Warning] ${err}`);
       }
       try {
         if (ActionExecutor.handleUnmortgage(snapshot)) return;
       } catch (err) {
-        logToBot(`[Unmortgage Step Warning] ${err}`);
+        logToBot2(`[Unmortgage Step Warning] ${err}`);
       }
       try {
         if (ActionExecutor.handleProactiveTrade(snapshot)) return;
       } catch (err) {
-        logToBot(`[Proactive Trade Step Warning] ${err}`);
+        logToBot2(`[Proactive Trade Step Warning] ${err}`);
       }
       try {
         await ActionExecutor.deliberateBeforeEndTurn(snapshot);
       } catch (err) {
-        logToBot(`[End Turn Step Warning] ${err}`);
+        logToBot2(`[End Turn Step Warning] ${err}`);
         try {
           ActionExecutor.handleEndTurn(snapshot);
         } catch (_) {
         }
       }
     } catch (err) {
-      logToBot(`Eval loop error: ${err}`);
+      logToBot2(`Eval loop error: ${err}`);
     } finally {
       isEvaluating = false;
     }
@@ -4738,13 +4856,13 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     if (state.status) {
       const snap = createDOMSnapshot();
       if (!checkGameStarted(snap)) {
-        logToBot("Lobby detected. Bot will activate once match starts.");
+        logToBot2("Lobby detected. Bot will activate once match starts.");
       } else {
-        logToBot("GRANDMASTER AI ENGAGED. AUTONOMOUS GAMEPLAY ACTIVE.");
+        logToBot2("GRANDMASTER AI ENGAGED. AUTONOMOUS GAMEPLAY ACTIVE.");
       }
       evaluateAndAct();
     } else {
-      logToBot("Automation Paused (STANDBY).");
+      logToBot2("Automation Paused (STANDBY).");
     }
   }
   function startObserver() {

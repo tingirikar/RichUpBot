@@ -451,26 +451,29 @@ export const TradeEngine = {
 
             const sacrificeTile = safeSacrifices.find(s => s.id !== need.myTile.id) || null;
             if (sacrificeTile) {
-                const cashOffer = Math.min(Math.max(0, GameMemory.myCash - 200), Math.round(need.wantedTile.price * 0.3));
+                const cashOffer = Math.min(Math.max(0, GameMemory.myCash - 150), Math.max(20, Math.round(need.wantedTile.price * 0.25)));
+                const cashLabel = cashOffer > 0 ? ` + $${cashOffer}` : '';
                 opportunities.push({
                     targetOwner: targetOppName,
                     myGivenTile: sacrificeTile,
                     myReceivedTile: need.wantedTile,
                     cashOffer: Math.max(0, cashOffer),
                     cashDemand: 0,
-                    summary: `SET CONSOLIDATION: Give ${sacrificeTile.name} -> Get ${need.wantedTile.name}`,
-                    pitch: `@${targetOppName} Let's trade: I'll give you ${sacrificeTile.name} for your ${need.wantedTile.name}!`
+                    summary: `SET CONSOLIDATION: Give ${sacrificeTile.name}${cashLabel} -> Get ${need.wantedTile.name}`,
+                    pitch: cashOffer > 0 
+                        ? `@${targetOppName} I'll trade you ${sacrificeTile.name} + $${cashOffer} cash for ${need.wantedTile.name}!`
+                        : `@${targetOppName} Let's swap: I'll give you ${sacrificeTile.name} for your ${need.wantedTile.name}!`
                 });
-            } else if (GameMemory.myCash >= need.wantedTile.price + 200) {
-                const cashOffer = Math.min(GameMemory.myCash - 150, Math.round(need.wantedTile.price * 1.5));
+            } else if (GameMemory.myCash >= need.wantedTile.price + 100) {
+                const cashOffer = Math.min(GameMemory.myCash - 80, Math.round(need.wantedTile.price * 1.4));
                 opportunities.push({
                     targetOwner: targetOppName,
                     myGivenTile: null,
                     myReceivedTile: need.wantedTile,
-                    cashOffer: Math.max(80, cashOffer),
+                    cashOffer: Math.max(70, cashOffer),
                     cashDemand: 0,
                     summary: `CASH ACQUISITION: Offer $${cashOffer} -> Get ${need.wantedTile.name}`,
-                    pitch: `@${targetOppName} Offering $${cashOffer} cash for your ${need.wantedTile.name}!`
+                    pitch: `@${targetOppName} Offering $${cashOffer} cash right now for your ${need.wantedTile.name}!`
                 });
             }
         }
