@@ -21,6 +21,7 @@ export const GameMemory = {
     jailTurns: 0,
     turnCount: 0,
     isMyTurn: false,
+    isNegativeDebt: false,
 
     // Room Settings (Sniffed from match start or DOM)
     roomSettings: {

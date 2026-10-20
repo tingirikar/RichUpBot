@@ -272,10 +272,24 @@ export function createDOMSnapshot() {
                 if (rect.left > window.innerWidth * 0.65 && rect.width < 320) continue;
 
                 const text = c.innerText || '';
+                const lower = text.toLowerCase();
+
+                // Strictly exclude Auction, Bidding, Trade, and Lobby modals!
+                if (
+                    lower.includes('auction') ||
+                    lower.includes("i'm bidding") ||
+                    lower.includes('current bid') ||
+                    lower.includes('highest bid') ||
+                    lower.includes('sold in') ||
+                    lower.includes('trades') ||
+                    lower.includes('select your player')
+                ) {
+                    continue;
+                }
+
                 // Must look like an open property card (contains "Owner", "Price", "with rent", "when")
                 if (
-                    (text.includes('Owner') || text.includes('Price') || text.includes('with rent') || text.includes('when')) &&
-                    !text.toLowerCase().includes('trades')
+                    (text.includes('Owner') || text.includes('Price') || text.includes('with rent') || text.includes('when'))
                 ) {
                     for (const t of BOARD_TILES) {
                         if (t.group && new RegExp(`\\b${t.name}\\b`, 'i').test(text)) {
@@ -372,6 +386,12 @@ export function createDOMSnapshot() {
          * Finds the Mortgage [🗑️] button inside the property card popover/modal
          */
         findModalMortgageButton() {
+            const card = this.getOpenPropertyCard();
+            // If the open property card is ALREADY mortgaged, button is UNMORTGAGE! Do not return as mortgage!
+            if (card && GameMemory.ownership[card.tile.id]?.mortgaged) {
+                return null;
+            }
+
             const actionBtns = this.getPropertyCardActionButtons();
             
             // 1. If property has 0 houses / singleton, RichUp only renders 1 action button: Mortgage!
@@ -470,10 +490,10 @@ export function createDOMSnapshot() {
          */
         findSidebarPropertyItem(propertyName) {
             if (!propertyName) return null;
-            const lowerTarget = propertyName.toLowerCase();
+            const lowerTarget = propertyName.toLowerCase().trim();
 
-            // Locate right sidebar elements (x > 60% viewport width) to prevent hitting board tiles
-            const allItems = document.querySelectorAll('div, li, button, [class*="property"], [class*="item"]');
+            // Locate right sidebar elements (x > 55% viewport width) to prevent hitting board tiles
+            const allItems = document.querySelectorAll('div, li, button, [class*="property" i], [class*="item" i], p, span');
             for (let i = 0; i < allItems.length; i++) {
                 const el = allItems[i];
                 if (hud && hud.contains(el)) continue;
@@ -481,9 +501,12 @@ export function createDOMSnapshot() {
 
                 const rect = el.getBoundingClientRect();
                 if (rect.left < window.innerWidth * 0.55) continue; // Must be in the right panel!
+                if (rect.height < 18 || rect.height > 85 || rect.width < 80) continue;
 
                 const text = normalizeText(el);
-                if (text === lowerTarget || (text.includes(lowerTarget) && text.length < lowerTarget.length + 15)) {
+                if (text.includes('my properties') || text.includes('trades') || text.includes('bankrupt')) continue;
+
+                if (text === lowerTarget || text.startsWith(lowerTarget) || (text.includes(lowerTarget) && text.length < lowerTarget.length + 15)) {
                     return el;
                 }
             }

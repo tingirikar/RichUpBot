@@ -419,99 +419,97 @@ export const ActionExecutor = {
                 onExecute: () => delayClick(passBtn, decision.reason)
             });
         }
+
+        // If an auction modal is active and we choose to pass/hold, return true so the bot waits for auction to conclude
+        if (modal) {
+            return true;
+        }
         return false;
     },
 
     handleHouseBuilding(snapshot) {
         if (!CONFIG.AUTO_BUILD_ENABLED) return false;
 
-        // Check if an upgrade modal is already open
-        const modalUpgradeBtn = snapshot.findModalUpgradeButton();
         const openCard = snapshot.getOpenPropertyCard ? snapshot.getOpenPropertyCard() : null;
 
-        if (modalUpgradeBtn) {
-            return executeOrAdvise({
-                el: modalUpgradeBtn,
-                title: 'UPGRADE PROPERTY [↑]',
-                reason: 'Building house on selected property.',
-                onExecute: () => delayClick(modalUpgradeBtn, 'Clicking [↑] to build house')
-            });
-        }
-
-        // If a property card is open but cannot be upgraded further, close it!
-        if (openCard) {
-            const closeBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
-            if (closeBtn) {
-                delayClick(closeBtn, 'Closing property card after build completion');
-                return true;
+        // 1. Compile complete monopolies and verify even building requirements
+        const completeSets = [];
+        for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
+            if (tiles[0].type !== 'property') continue;
+            const { owned, total } = GameMemory.getGroupCount(groupName, '__ME__');
+            if (owned === total) {
+                const anyMortgaged = tiles.some(t => GameMemory.ownership[t.id]?.mortgaged);
+                if (!anyMortgaged) {
+                    const houseCounts = tiles.map(t => GameMemory.ownership[t.id]?.houses || 0);
+                    const minHouses = Math.min(...houseCounts);
+                    const maxHouses = Math.max(...houseCounts);
+                    completeSets.push({ groupName, tiles, minHouses, maxHouses, houseCost: tiles[0].houseCost });
+                }
             }
         }
 
-        const upgrades = HouseBuilder.rankHouseUpgrades(GameMemory.myCash);
-        if (upgrades.length === 0) {
-            // Strategic Mortgaging: Liquidate dead-weight singletons to fund lethal monopoly upgrades
-            if (CONFIG.AUTO_MORTGAGE_ENABLED) {
-                for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
-                    if (tiles[0].type !== 'property') continue;
-                    const { owned, total } = GameMemory.getGroupCount(groupName, '__ME__');
-                    if (owned === total) {
-                        const houseCounts = tiles.map(t => GameMemory.ownership[t.id]?.houses || 0);
-                        const minHouses = Math.min(...houseCounts);
-                        if (minHouses < 3) {
-                            const candidates = DebtRecovery.findStrategicMortgageCandidates();
-                            if (candidates.length > 0) {
-                                // 1. If mortgage button is already visible in an open card modal, execute it!
-                                const modalMortgageBtn = snapshot.findModalMortgageButton();
-
-                                if (modalMortgageBtn) {
-                                    const matchingCandidate = candidates.find(c => openCard && c.tile.id === openCard.tile.id);
-                                    if (matchingCandidate || !openCard) {
-                                        const tileToMortgage = matchingCandidate ? matchingCandidate.tile : candidates[0].tile;
-                                        return executeOrAdvise({
-                                            el: modalMortgageBtn,
-                                            title: `MORTGAGE: ${tileToMortgage.name.toUpperCase()}`,
-                                            reason: `Mortgaging dead asset (+$${matchingCandidate ? matchingCandidate.mortgageValue : candidates[0].mortgageValue}) to fund 3-house rush on ${groupName}`,
-                                            onExecute: () => {
-                                                if (GameMemory.ownership[tileToMortgage.id]) {
-                                                    GameMemory.ownership[tileToMortgage.id].mortgaged = true;
-                                                }
-                                                delayClick(modalMortgageBtn, `Mortgaging ${tileToMortgage.name} for strategic rush`);
-                                            }
-                                        });
-                                    }
-                                }
-
-                                // 2. If the modal is not open for target, open it from the sidebar
-                                const target = candidates[0];
-                                if (!openCard || openCard.tile.id !== target.tile.id) {
-                                    const sidebarProp = snapshot.findSidebarPropertyItem(target.tile.name);
-                                    if (sidebarProp) {
-                                        return executeOrAdvise({
-                                            el: sidebarProp,
-                                            title: `OPEN ${target.tile.name.toUpperCase()} TO MORTGAGE`,
-                                            reason: `Mortgaging dead asset (+$${target.mortgageValue}) to fund 3-house rush on ${groupName}`,
-                                            onExecute: () => delayClick(sidebarProp, `Opening ${target.tile.name} for strategic mortgage`)
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+        if (completeSets.length === 0) {
+            if (openCard) {
+                const closeBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
+                if (closeBtn) delayClick(closeBtn, 'Closing property card: No monopolies available');
             }
             return false;
         }
 
-        const top = upgrades[0];
+        const reserve = MarkovRisk.computeDynamicReserve(GameMemory.myPos);
+        // Find set that needs upgrades (< 5 houses) and is safe to afford
+        const targetSet = completeSets.find(s => s.minHouses < 5 && (GameMemory.myCash - s.houseCost >= reserve));
 
-        // Click property in "My properties" sidebar (reliable & direct)
-        const sidebarItem = snapshot.findSidebarPropertyItem(top.tile.name);
+        if (!targetSet) {
+            // Cannot afford more upgrades safely
+            if (openCard) {
+                const closeBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
+                if (closeBtn) delayClick(closeBtn, 'Closing property card: Upgrades complete or budget limited');
+            }
+            return false;
+        }
+
+        // EVEN BUILDING RULE: Find the specific tile in this set that has minHouses!
+        // That tile is the ONLY one allowed to receive the next house build!
+        const candidateTile = targetSet.tiles.find(t => (GameMemory.ownership[t.id]?.houses || 0) === targetSet.minHouses);
+        if (!candidateTile) return false;
+
+        // If a different property card is open, dismiss it immediately!
+        if (openCard && openCard.tile.id !== candidateTile.id) {
+            const closeBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
+            if (closeBtn) {
+                delayClick(closeBtn, `Closing ${openCard.tile.name} to upgrade ${candidateTile.name} evenly`);
+                return true;
+            }
+        }
+
+        // If the correct candidate card is currently open, click Upgrade [↑]!
+        if (openCard && openCard.tile.id === candidateTile.id) {
+            const modalUpgradeBtn = snapshot.findModalUpgradeButton();
+            if (modalUpgradeBtn) {
+                return executeOrAdvise({
+                    el: modalUpgradeBtn,
+                    title: `UPGRADE ${candidateTile.name.toUpperCase()} [↑]`,
+                    reason: `Even building on ${targetSet.groupName}: Upgrading to ${targetSet.minHouses + 1} houses (${targetSet.minHouses} -> ${targetSet.minHouses + 1}).`,
+                    onExecute: () => {
+                        delayClick(modalUpgradeBtn, `Building house on ${candidateTile.name}`);
+                        if (GameMemory.ownership[candidateTile.id]) {
+                            GameMemory.ownership[candidateTile.id].houses = targetSet.minHouses + 1;
+                        }
+                        GameMemory.myCash -= targetSet.houseCost;
+                    }
+                });
+            }
+        }
+
+        // If modal is not open for candidateTile, OPEN IT DIRECTLY VIA THE RIGHTMOST SIDEBAR!
+        const sidebarItem = snapshot.findSidebarPropertyItem(candidateTile.name);
         if (sidebarItem) {
             return executeOrAdvise({
                 el: sidebarItem,
-                title: `SELECT ${top.tile.name.toUpperCase()} TO UPGRADE`,
-                reason: `Opening property menu to build house (${top.nextHouses} houses, ROI: ${top.roi})`,
-                onExecute: () => delayClick(sidebarItem, `Opening ${top.tile.name} from sidebar`)
+                title: `SELECT ${candidateTile.name.toUpperCase()} (RIGHT SIDEBAR)`,
+                reason: `Even building: Opening ${candidateTile.name} from right sidebar to build house (${targetSet.minHouses} -> ${targetSet.minHouses + 1}).`,
+                onExecute: () => delayClick(sidebarItem, `Opening ${candidateTile.name} from right sidebar`)
             });
         }
 
@@ -565,76 +563,66 @@ export const ActionExecutor = {
         if (!CONFIG.AUTO_MORTGAGE_ENABLED) return false;
 
         // Debt is strictly when player cash is negative (GameMemory.myCash < 0)
-        // or an explicit debt modal/warning is visible
-        const isDebt = GameMemory.myCash < 0;
+        // or an explicit debt modal/warning is visible (GameMemory.isNegativeDebt)
+        const isDebt = GameMemory.myCash < 0 || GameMemory.isNegativeDebt;
         if (!isDebt) return false;
 
         logToBot(`[DEBT RECOVERY] Negative balance ($${GameMemory.myCash}). Liquidating assets to survive...`);
 
-        // Check if a property management modal is already open
-        const mortgageBtn = snapshot.findModalMortgageButton();
-        const sellHouseBtn = snapshot.findModalSellHouseButton();
+        const openCard = snapshot.getOpenPropertyCard ? snapshot.getOpenPropertyCard() : null;
 
-        if (mortgageBtn) {
-            const openCard = snapshot.getOpenPropertyCard ? snapshot.getOpenPropertyCard() : null;
-            const tileName = openCard ? openCard.tile.name : 'PROPERTY';
-            return executeOrAdvise({
-                el: mortgageBtn,
-                title: `MORTGAGE: ${tileName.toUpperCase()}`,
-                reason: `In debt ($${GameMemory.myCash})! Mortgaging asset to clear debt immediately.`,
-                onExecute: () => {
-                    if (openCard && GameMemory.ownership[openCard.tile.id]) {
-                        GameMemory.ownership[openCard.tile.id].mortgaged = true;
-                    }
-                    delayClick(mortgageBtn, `Clicking Mortgage button to clear debt`);
-                }
-            });
-        }
-
-        if (sellHouseBtn) {
-            return executeOrAdvise({
-                el: sellHouseBtn,
-                title: 'SELL HOUSE [↓]',
-                reason: `In debt ($${GameMemory.myCash})! Selling house to clear debt immediately.`,
-                onExecute: () => delayClick(sellHouseBtn, 'Clicking [↓] to sell house')
-            });
-        }
-
-        // If modal is not open, open our lowest sacrifice property from sidebar!
-        const targets = DebtRecovery.rankLiquidationTargets();
-        if (targets.length > 0) {
-            const bestTarget = targets[0];
-            const openCard = snapshot.getOpenPropertyCard ? snapshot.getOpenPropertyCard() : null;
-            if (!openCard || openCard.tile.id !== bestTarget.tile.id) {
-                const sidebarProp = snapshot.findSidebarPropertyItem(bestTarget.tile.name);
-                if (sidebarProp) {
-                    return executeOrAdvise({
-                        el: sidebarProp,
-                        title: `OPEN ${bestTarget.tile.name.toUpperCase()} TO LIQUIDATE`,
-                        reason: `In debt ($${GameMemory.myCash}). Selecting lowest sacrifice asset to mortgage.`,
-                        onExecute: () => delayClick(sidebarProp, `Opening ${bestTarget.tile.name} for debt recovery`)
-                    });
-                }
+        // CRITICAL BUG 3 FIX: If an open property card is ALREADY MORTGAGED, CLOSE IT IMMEDIATELY!
+        // We cannot mortgage an already-mortgaged card; its button is Unmortgage which costs money!
+        if (openCard && GameMemory.ownership[openCard.tile.id]?.mortgaged) {
+            const closeBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
+            if (closeBtn) {
+                delayClick(closeBtn, `Closing already-mortgaged ${openCard.tile.name} to select unmortgaged asset`);
+                return true;
             }
         }
 
-        // Fallback: Click the first available property in "My properties" sidebar
-        const sidebarItems = document.querySelectorAll('div, li, button, [class*="property"]');
-        for (let i = 0; i < sidebarItems.length; i++) {
-            const el = sidebarItems[i];
-            const hud = document.getElementById('rubot-hud-panel');
-            if (hud && hud.contains(el)) continue;
-            const rect = el.getBoundingClientRect();
-            if (rect.left > window.innerWidth * 0.6) {
-                const t = (el.innerText || '').trim();
-                if (t.length >= 3 && t.length <= 25 && !t.includes('$') && !t.toLowerCase().includes('properties') && !t.toLowerCase().includes('trades')) {
-                    return executeOrAdvise({
-                        el,
-                        title: `EMERGENCY LIQUIDATE: ${t.toUpperCase()}`,
-                        reason: `In debt ($${GameMemory.myCash}). Emergency opening sidebar property to mortgage.`,
-                        onExecute: () => delayClick(el, `Emergency clicking ${t} to liquidate`)
-                    });
-                }
+        // Check if an unmortgaged singleton is currently open
+        if (openCard && !GameMemory.ownership[openCard.tile.id]?.mortgaged) {
+            const mortgageBtn = snapshot.findModalMortgageButton();
+            if (mortgageBtn && (GameMemory.ownership[openCard.tile.id]?.houses || 0) === 0) {
+                const tileName = openCard.tile.name;
+                return executeOrAdvise({
+                    el: mortgageBtn,
+                    title: `MORTGAGE: ${tileName.toUpperCase()}`,
+                    reason: `In debt ($${GameMemory.myCash})! Mortgaging asset to clear debt immediately.`,
+                    onExecute: () => {
+                        if (GameMemory.ownership[openCard.tile.id]) {
+                            GameMemory.ownership[openCard.tile.id].mortgaged = true;
+                        }
+                        delayClick(mortgageBtn, `Clicking Mortgage button to clear debt`);
+                    }
+                });
+            }
+
+            // If it has houses and all singletons are gone, sell a house
+            const sellHouseBtn = snapshot.findModalSellHouseButton();
+            if (sellHouseBtn && (GameMemory.ownership[openCard.tile.id]?.houses || 0) > 0) {
+                return executeOrAdvise({
+                    el: sellHouseBtn,
+                    title: `SELL HOUSE: ${openCard.tile.name.toUpperCase()} [↓]`,
+                    reason: `In debt ($${GameMemory.myCash})! Selling house to clear debt immediately.`,
+                    onExecute: () => delayClick(sellHouseBtn, 'Clicking [↓] to sell house')
+                });
+            }
+        }
+
+        // Open our lowest sacrifice unmortgaged property DIRECTLY FROM THE RIGHTMOST SIDEBAR!
+        const targets = DebtRecovery.rankLiquidationTargets();
+        if (targets.length > 0) {
+            const bestTarget = targets[0];
+            const sidebarProp = snapshot.findSidebarPropertyItem(bestTarget.tile.name);
+            if (sidebarProp) {
+                return executeOrAdvise({
+                    el: sidebarProp,
+                    title: `OPEN ${bestTarget.tile.name.toUpperCase()} (RIGHT SIDEBAR) TO LIQUIDATE`,
+                    reason: `In debt ($${GameMemory.myCash}). Selecting lowest sacrifice asset from right sidebar to mortgage.`,
+                    onExecute: () => delayClick(sidebarProp, `Opening ${bestTarget.tile.name} from right sidebar for debt recovery`)
+                });
             }
         }
 
@@ -660,10 +648,20 @@ export const ActionExecutor = {
     },
 
     lastDeliberatedTurn: -1,
+    isEndingTurn: false,
 
     async deliberateBeforeEndTurn(snapshot) {
-        const endTurnBtn = snapshot.findExactOrIncludes(['end turn', 'done', 'continue', 'ok']);
+        const endTurnBtn = snapshot.findExactOrIncludes(['end turn', 'done', 'continue']);
         if (!endTurnBtn) return false;
+
+        // BUG 4 FIX: Check for proactive trades before ending turn!
+        if (CONFIG.AUTO_TRADE_ENABLED && !TradeProposalExecutor.isExecuting) {
+            try {
+                if (this.handleProactiveTrade(snapshot)) {
+                    return true;
+                }
+            } catch (_) {}
+        }
 
         // Perform deliberate LLM strategic check once per turn before ending
         if (CONFIG.DELIBERATE_BEFORE_END_TURN && CONFIG.OLLAMA_ENABLED && this.lastDeliberatedTurn !== GameMemory.turnCount) {
@@ -683,13 +681,26 @@ export const ActionExecutor = {
     },
 
     handleEndTurn(snapshot) {
-        const endTurnBtn = snapshot.findExactOrIncludes(['end turn', 'done', 'continue', 'ok']);
+        // BUG 2 FIX: Debounce lock prevents spamming end turn while server transition is pending
+        if (this.isEndingTurn) return false;
+
+        // Verify that the board does not say another player is playing
+        const bodyText = (document.body ? document.body.innerText : '').toLowerCase();
+        const myName = (GameMemory.myName || '').toLowerCase();
+        if (bodyText.includes('is playing...') && myName && !bodyText.includes(`${myName} is playing...`)) {
+            return false;
+        }
+
+        const endTurnBtn = snapshot.findExactOrIncludes(['end turn', 'done', 'continue']);
         if (endTurnBtn) {
             // If any property card modal is lingering open, dismiss it before ending turn
             const modalCloseBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
             if (modalCloseBtn) {
                 try { modalCloseBtn.click(); } catch (_) {}
             }
+
+            this.isEndingTurn = true;
+            setTimeout(() => { this.isEndingTurn = false; }, 2500);
 
             GameMemory.isMyTurn = false;
             return executeOrAdvise({

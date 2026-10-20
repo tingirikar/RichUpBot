@@ -255,11 +255,11 @@ function detectLocalPlayerFromPlayerList() {
             // Normalize Unicode minus (U+2212) and dashes to ASCII hyphen
             const normalizedRow = rowText.replace(/[−–—]/g, '-');
 
-            // 1. High priority check for negative cash (e.g. "$-205", "$- 205", "-$205", "- $205")
-            const negCashMatch = /\$\s*-\s*(\d{1,6})|-\s*\$\s*(\d{1,6})/.exec(normalizedRow);
+            // 1. High priority check for negative cash (e.g. "$-205", "-$205", "$-14", "-14", "$426 -50")
+            const negCashMatch = /(?:\$\s*-\s*(\d{1,6})|-\s*\$\s*(\d{1,6})|\b-\s*(\d{1,6}))/.exec(normalizedRow);
             let parsedCash;
             if (negCashMatch) {
-                parsedCash = -parseInt(negCashMatch[1] || negCashMatch[2], 10);
+                parsedCash = -parseInt(negCashMatch[1] || negCashMatch[2] || negCashMatch[3], 10);
             } else {
                 const posCashMatch = /\$\s*(\d{1,6})|(\d{1,6})\s*\$/.exec(normalizedRow);
                 if (!posCashMatch) continue;
@@ -405,6 +405,17 @@ export function syncBoardTilePricesAndBadgesFromDOM() {
                 }
             }
         }
+    }
+
+    // Global Negative Money / Debt Enforcement
+    const bodyText = document.body ? document.body.innerText : '';
+    if (bodyText.includes("negative amount of money") || bodyText.includes("Sell properties or trade")) {
+        GameMemory.isNegativeDebt = true;
+        if (GameMemory.myCash >= 0) {
+            GameMemory.myCash = -50; // Ensure cash flag triggers debt recovery immediately
+        }
+    } else {
+        GameMemory.isNegativeDebt = GameMemory.myCash < 0;
     }
 }
 
