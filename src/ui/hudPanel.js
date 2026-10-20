@@ -1,6 +1,8 @@
 import { CONFIG } from '../config.js';
 import { GameMemory } from '../memory/gameMemory.js';
 import { OllamaClient } from '../engine/ollamaClient.js';
+import { BOARD_TILES, GROUP_TILES } from '../data/boardTiles.js';
+import { OpponentTracker } from '../memory/opponentTracker.js';
 
 /**
  * TABULAR MINIMAL HUD PANEL v5.0
@@ -214,6 +216,19 @@ export const HUDPanel = {
                 left: calc(100% - 12px); background: #fff;
             }
 
+            /* Intel / Memory Tab */
+            .rubot-intel-page { display: flex; flex-direction: column; gap: 6px; flex: 1; }
+            .rubot-intel-card {
+                background: rgba(255,255,255,0.03); border: 1px solid rgba(139,92,246,0.18);
+                border-radius: 8px; padding: 7px 9px; display: flex; flex-direction: column; gap: 3px;
+            }
+            .rubot-intel-title { font-size: 9.5px; font-weight: 700; color: #c4b5fd; display: flex; justify-content: space-between; align-items: center; }
+            .rubot-intel-content { font-size: 8.5px; color: rgba(196,181,253,0.85); line-height: 1.35; word-break: break-word; }
+            .rubot-intel-badge { font-size: 8px; font-weight: 700; padding: 1px 5px; border-radius: 4px; display: inline-block; }
+            .rubot-intel-badge.green { background: rgba(16,185,129,0.2); color: #34d399; border: 1px solid rgba(16,185,129,0.4); }
+            .rubot-intel-badge.amber { background: rgba(245,158,11,0.2); color: #fbbf24; border: 1px solid rgba(245,158,11,0.4); }
+            .rubot-intel-badge.red { background: rgba(239,68,68,0.2); color: #f87171; border: 1px solid rgba(239,68,68,0.4); }
+
             /* Activity Log Tab */
             .rubot-log-page { display: flex; flex-direction: column; height: 100%; flex: 1; }
             .rubot-log-toolbar {
@@ -292,6 +307,7 @@ export const HUDPanel = {
 
             <div class="rubot-tab-bar">
                 <button class="rubot-tab-btn active" data-tab="brain">🧠 Brain</button>
+                <button class="rubot-tab-btn" data-tab="intel">📊 Intel</button>
                 <button class="rubot-tab-btn" data-tab="toggles">⚙️ Features</button>
                 <button class="rubot-tab-btn" data-tab="logs">📋 Activity Log</button>
             </div>
@@ -331,7 +347,18 @@ export const HUDPanel = {
                     </div>
                 </div>
 
-                <!-- TAB 2: FEATURE TOGGLES -->
+                <!-- TAB: LIVE GAME INTEL & MEMORY -->
+                <div class="rubot-tab-page" id="rubot-page-intel">
+                    <div class="rubot-intel-page" id="rubot-intel-container">
+                        <div class="rubot-intel-card">
+                            <div class="rubot-intel-title">
+                                <span>Game Memory Loading...</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TAB: FEATURE TOGGLES -->
                 <div class="rubot-tab-page" id="rubot-page-toggles">
                     <div class="rubot-toggles-list">
                         <label class="rubot-toggle-item">
@@ -402,8 +429,8 @@ export const HUDPanel = {
 
                         <label class="rubot-toggle-item">
                             <div class="rubot-toggle-info">
-                                <span class="rubot-toggle-name">Natural AI Chat</span>
-                                <span class="rubot-toggle-desc">Converses naturally with opponents during match</span>
+                                <span class="rubot-toggle-name">Chat Engagement</span>
+                                <span class="rubot-toggle-desc">Auto-replies & trade talk (OFF = completely silent)</span>
                             </div>
                             <div class="rubot-toggle-pill">
                                 <input type="checkbox" id="rubot-chk-chat" ${CONFIG.CHAT_ENABLED ? 'checked' : ''}>
@@ -499,6 +526,7 @@ export const HUDPanel = {
                 const targetPage = document.getElementById(`rubot-page-${targetTab}`);
                 if (targetPage) targetPage.classList.add('active');
                 this.activeTab = targetTab;
+                if (targetTab === 'intel') this.updateIntelTab();
             });
         });
 
@@ -609,12 +637,20 @@ export const HUDPanel = {
         document.getElementById('rubot-chk-chat').addEventListener('change', e => { 
             CONFIG.CHAT_ENABLED = e.target.checked; 
             localStorage.setItem('richup_cfg_chat', String(e.target.checked));
+            this.logTerminal(`Chat Engagement: ${e.target.checked ? 'ENABLED (Casual human replies)' : 'DISABLED (100% silent)'}`);
         });
 
         this.initDragAndPersistence();
 
         window.__richupLogTerminal = (msg) => this.logTerminal(msg);
         this.logTerminal('RichUp Bot v5.0 initialized. Ready for gameplay.');
+
+        // Periodic live Game Memory intel sync
+        setInterval(() => {
+            if (this.activeTab === 'intel') {
+                this.updateIntelTab();
+            }
+        }, 1200);
 
         // Automatic background connection test on launch
         setTimeout(testOllama, 400);
@@ -755,5 +791,92 @@ export const HUDPanel = {
             this.saveGeometry();
         });
         resizeObserver.observe(panel);
+    },
+
+    updateIntelTab() {
+        const container = document.getElementById('rubot-intel-container');
+        if (!container) return;
+
+        const myName = GameMemory.myName || 'matrix';
+        const myCash = GameMemory.myCash;
+        
+        // 1. My Holdings
+        const myTiles = BOARD_TILES.filter(t => t.group && GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
+        const myMonopolies = [];
+        for (const [groupName, groupTiles] of Object.entries(GROUP_TILES)) {
+            if (groupName === 'Airport' || groupName === 'Utility') continue;
+            if (groupTiles.every(t => GameMemory.isMe(GameMemory.ownership[t.id]?.owner))) {
+                myMonopolies.push(groupName);
+            }
+        }
+
+        // 2. Opponents Analysis
+        const oppData = OpponentTracker.analyzeOpponents();
+
+        // 3. Unowned Properties
+        const unownedCount = GameMemory.getUnownedPropertyCount();
+
+        let html = `
+            <div class="rubot-intel-card">
+                <div class="rubot-intel-title">
+                    <span>👑 ME (${myName})</span>
+                    <span class="rubot-intel-badge green">$${myCash}</span>
+                </div>
+                <div class="rubot-intel-content">
+                    <b>Properties (${myTiles.length}):</b> ${myTiles.length > 0 ? myTiles.map(t => {
+                        const h = GameMemory.ownership[t.id]?.houses || 0;
+                        const hStr = h === 5 ? ' [🏨]' : (h > 0 ? ` [🏠x${h}]` : '');
+                        return `${t.name}${hStr}`;
+                    }).join(', ') : 'None yet'}<br>
+                    <b>Monopolies:</b> ${myMonopolies.length > 0 ? myMonopolies.map(m => `<span class="rubot-intel-badge green">${m}</span>`).join(' ') : '<span style="color:rgba(196,181,253,0.5)">None</span>'}
+                </div>
+            </div>
+
+            <div class="rubot-intel-card">
+                <div class="rubot-intel-title">
+                    <span>👥 OPPONENTS INVENTORIES</span>
+                    <span class="rubot-intel-badge amber">${Object.keys(oppData).length} Tracked</span>
+                </div>
+                <div class="rubot-intel-content">
+        `;
+
+        const oppEntries = Object.entries(oppData);
+        if (oppEntries.length === 0) {
+            html += `<span style="color:rgba(196,181,253,0.5)">Auto-scanning scoreboard...</span>`;
+        } else {
+            for (const [pName, data] of oppEntries) {
+                const hungryStr = data.hungrySets.length > 0 
+                    ? data.hungrySets.map(h => `<span class="rubot-intel-badge red">${h.group} ${h.ownedCount}/${h.total}</span>`).join(' ')
+                    : '';
+                const propStr = data.ownedTiles.length > 0
+                    ? data.ownedTiles.map(t => t.name).join(', ')
+                    : 'None yet';
+
+                html += `
+                    <div style="margin-top: 4px; padding-top: 4px; border-top: 1px solid rgba(139,92,246,0.12);">
+                        <b>${pName}:</b> <span class="rubot-intel-badge green">$${data.cash}</span> ${hungryStr}<br>
+                        <span style="color: rgba(196,181,253,0.7);">${propStr}</span>
+                    </div>
+                `;
+            }
+        }
+
+        html += `
+                </div>
+            </div>
+
+            <div class="rubot-intel-card">
+                <div class="rubot-intel-title">
+                    <span>🗺️ BOARD & STRATEGY STATUS</span>
+                    <span class="rubot-intel-badge">${unownedCount} Unowned</span>
+                </div>
+                <div class="rubot-intel-content">
+                    <b>Chat Engagement:</b> ${CONFIG.CHAT_ENABLED ? '<span class="rubot-intel-badge green">ACTIVE (Smart/Casual)</span>' : '<span class="rubot-intel-badge red">SILENT (Off)</span>'}<br>
+                    <b>Ollama Brain:</b> <span class="rubot-intel-badge green">${CONFIG.OLLAMA_MODEL}</span>
+                </div>
+            </div>
+        `;
+
+        container.innerHTML = html;
     }
 };

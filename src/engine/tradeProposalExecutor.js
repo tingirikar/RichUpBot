@@ -121,9 +121,11 @@ export const TradeProposalExecutor = {
                 logToBot(`[TRADE CREATOR] Trade proposal sent to ${swap.targetOwner}!`);
                 this.lastProposedTimes.set(swap.targetOwner, Date.now());
 
-                // STEP 6: Send friendly chat line
-                await sleep(600);
-                ChatEngine.sendChatMessage('tradeOffer', swap.pitch);
+                // STEP 6: Send friendly chat line (only if chat is enabled)
+                if (CONFIG.CHAT_ENABLED && swap.pitch) {
+                    await sleep(400);
+                    ChatEngine.sendChatMessage('tradeOffer', swap.pitch);
+                }
 
                 if (onComplete) onComplete(true);
             } else {

@@ -103,10 +103,11 @@ export const ChatEngine = {
             message = list[Math.floor(Math.random() * list.length)];
         }
 
-        // Enforce lowercase, casual human gamer style: strip robot prefixes & trailing periods
+        // Enforce lowercase, casual human gamer style: strip robot prefixes, @mentions, & trailing punctuation
         message = message
             .replace(/^(decline:|accept:|negotiate:|counter:)\s*/i, '')
-            .replace(/[.!]$/, '')
+            .replace(/@[A-Za-z0-9_-]+\s*/g, '')
+            .replace(/[.!]+$/, '')
             .toLowerCase()
             .trim();
 

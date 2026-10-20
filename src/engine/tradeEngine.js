@@ -183,7 +183,7 @@ export const TradeEngine = {
                     cashOffer: 0,
                     cashDemand,
                     summary: `COUNTER: Give ${requestedTile.name} -> Get ${partnerMissingCard.missingTile.name}${cashDemandStr}`,
-                    pitch: `@${partnerName} That offer is no deal. Give me ${partnerMissingCard.missingTile.name}${cashDemandStr ? `${cashDemandStr} cash` : ''} for ${requestedTile.name} instead. Both get sets!`,
+                    pitch: `counter: ${partnerMissingCard.missingTile.name.toLowerCase()} for ${requestedTile.name.toLowerCase()}`,
                     reason: `Grandmaster Counter-Proposal: Securing ${partnerMissingCard.missingTile.name} to complete our ${partnerMissingCard.missingTile.group} Monopoly!`
                 };
             }
@@ -238,14 +238,14 @@ export const TradeEngine = {
                     accept: false,
                     counterSwap: counter,
                     reason: `FATAL DANGER VETO: Gives ${partnerName} a ${oppGroupName} monopoly while we get none!`,
-                    chatReply: `counter me with ${counter.myReceivedTile.name.toLowerCase()}`
+                    chatReply: CONFIG.CHAT_ENABLED ? `counter me with ${counter.myReceivedTile.name.toLowerCase()}` : null
                 };
             }
             return {
                 accept: false,
                 counterSwap: null,
                 reason: `FATAL DANGER VETO: Gives ${partnerName} a ${oppGroupName} monopoly while we get none!`,
-                chatReply: `cant give u a set sry`
+                chatReply: CONFIG.CHAT_ENABLED ? `cant give u a set sry` : null
             };
         }
 
@@ -258,7 +258,7 @@ export const TradeEngine = {
                     accept: false,
                     counterSwap: this.findCounterTrade(tradeData),
                     reason: `MONOPOLY BLOCKED BY DEBT: Trade completes ${myCompletedGroup} but leaves only $${myCashAfter} cash!`,
-                    chatReply: `id be broke lol add cash`
+                    chatReply: CONFIG.CHAT_ENABLED ? `id be broke lol add cash` : null
                 };
             }
 
@@ -269,7 +269,7 @@ export const TradeEngine = {
                     myGain: 3500,
                     oppGain: 3500,
                     reason: `MUTUAL MONOPOLY SWAP: Both players secure completed color sets (${myCompletedGroup})!`,
-                    chatReply: `deal thx`
+                    chatReply: CONFIG.CHAT_ENABLED ? `deal thx` : null
                 };
             } else {
                 // WE GET A MONOPOLY, OPPONENT GETS NONE! Overwhelming advantage!
@@ -278,7 +278,7 @@ export const TradeEngine = {
                     myGain: 5000,
                     oppGain: 500,
                     reason: `MONOPOLY COMPLETER: Completes our ${myCompletedGroup} monopoly without giving opponent a set!`,
-                    chatReply: `deal thx`
+                    chatReply: CONFIG.CHAT_ENABLED ? `deal thx` : null
                 };
             }
         }
@@ -304,7 +304,7 @@ export const TradeEngine = {
                 accept: false,
                 counterSwap: null,
                 reason: `20-ROUND SIMULATION VETO: Accepting drops 20-round survival from ${sim.rejSurvRate}% to ${sim.accSurvRate}%!`,
-                chatReply: `nah sry`
+                chatReply: CONFIG.CHAT_ENABLED ? `nah sry` : null
             };
         }
 
@@ -316,7 +316,7 @@ export const TradeEngine = {
                     accept: false,
                     counterSwap: counter,
                     reason: `UNFAIR DEFICIT: Trade favors ${partnerName}. Countering for set completer.`,
-                    chatReply: `counter me`
+                    chatReply: CONFIG.CHAT_ENABLED ? `counter me` : null
                 };
             }
 
@@ -336,7 +336,7 @@ export const TradeEngine = {
                 accept: false,
                 counterSwap: null,
                 reason: `UNFAIR DEFICIT: Trade favors ${partnerName} by +$${Math.round(oppGain - myGain)}.`,
-                chatReply
+                chatReply: CONFIG.CHAT_ENABLED ? chatReply : null
             };
         }
 
@@ -353,7 +353,7 @@ export const TradeEngine = {
             reason: acceptable
                 ? `GRANDMASTER EV+ TRADE: Net gain +$${Math.round(myGain)} vs Opp +$${Math.round(oppGain)} (20-turn Sim: +EV)`
                 : `Unfavorable utility: Net gain $${Math.round(myGain)} < requirement`,
-            chatReply: acceptable ? "deal thx" : "nah sry"
+            chatReply: CONFIG.CHAT_ENABLED ? (acceptable ? "deal thx" : "nah sry") : null
         };
     },
 
@@ -397,7 +397,7 @@ export const TradeEngine = {
                         cashOffer: Math.max(0, cashOffer),
                         cashDemand: Math.max(0, cashDemand),
                         summary: `SWAP: Give ${oppNeed.missingTile.name} -> Get ${myNeed.missingTile.name}`,
-                        pitch: `@${targetOppName} Let's swap ${oppNeed.missingTile.name} for ${myNeed.missingTile.name}. Both of us get a set!`
+                        pitch: `swap ${oppNeed.missingTile.name.toLowerCase()} for ${myNeed.missingTile.name.toLowerCase()}?`
                     });
                 }
             }
@@ -424,7 +424,7 @@ export const TradeEngine = {
                     cashOffer: Math.max(0, cashOffer),
                     cashDemand: 0,
                     summary: `MONOPOLY ACQUISITION: Give ${sacrificeTile.name} + $${cashOffer} -> Get ${myNeed.missingTile.name}`,
-                    pitch: `@${targetOppName} I will trade ${sacrificeTile.name} + $${cashOffer} for your ${myNeed.missingTile.name}!`
+                    pitch: `take ${sacrificeTile.name.toLowerCase()} + ${cashOffer} for ${myNeed.missingTile.name.toLowerCase()}?`
                 });
             } else if (GameMemory.myCash >= myNeed.missingTile.price + 150) {
                 // Pure cash offer: 1.5x - 2.2x tile face value
@@ -436,7 +436,7 @@ export const TradeEngine = {
                     cashOffer: Math.max(80, cashOffer),
                     cashDemand: 0,
                     summary: `CASH ACQUISITION: Offer $${cashOffer} -> Get ${myNeed.missingTile.name}`,
-                    pitch: `@${targetOppName} Offering $${cashOffer} cash for your ${myNeed.missingTile.name}!`
+                    pitch: `${cashOffer} for ${myNeed.missingTile.name.toLowerCase()}?`
                 });
             }
         }
@@ -459,8 +459,8 @@ export const TradeEngine = {
                     cashDemand: 0,
                     summary: `SET CONSOLIDATION: Give ${sacrificeTile.name}${cashLabel} -> Get ${need.wantedTile.name}`,
                     pitch: cashOffer > 0 
-                        ? `@${targetOppName} I'll trade you ${sacrificeTile.name} + $${cashOffer} cash for ${need.wantedTile.name}!`
-                        : `@${targetOppName} Let's swap: I'll give you ${sacrificeTile.name} for your ${need.wantedTile.name}!`
+                        ? `${sacrificeTile.name.toLowerCase()} + ${cashOffer} for ${need.wantedTile.name.toLowerCase()}?`
+                        : `swap ${sacrificeTile.name.toLowerCase()} for ${need.wantedTile.name.toLowerCase()}?`
                 });
             } else if (GameMemory.myCash >= need.wantedTile.price + 100) {
                 const cashOffer = Math.min(GameMemory.myCash - 80, Math.round(need.wantedTile.price * 1.4));
@@ -471,7 +471,7 @@ export const TradeEngine = {
                     cashOffer: Math.max(70, cashOffer),
                     cashDemand: 0,
                     summary: `CASH ACQUISITION: Offer $${cashOffer} -> Get ${need.wantedTile.name}`,
-                    pitch: `@${targetOppName} Offering $${cashOffer} cash right now for your ${need.wantedTile.name}!`
+                    pitch: `${cashOffer} for ${need.wantedTile.name.toLowerCase()}?`
                 });
             }
         }
@@ -492,7 +492,7 @@ export const TradeEngine = {
                             cashOffer,
                             cashDemand: 0,
                             summary: `AIRPORT BUYOUT: Offer $${cashOffer} -> Get ${air.name}`,
-                            pitch: `@${holder} Would you sell ${air.name} for $${cashOffer} cash?`
+                            pitch: `${cashOffer} for ${air.name.toLowerCase()}?`
                         });
                     }
                 }

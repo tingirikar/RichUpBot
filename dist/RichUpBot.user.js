@@ -16,7 +16,7 @@
 
 (() => {
   // src/config.js
-  var CONFIG = {
+  var CONFIG2 = {
     // Action timing delays (in milliseconds) for human-like interaction
     ACTION_DELAY_MIN: 400,
     ACTION_DELAY_MAX: 1800,
@@ -289,7 +289,7 @@
     wsMessages: [],
     lastPurchasedBlock: null,
     lastDangerEV: 0,
-    lastDynamicReserve: CONFIG.BASE_MIN_RESERVE,
+    lastDynamicReserve: CONFIG2.BASE_MIN_RESERVE,
     lastJailMode: "AGR_EXIT",
     lastTradeVerdict: "READY",
     isLogProcessed(line, ttlMs = 8e3) {
@@ -1273,6 +1273,10 @@
               const price = parseInt(m[1] || m[2], 10);
               if (!isNaN(price) && price >= 50 && price <= 500) {
                 tile.price = price;
+                if (GameMemory2.ownership[tile.id] && !GameMemory2.isMe(GameMemory2.ownership[tile.id].owner)) {
+                  GameMemory2.ownership[tile.id].owner = null;
+                  GameMemory2.ownership[tile.id].houses = 0;
+                }
               }
             }
           }
@@ -1765,7 +1769,11 @@
         givenTiles.push(tile);
       } else {
         receivedTiles.push(tile);
-        if (owner && !GameMemory2.isMe(owner)) {
+        if (partnerName && partnerName !== "Opponent") {
+          if (GameMemory2.ownership[tile.id]) {
+            GameMemory2.ownership[tile.id].owner = partnerName;
+          }
+        } else if (owner && !GameMemory2.isMe(owner)) {
           partnerName = owner;
         }
       }
@@ -1997,12 +2005,12 @@
       };
     },
     computeDynamicReserve(currentPos) {
-      if (!CONFIG.SMART_RESERVE_ENABLED) return CONFIG.BASE_MIN_RESERVE;
+      if (!CONFIG2.SMART_RESERVE_ENABLED) return CONFIG2.BASE_MIN_RESERVE;
       const danger = this.analyzeDangerAhead(currentPos);
       const dynamicReserve = Math.round(
-        CONFIG.BASE_MIN_RESERVE + CONFIG.RISK_AVERSION_FACTOR * danger.expectedLoss1Turn + CONFIG.WORST_CASE_WEIGHT * danger.maxDangerWindowLoss
+        CONFIG2.BASE_MIN_RESERVE + CONFIG2.RISK_AVERSION_FACTOR * danger.expectedLoss1Turn + CONFIG2.WORST_CASE_WEIGHT * danger.maxDangerWindowLoss
       );
-      GameMemory2.lastDynamicReserve = Math.max(CONFIG.BASE_MIN_RESERVE, dynamicReserve);
+      GameMemory2.lastDynamicReserve = Math.max(CONFIG2.BASE_MIN_RESERVE, dynamicReserve);
       return GameMemory2.lastDynamicReserve;
     },
     /**
@@ -2374,7 +2382,7 @@
             cashOffer: 0,
             cashDemand,
             summary: `COUNTER: Give ${requestedTile.name} -> Get ${partnerMissingCard.missingTile.name}${cashDemandStr}`,
-            pitch: `@${partnerName} That offer is no deal. Give me ${partnerMissingCard.missingTile.name}${cashDemandStr ? `${cashDemandStr} cash` : ""} for ${requestedTile.name} instead. Both get sets!`,
+            pitch: `counter: ${partnerMissingCard.missingTile.name.toLowerCase()} for ${requestedTile.name.toLowerCase()}`,
             reason: `Grandmaster Counter-Proposal: Securing ${partnerMissingCard.missingTile.name} to complete our ${partnerMissingCard.missingTile.group} Monopoly!`
           };
         }
@@ -2422,14 +2430,14 @@
             accept: false,
             counterSwap: counter,
             reason: `FATAL DANGER VETO: Gives ${partnerName} a ${oppGroupName} monopoly while we get none!`,
-            chatReply: `counter me with ${counter.myReceivedTile.name.toLowerCase()}`
+            chatReply: CONFIG2.CHAT_ENABLED ? `counter me with ${counter.myReceivedTile.name.toLowerCase()}` : null
           };
         }
         return {
           accept: false,
           counterSwap: null,
           reason: `FATAL DANGER VETO: Gives ${partnerName} a ${oppGroupName} monopoly while we get none!`,
-          chatReply: `cant give u a set sry`
+          chatReply: CONFIG2.CHAT_ENABLED ? `cant give u a set sry` : null
         };
       }
       if (completesMyMonopoly) {
@@ -2439,7 +2447,7 @@
             accept: false,
             counterSwap: this.findCounterTrade(tradeData),
             reason: `MONOPOLY BLOCKED BY DEBT: Trade completes ${myCompletedGroup} but leaves only $${myCashAfter} cash!`,
-            chatReply: `id be broke lol add cash`
+            chatReply: CONFIG2.CHAT_ENABLED ? `id be broke lol add cash` : null
           };
         }
         if (givesOppMonopoly) {
@@ -2448,7 +2456,7 @@
             myGain: 3500,
             oppGain: 3500,
             reason: `MUTUAL MONOPOLY SWAP: Both players secure completed color sets (${myCompletedGroup})!`,
-            chatReply: `deal thx`
+            chatReply: CONFIG2.CHAT_ENABLED ? `deal thx` : null
           };
         } else {
           return {
@@ -2456,7 +2464,7 @@
             myGain: 5e3,
             oppGain: 500,
             reason: `MONOPOLY COMPLETER: Completes our ${myCompletedGroup} monopoly without giving opponent a set!`,
-            chatReply: `deal thx`
+            chatReply: CONFIG2.CHAT_ENABLED ? `deal thx` : null
           };
         }
       }
@@ -2475,7 +2483,7 @@
           accept: false,
           counterSwap: null,
           reason: `20-ROUND SIMULATION VETO: Accepting drops 20-round survival from ${sim.rejSurvRate}% to ${sim.accSurvRate}%!`,
-          chatReply: `nah sry`
+          chatReply: CONFIG2.CHAT_ENABLED ? `nah sry` : null
         };
       }
       if (oppGain > myGain && !completesMyMonopoly) {
@@ -2485,7 +2493,7 @@
             accept: false,
             counterSwap: counter,
             reason: `UNFAIR DEFICIT: Trade favors ${partnerName}. Countering for set completer.`,
-            chatReply: `counter me`
+            chatReply: CONFIG2.CHAT_ENABLED ? `counter me` : null
           };
         }
         const naturalReplies = [
@@ -2503,10 +2511,10 @@
           accept: false,
           counterSwap: null,
           reason: `UNFAIR DEFICIT: Trade favors ${partnerName} by +$${Math.round(oppGain - myGain)}.`,
-          chatReply
+          chatReply: CONFIG2.CHAT_ENABLED ? chatReply : null
         };
       }
-      const acceptable = myGain > 0 && (myGain >= oppGain * CONFIG.TRADE_MIN_ADVANTAGE_RATIO || completesMyMonopoly) && sim.isSimulationEVPlus;
+      const acceptable = myGain > 0 && (myGain >= oppGain * CONFIG2.TRADE_MIN_ADVANTAGE_RATIO || completesMyMonopoly) && sim.isSimulationEVPlus;
       GameMemory2.lastTradeVerdict = acceptable ? "ACCEPTABLE" : "UNFAVORABLE";
       return {
         accept: acceptable,
@@ -2515,7 +2523,7 @@
         sim20Rounds: sim,
         counterSwap: acceptable ? null : this.findCounterTrade(tradeData),
         reason: acceptable ? `GRANDMASTER EV+ TRADE: Net gain +$${Math.round(myGain)} vs Opp +$${Math.round(oppGain)} (20-turn Sim: +EV)` : `Unfavorable utility: Net gain $${Math.round(myGain)} < requirement`,
-        chatReply: acceptable ? "deal thx" : "nah sry"
+        chatReply: CONFIG2.CHAT_ENABLED ? acceptable ? "deal thx" : "nah sry" : null
       };
     },
     /**
@@ -2552,7 +2560,7 @@
               cashOffer: Math.max(0, cashOffer),
               cashDemand: Math.max(0, cashDemand),
               summary: `SWAP: Give ${oppNeed.missingTile.name} -> Get ${myNeed.missingTile.name}`,
-              pitch: `@${targetOppName} Let's swap ${oppNeed.missingTile.name} for ${myNeed.missingTile.name}. Both of us get a set!`
+              pitch: `swap ${oppNeed.missingTile.name.toLowerCase()} for ${myNeed.missingTile.name.toLowerCase()}?`
             });
           }
         }
@@ -2571,7 +2579,7 @@
             cashOffer: Math.max(0, cashOffer),
             cashDemand: 0,
             summary: `MONOPOLY ACQUISITION: Give ${sacrificeTile.name} + $${cashOffer} -> Get ${myNeed.missingTile.name}`,
-            pitch: `@${targetOppName} I will trade ${sacrificeTile.name} + $${cashOffer} for your ${myNeed.missingTile.name}!`
+            pitch: `take ${sacrificeTile.name.toLowerCase()} + ${cashOffer} for ${myNeed.missingTile.name.toLowerCase()}?`
           });
         } else if (GameMemory2.myCash >= myNeed.missingTile.price + 150) {
           const cashOffer = Math.min(GameMemory2.myCash - 100, Math.round(myNeed.missingTile.price * 1.8));
@@ -2582,7 +2590,7 @@
             cashOffer: Math.max(80, cashOffer),
             cashDemand: 0,
             summary: `CASH ACQUISITION: Offer $${cashOffer} -> Get ${myNeed.missingTile.name}`,
-            pitch: `@${targetOppName} Offering $${cashOffer} cash for your ${myNeed.missingTile.name}!`
+            pitch: `${cashOffer} for ${myNeed.missingTile.name.toLowerCase()}?`
           });
         }
       }
@@ -2601,7 +2609,7 @@
             cashOffer: Math.max(0, cashOffer),
             cashDemand: 0,
             summary: `SET CONSOLIDATION: Give ${sacrificeTile.name}${cashLabel} -> Get ${need.wantedTile.name}`,
-            pitch: cashOffer > 0 ? `@${targetOppName} I'll trade you ${sacrificeTile.name} + $${cashOffer} cash for ${need.wantedTile.name}!` : `@${targetOppName} Let's swap: I'll give you ${sacrificeTile.name} for your ${need.wantedTile.name}!`
+            pitch: cashOffer > 0 ? `${sacrificeTile.name.toLowerCase()} + ${cashOffer} for ${need.wantedTile.name.toLowerCase()}?` : `swap ${sacrificeTile.name.toLowerCase()} for ${need.wantedTile.name.toLowerCase()}?`
           });
         } else if (GameMemory2.myCash >= need.wantedTile.price + 100) {
           const cashOffer = Math.min(GameMemory2.myCash - 80, Math.round(need.wantedTile.price * 1.4));
@@ -2612,7 +2620,7 @@
             cashOffer: Math.max(70, cashOffer),
             cashDemand: 0,
             summary: `CASH ACQUISITION: Offer $${cashOffer} -> Get ${need.wantedTile.name}`,
-            pitch: `@${targetOppName} Offering $${cashOffer} cash right now for your ${need.wantedTile.name}!`
+            pitch: `${cashOffer} for ${need.wantedTile.name.toLowerCase()}?`
           });
         }
       }
@@ -2631,7 +2639,7 @@
                 cashOffer,
                 cashDemand: 0,
                 summary: `AIRPORT BUYOUT: Offer $${cashOffer} -> Get ${air.name}`,
-                pitch: `@${holder} Would you sell ${air.name} for $${cashOffer} cash?`
+                pitch: `${cashOffer} for ${air.name.toLowerCase()}?`
               });
             }
           }
@@ -2648,7 +2656,7 @@
     /**
      * Universal HTTP helper using GM_xmlhttpRequest if present, else fetch
      */
-    httpRequest({ method = "POST", url, data = null, timeout = CONFIG.OLLAMA_TIMEOUT_MS || 6e3 }) {
+    httpRequest({ method = "POST", url, data = null, timeout = CONFIG2.OLLAMA_TIMEOUT_MS || 6e3 }) {
       return new Promise((resolve, reject) => {
         const gmReq = typeof GM_xmlhttpRequest !== "undefined" ? GM_xmlhttpRequest : typeof GM !== "undefined" && GM && GM.xmlHttpRequest ? GM.xmlHttpRequest : null;
         if (gmReq) {
@@ -2698,7 +2706,7 @@
       try {
         const data = await this.httpRequest({
           method: "GET",
-          url: `${CONFIG.OLLAMA_HOST}/api/tags`,
+          url: `${CONFIG2.OLLAMA_HOST}/api/tags`,
           timeout: 1800
         });
         const models = (data?.models || []).map((m) => m.name);
@@ -2706,7 +2714,7 @@
         return {
           ok: true,
           models,
-          hasTargetModel: models.some((m) => m.includes(CONFIG.OLLAMA_MODEL))
+          hasTargetModel: models.some((m) => m.includes(CONFIG2.OLLAMA_MODEL))
         };
       } catch (err) {
         this.status = "offline";
@@ -2723,19 +2731,19 @@
      * 3rd priority: Minimax Markov math engine (automatic zero-latency fallback)
      */
     async sendChatCompletion(messages, options = { temperature: 0.1, num_predict: 120 }) {
-      const primaryModel = CONFIG.OLLAMA_MODEL || "qwen2.5:7b";
+      const primaryModel = CONFIG2.OLLAMA_MODEL || "qwen2.5:7b";
       const fallbackModel = primaryModel === "llama3.2:3b" ? "qwen2.5:7b" : "llama3.2:3b";
       try {
         const data = await this.httpRequest({
           method: "POST",
-          url: `${CONFIG.OLLAMA_HOST}/api/chat`,
+          url: `${CONFIG2.OLLAMA_HOST}/api/chat`,
           data: {
             model: primaryModel,
             messages,
             stream: false,
             options
           },
-          timeout: CONFIG.OLLAMA_TIMEOUT_MS || 6e3
+          timeout: CONFIG2.OLLAMA_TIMEOUT_MS || 6e3
         });
         if (data?.message?.content) {
           return { content: data.message.content, modelUsed: primaryModel };
@@ -2748,14 +2756,14 @@
           try {
             const fallbackData = await this.httpRequest({
               method: "POST",
-              url: `${CONFIG.OLLAMA_HOST}/api/chat`,
+              url: `${CONFIG2.OLLAMA_HOST}/api/chat`,
               data: {
                 model: fallbackModel,
                 messages,
                 stream: false,
                 options
               },
-              timeout: Math.min(CONFIG.OLLAMA_TIMEOUT_MS || 6e3, 3500)
+              timeout: Math.min(CONFIG2.OLLAMA_TIMEOUT_MS || 6e3, 3500)
             });
             if (fallbackData?.message?.content) {
               return { content: fallbackData.message.content, modelUsed: fallbackModel };
@@ -2773,7 +2781,7 @@
      */
     async evaluateTradeWithLLM(tradeData) {
       const ruleVerdict = TradeEngine.evaluateIncomingTrade(tradeData);
-      if (!CONFIG.OLLAMA_ENABLED) {
+      if (!CONFIG2.OLLAMA_ENABLED) {
         return ruleVerdict;
       }
       const prompt = this.buildPrompt(tradeData);
@@ -2989,7 +2997,8 @@ Respond ONLY with valid JSON:
      * Generates a casual, human-like in-game chat reply to an opponent's message
      */
     async generateChatResponse(sender, messageText) {
-      if (!CONFIG.OLLAMA_ENABLED || this.status === "offline") {
+      if (!CONFIG2.CHAT_ENABLED) return null;
+      if (!CONFIG2.OLLAMA_ENABLED || this.status === "offline") {
         return this.getFallbackChatReply(sender, messageText);
       }
       const prompt = `You are playing RichUp (online Monopoly) under the nickname "${GameMemory2.myName || "matrix"}".
@@ -3049,7 +3058,7 @@ Guidelines:
      * Deliberate strategic check right before ending turn
      */
     async deliberateEndTurnStrategy() {
-      if (!CONFIG.OLLAMA_ENABLED || !CONFIG.DELIBERATE_BEFORE_END_TURN || this.status === "offline") {
+      if (!CONFIG2.OLLAMA_ENABLED || !CONFIG2.DELIBERATE_BEFORE_END_TURN || this.status === "offline") {
         return { action: "END_TURN", rationale: "Minimax math checks satisfied" };
       }
       const monopolies = [];
@@ -3113,9 +3122,9 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
      * Scans the room chat feed and generates conversational replies to opponents
      */
     async scanAndRespondToOpponentChat() {
-      if (!CONFIG.CHAT_ENABLED || !CONFIG.AUTO_REPLY_CHAT) return false;
+      if (!CONFIG2.CHAT_ENABLED || !CONFIG2.AUTO_REPLY_CHAT) return false;
       const now = Date.now();
-      if (now - this.lastRepliedTime < (CONFIG.CHAT_REPLY_COOLDOWN_MS || 7e3)) return false;
+      if (now - this.lastRepliedTime < (CONFIG2.CHAT_REPLY_COOLDOWN_MS || 7e3)) return false;
       const input = document.querySelector('input[placeholder*="say" i], input[placeholder*="something" i], input[placeholder*="chat" i], input[placeholder*="message" i], textarea');
       if (!input) return false;
       const chatContainer = input.closest('form, [class*="chat"], div')?.parentElement || document.body;
@@ -3145,7 +3154,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       return false;
     },
     sendChatMessage(category, customText = null) {
-      if (!CONFIG.CHAT_ENABLED) return false;
+      if (!CONFIG2.CHAT_ENABLED) return false;
       const now = Date.now();
       let message = (customText || "").trim();
       if (!message) {
@@ -3153,8 +3162,8 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         if (!list || list.length === 0) return false;
         message = list[Math.floor(Math.random() * list.length)];
       }
-      message = message.replace(/^(decline:|accept:|negotiate:|counter:)\s*/i, "").replace(/[.!]$/, "").toLowerCase().trim();
-      const cooldown = CONFIG.CHAT_COOLDOWN_MS || 6e3;
+      message = message.replace(/^(decline:|accept:|negotiate:|counter:)\s*/i, "").replace(/@[A-Za-z0-9_-]+\s*/g, "").replace(/[.!]+$/, "").toLowerCase().trim();
+      const cooldown = CONFIG2.CHAT_COOLDOWN_MS || 6e3;
       if (now - this.lastSentTime < cooldown) return false;
       if (this.lastSentText && message.toLowerCase() === this.lastSentText.toLowerCase() && now - this.lastSentTime < 25e3) {
         return false;
@@ -3279,8 +3288,10 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
           sendBtn.click();
           logToBot2(`[TRADE CREATOR] Trade proposal sent to ${swap.targetOwner}!`);
           this.lastProposedTimes.set(swap.targetOwner, Date.now());
-          await sleep(600);
-          ChatEngine.sendChatMessage("tradeOffer", swap.pitch);
+          if (CONFIG.CHAT_ENABLED && swap.pitch) {
+            await sleep(400);
+            ChatEngine.sendChatMessage("tradeOffer", swap.pitch);
+          }
           if (onComplete) onComplete(true);
         } else {
           logToBot2("[TRADE CREATOR] Could not find [Send trade] button.");
@@ -3650,6 +3661,19 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
                 left: calc(100% - 12px); background: #fff;
             }
 
+            /* Intel / Memory Tab */
+            .rubot-intel-page { display: flex; flex-direction: column; gap: 6px; flex: 1; }
+            .rubot-intel-card {
+                background: rgba(255,255,255,0.03); border: 1px solid rgba(139,92,246,0.18);
+                border-radius: 8px; padding: 7px 9px; display: flex; flex-direction: column; gap: 3px;
+            }
+            .rubot-intel-title { font-size: 9.5px; font-weight: 700; color: #c4b5fd; display: flex; justify-content: space-between; align-items: center; }
+            .rubot-intel-content { font-size: 8.5px; color: rgba(196,181,253,0.85); line-height: 1.35; word-break: break-word; }
+            .rubot-intel-badge { font-size: 8px; font-weight: 700; padding: 1px 5px; border-radius: 4px; display: inline-block; }
+            .rubot-intel-badge.green { background: rgba(16,185,129,0.2); color: #34d399; border: 1px solid rgba(16,185,129,0.4); }
+            .rubot-intel-badge.amber { background: rgba(245,158,11,0.2); color: #fbbf24; border: 1px solid rgba(245,158,11,0.4); }
+            .rubot-intel-badge.red { background: rgba(239,68,68,0.2); color: #f87171; border: 1px solid rgba(239,68,68,0.4); }
+
             /* Activity Log Tab */
             .rubot-log-page { display: flex; flex-direction: column; height: 100%; flex: 1; }
             .rubot-log-toolbar {
@@ -3711,8 +3735,8 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
             <div class="rubot-top-controls">
                 <button class="rubot-master-btn" id="rubot-btn-master">\u25B6 START BOT  [=]</button>
                 <div class="rubot-mode-wrap">
-                    <button class="rubot-mode-btn ${!CONFIG.ADVISOR_MODE ? "active" : ""}" id="rubot-mode-auto">\u26A1 AUTO-PILOT</button>
-                    <button class="rubot-mode-btn ${CONFIG.ADVISOR_MODE ? "active" : ""}" id="rubot-mode-adv">\u{1F4AC} ADVISOR</button>
+                    <button class="rubot-mode-btn ${!CONFIG2.ADVISOR_MODE ? "active" : ""}" id="rubot-mode-auto">\u26A1 AUTO-PILOT</button>
+                    <button class="rubot-mode-btn ${CONFIG2.ADVISOR_MODE ? "active" : ""}" id="rubot-mode-adv">\u{1F4AC} ADVISOR</button>
                 </div>
                 <div class="rubot-advisor-box" id="rubot-advisor-box">
                     <div class="rubot-adv-title" id="rubot-adv-title">Proposal</div>
@@ -3726,6 +3750,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
 
             <div class="rubot-tab-bar">
                 <button class="rubot-tab-btn active" data-tab="brain">\u{1F9E0} Brain</button>
+                <button class="rubot-tab-btn" data-tab="intel">\u{1F4CA} Intel</button>
                 <button class="rubot-tab-btn" data-tab="toggles">\u2699\uFE0F Features</button>
                 <button class="rubot-tab-btn" data-tab="logs">\u{1F4CB} Activity Log</button>
             </div>
@@ -3742,20 +3767,20 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
 
                     <div class="rubot-field-group">
                         <label class="rubot-field-label">Ollama Host</label>
-                        <input type="text" class="rubot-input" id="rubot-host-ollama" value="${CONFIG.OLLAMA_HOST}" />
+                        <input type="text" class="rubot-input" id="rubot-host-ollama" value="${CONFIG2.OLLAMA_HOST}" />
                     </div>
 
                     <div class="rubot-field-group">
                         <label class="rubot-field-label">Model Selection (Auto-Fallback Hierarchy)</label>
                         <select class="rubot-select" id="rubot-select-model">
-                            <option value="qwen2.5:7b" ${CONFIG.OLLAMA_MODEL === "qwen2.5:7b" ? "selected" : ""}>qwen2.5:7b (1st Priority Logic & Math)</option>
-                            <option value="llama3.2:3b" ${CONFIG.OLLAMA_MODEL === "llama3.2:3b" ? "selected" : ""}>llama3.2:3b (2nd Priority Fast Fallback)</option>
-                            <option value="llama3.1:8b" ${CONFIG.OLLAMA_MODEL === "llama3.1:8b" ? "selected" : ""}>llama3.1:8b (Deep Valuation)</option>
-                            <option value="qwen3.5:4b" ${CONFIG.OLLAMA_MODEL === "qwen3.5:4b" ? "selected" : ""}>qwen3.5:4b (Thinking & Reasoning)</option>
-                            <option value="llama3.2-vision:latest" ${CONFIG.OLLAMA_MODEL === "llama3.2-vision:latest" ? "selected" : ""}>llama3.2-vision:latest (Vision Capable)</option>
+                            <option value="qwen2.5:7b" ${CONFIG2.OLLAMA_MODEL === "qwen2.5:7b" ? "selected" : ""}>qwen2.5:7b (1st Priority Logic & Math)</option>
+                            <option value="llama3.2:3b" ${CONFIG2.OLLAMA_MODEL === "llama3.2:3b" ? "selected" : ""}>llama3.2:3b (2nd Priority Fast Fallback)</option>
+                            <option value="llama3.1:8b" ${CONFIG2.OLLAMA_MODEL === "llama3.1:8b" ? "selected" : ""}>llama3.1:8b (Deep Valuation)</option>
+                            <option value="qwen3.5:4b" ${CONFIG2.OLLAMA_MODEL === "qwen3.5:4b" ? "selected" : ""}>qwen3.5:4b (Thinking & Reasoning)</option>
+                            <option value="llama3.2-vision:latest" ${CONFIG2.OLLAMA_MODEL === "llama3.2-vision:latest" ? "selected" : ""}>llama3.2-vision:latest (Vision Capable)</option>
                             <option value="custom">Custom model...</option>
                         </select>
-                        <input type="text" class="rubot-input" id="rubot-custom-model" style="display:none; margin-top: 4px;" placeholder="Model tag (e.g. qwen2.5:7b)" value="${CONFIG.OLLAMA_MODEL}" />
+                        <input type="text" class="rubot-input" id="rubot-custom-model" style="display:none; margin-top: 4px;" placeholder="Model tag (e.g. qwen2.5:7b)" value="${CONFIG2.OLLAMA_MODEL}" />
                     </div>
 
                     <button class="rubot-btn-test" id="rubot-btn-ping">\u26A1 Test & Connect Ollama</button>
@@ -3765,7 +3790,18 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
                     </div>
                 </div>
 
-                <!-- TAB 2: FEATURE TOGGLES -->
+                <!-- TAB: LIVE GAME INTEL & MEMORY -->
+                <div class="rubot-tab-page" id="rubot-page-intel">
+                    <div class="rubot-intel-page" id="rubot-intel-container">
+                        <div class="rubot-intel-card">
+                            <div class="rubot-intel-title">
+                                <span>Game Memory Loading...</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TAB: FEATURE TOGGLES -->
                 <div class="rubot-tab-page" id="rubot-page-toggles">
                     <div class="rubot-toggles-list">
                         <label class="rubot-toggle-item">
@@ -3774,7 +3810,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
                                 <span class="rubot-toggle-desc">Acquire unowned properties & utility investments</span>
                             </div>
                             <div class="rubot-toggle-pill">
-                                <input type="checkbox" id="rubot-chk-buy" ${CONFIG.ALWAYS_BUY_AFFORDABLE ? "checked" : ""}>
+                                <input type="checkbox" id="rubot-chk-buy" ${CONFIG2.ALWAYS_BUY_AFFORDABLE ? "checked" : ""}>
                                 <div class="rubot-pill-track"></div>
                             </div>
                         </label>
@@ -3785,7 +3821,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
                                 <span class="rubot-toggle-desc">Always accept monopoly completers & propose swaps</span>
                             </div>
                             <div class="rubot-toggle-pill">
-                                <input type="checkbox" id="rubot-chk-trade" ${CONFIG.AUTO_TRADE_ENABLED ? "checked" : ""}>
+                                <input type="checkbox" id="rubot-chk-trade" ${CONFIG2.AUTO_TRADE_ENABLED ? "checked" : ""}>
                                 <div class="rubot-pill-track"></div>
                             </div>
                         </label>
@@ -3796,7 +3832,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
                                 <span class="rubot-toggle-desc">Proactively build houses & rush 3-house monopolies</span>
                             </div>
                             <div class="rubot-toggle-pill">
-                                <input type="checkbox" id="rubot-chk-build" ${CONFIG.AUTO_BUILD_ENABLED ? "checked" : ""}>
+                                <input type="checkbox" id="rubot-chk-build" ${CONFIG2.AUTO_BUILD_ENABLED ? "checked" : ""}>
                                 <div class="rubot-pill-track"></div>
                             </div>
                         </label>
@@ -3807,7 +3843,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
                                 <span class="rubot-toggle-desc">Liquidate dead assets to clear debt and avoid bankruptcy</span>
                             </div>
                             <div class="rubot-toggle-pill">
-                                <input type="checkbox" id="rubot-chk-mortgage" ${CONFIG.AUTO_MORTGAGE_ENABLED ? "checked" : ""}>
+                                <input type="checkbox" id="rubot-chk-mortgage" ${CONFIG2.AUTO_MORTGAGE_ENABLED ? "checked" : ""}>
                                 <div class="rubot-pill-track"></div>
                             </div>
                         </label>
@@ -3818,7 +3854,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
                                 <span class="rubot-toggle-desc">Snipe underpriced auctions & block enemy sets</span>
                             </div>
                             <div class="rubot-toggle-pill">
-                                <input type="checkbox" id="rubot-chk-auction" ${CONFIG.AUTO_AUCTION_ENABLED ? "checked" : ""}>
+                                <input type="checkbox" id="rubot-chk-auction" ${CONFIG2.AUTO_AUCTION_ENABLED ? "checked" : ""}>
                                 <div class="rubot-pill-track"></div>
                             </div>
                         </label>
@@ -3829,18 +3865,18 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
                                 <span class="rubot-toggle-desc">Reserve cash dynamically against enemy landing zones</span>
                             </div>
                             <div class="rubot-toggle-pill">
-                                <input type="checkbox" id="rubot-chk-reserve" ${CONFIG.SMART_RESERVE_ENABLED ? "checked" : ""}>
+                                <input type="checkbox" id="rubot-chk-reserve" ${CONFIG2.SMART_RESERVE_ENABLED ? "checked" : ""}>
                                 <div class="rubot-pill-track"></div>
                             </div>
                         </label>
 
                         <label class="rubot-toggle-item">
                             <div class="rubot-toggle-info">
-                                <span class="rubot-toggle-name">Natural AI Chat</span>
-                                <span class="rubot-toggle-desc">Converses naturally with opponents during match</span>
+                                <span class="rubot-toggle-name">Chat Engagement</span>
+                                <span class="rubot-toggle-desc">Auto-replies & trade talk (OFF = completely silent)</span>
                             </div>
                             <div class="rubot-toggle-pill">
-                                <input type="checkbox" id="rubot-chk-chat" ${CONFIG.CHAT_ENABLED ? "checked" : ""}>
+                                <input type="checkbox" id="rubot-chk-chat" ${CONFIG2.CHAT_ENABLED ? "checked" : ""}>
                                 <div class="rubot-pill-track"></div>
                             </div>
                         </label>
@@ -3884,14 +3920,14 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       };
       this.elements.masterBtn.addEventListener("click", onToggleMaster);
       this.elements.modeAuto.addEventListener("click", () => {
-        CONFIG.ADVISOR_MODE = false;
+        CONFIG2.ADVISOR_MODE = false;
         this.elements.modeAuto.classList.add("active");
         this.elements.modeAdv.classList.remove("active");
         this.hideAdvisorBox();
         this.logTerminal("Mode: AUTO-PILOT (Fully Autonomous)");
       });
       this.elements.modeAdv.addEventListener("click", () => {
-        CONFIG.ADVISOR_MODE = true;
+        CONFIG2.ADVISOR_MODE = true;
         this.elements.modeAdv.classList.add("active");
         this.elements.modeAuto.classList.remove("active");
         this.logTerminal("Mode: ADVISOR (Human Approval)");
@@ -3920,6 +3956,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
           const targetPage = document.getElementById(`rubot-page-${targetTab}`);
           if (targetPage) targetPage.classList.add("active");
           this.activeTab = targetTab;
+          if (targetTab === "intel") this.updateIntelTab();
         });
       });
       document.getElementById("rubot-btn-clear-log").addEventListener("click", () => {
@@ -3954,24 +3991,24 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         });
       }
       this.elements.hostInput.addEventListener("change", (e) => {
-        CONFIG.OLLAMA_HOST = e.target.value.trim();
-        localStorage.setItem("richup_ollama_host", CONFIG.OLLAMA_HOST);
-        this.logTerminal(`Ollama host set to: ${CONFIG.OLLAMA_HOST}`);
+        CONFIG2.OLLAMA_HOST = e.target.value.trim();
+        localStorage.setItem("richup_ollama_host", CONFIG2.OLLAMA_HOST);
+        this.logTerminal(`Ollama host set to: ${CONFIG2.OLLAMA_HOST}`);
       });
       this.elements.selectModel.addEventListener("change", (e) => {
         if (e.target.value === "custom") {
           this.elements.customModel.style.display = "block";
         } else {
           this.elements.customModel.style.display = "none";
-          CONFIG.OLLAMA_MODEL = e.target.value;
-          localStorage.setItem("richup_ollama_model", CONFIG.OLLAMA_MODEL);
-          this.logTerminal(`Ollama model: ${CONFIG.OLLAMA_MODEL}`);
+          CONFIG2.OLLAMA_MODEL = e.target.value;
+          localStorage.setItem("richup_ollama_model", CONFIG2.OLLAMA_MODEL);
+          this.logTerminal(`Ollama model: ${CONFIG2.OLLAMA_MODEL}`);
         }
       });
       this.elements.customModel.addEventListener("change", (e) => {
-        CONFIG.OLLAMA_MODEL = e.target.value.trim();
-        localStorage.setItem("richup_ollama_model", CONFIG.OLLAMA_MODEL);
-        this.logTerminal(`Ollama model set to: ${CONFIG.OLLAMA_MODEL}`);
+        CONFIG2.OLLAMA_MODEL = e.target.value.trim();
+        localStorage.setItem("richup_ollama_model", CONFIG2.OLLAMA_MODEL);
+        this.logTerminal(`Ollama model set to: ${CONFIG2.OLLAMA_MODEL}`);
       });
       const testOllama = async () => {
         this.elements.statusOllama.textContent = "Connecting...";
@@ -3979,9 +4016,9 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         const res = await OllamaClient.checkHealth();
         if (res.ok) {
           this.elements.dotOllama.className = "rubot-status-dot online";
-          const found = res.models.find((m) => m.includes(CONFIG.OLLAMA_MODEL)) || res.models[0] || CONFIG.OLLAMA_MODEL;
-          this.elements.statusOllama.textContent = `Connected (${CONFIG.OLLAMA_MODEL})`;
-          CONFIG.OLLAMA_ENABLED = true;
+          const found = res.models.find((m) => m.includes(CONFIG2.OLLAMA_MODEL)) || res.models[0] || CONFIG2.OLLAMA_MODEL;
+          this.elements.statusOllama.textContent = `Connected (${CONFIG2.OLLAMA_MODEL})`;
+          CONFIG2.OLLAMA_ENABLED = true;
           localStorage.setItem("richup_ollama_enabled", "true");
           this.logTerminal(`Ollama connected: ${found}. Brain online!`);
         } else {
@@ -3992,36 +4029,42 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       };
       this.elements.btnPing.addEventListener("click", testOllama);
       document.getElementById("rubot-chk-buy").addEventListener("change", (e) => {
-        CONFIG.ALWAYS_BUY_AFFORDABLE = e.target.checked;
+        CONFIG2.ALWAYS_BUY_AFFORDABLE = e.target.checked;
         localStorage.setItem("richup_cfg_buy", String(e.target.checked));
       });
       document.getElementById("rubot-chk-trade").addEventListener("change", (e) => {
-        CONFIG.AUTO_TRADE_ENABLED = e.target.checked;
+        CONFIG2.AUTO_TRADE_ENABLED = e.target.checked;
         localStorage.setItem("richup_cfg_trade", String(e.target.checked));
       });
       document.getElementById("rubot-chk-build").addEventListener("change", (e) => {
-        CONFIG.AUTO_BUILD_ENABLED = e.target.checked;
+        CONFIG2.AUTO_BUILD_ENABLED = e.target.checked;
         localStorage.setItem("richup_cfg_build", String(e.target.checked));
       });
       document.getElementById("rubot-chk-mortgage").addEventListener("change", (e) => {
-        CONFIG.AUTO_MORTGAGE_ENABLED = e.target.checked;
+        CONFIG2.AUTO_MORTGAGE_ENABLED = e.target.checked;
         localStorage.setItem("richup_cfg_mortgage", String(e.target.checked));
       });
       document.getElementById("rubot-chk-auction").addEventListener("change", (e) => {
-        CONFIG.AUTO_AUCTION_ENABLED = e.target.checked;
+        CONFIG2.AUTO_AUCTION_ENABLED = e.target.checked;
         localStorage.setItem("richup_cfg_auction", String(e.target.checked));
       });
       document.getElementById("rubot-chk-reserve").addEventListener("change", (e) => {
-        CONFIG.SMART_RESERVE_ENABLED = e.target.checked;
+        CONFIG2.SMART_RESERVE_ENABLED = e.target.checked;
         localStorage.setItem("richup_cfg_reserve", String(e.target.checked));
       });
       document.getElementById("rubot-chk-chat").addEventListener("change", (e) => {
-        CONFIG.CHAT_ENABLED = e.target.checked;
+        CONFIG2.CHAT_ENABLED = e.target.checked;
         localStorage.setItem("richup_cfg_chat", String(e.target.checked));
+        this.logTerminal(`Chat Engagement: ${e.target.checked ? "ENABLED (Casual human replies)" : "DISABLED (100% silent)"}`);
       });
       this.initDragAndPersistence();
       window.__richupLogTerminal = (msg) => this.logTerminal(msg);
       this.logTerminal("RichUp Bot v5.0 initialized. Ready for gameplay.");
+      setInterval(() => {
+        if (this.activeTab === "intel") {
+          this.updateIntelTab();
+        }
+      }, 1200);
       setTimeout(testOllama, 400);
     },
     isProposalActive(title) {
@@ -4047,7 +4090,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         this.elements.masterBtn.classList.add("active");
         this.elements.masterBtn.textContent = "\u25A0 STOP BOT  [=]";
         this.elements.phaseBadge.classList.add("active");
-        this.elements.phaseBadge.textContent = CONFIG.ADVISOR_MODE ? "ADVISOR" : "ACTIVE";
+        this.elements.phaseBadge.textContent = CONFIG2.ADVISOR_MODE ? "ADVISOR" : "ACTIVE";
       } else {
         this.elements.masterBtn.classList.remove("active");
         this.elements.masterBtn.textContent = "\u25B6 START BOT  [=]";
@@ -4059,7 +4102,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       if (this.elements.phaseBadge) {
         const isActive = this.elements.masterBtn && this.elements.masterBtn.classList.contains("active");
         if (isActive) {
-          this.elements.phaseBadge.textContent = CONFIG.ADVISOR_MODE ? "ADVISOR" : "ACTIVE";
+          this.elements.phaseBadge.textContent = CONFIG2.ADVISOR_MODE ? "ADVISOR" : "ACTIVE";
         }
       }
     },
@@ -4141,6 +4184,76 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         this.saveGeometry();
       });
       resizeObserver.observe(panel);
+    },
+    updateIntelTab() {
+      const container = document.getElementById("rubot-intel-container");
+      if (!container) return;
+      const myName = GameMemory2.myName || "matrix";
+      const myCash = GameMemory2.myCash;
+      const myTiles = BOARD_TILES.filter((t) => t.group && GameMemory2.isMe(GameMemory2.ownership[t.id]?.owner));
+      const myMonopolies = [];
+      for (const [groupName, groupTiles] of Object.entries(GROUP_TILES)) {
+        if (groupName === "Airport" || groupName === "Utility") continue;
+        if (groupTiles.every((t) => GameMemory2.isMe(GameMemory2.ownership[t.id]?.owner))) {
+          myMonopolies.push(groupName);
+        }
+      }
+      const oppData = OpponentTracker.analyzeOpponents();
+      const unownedCount = GameMemory2.getUnownedPropertyCount();
+      let html = `
+            <div class="rubot-intel-card">
+                <div class="rubot-intel-title">
+                    <span>\u{1F451} ME (${myName})</span>
+                    <span class="rubot-intel-badge green">$${myCash}</span>
+                </div>
+                <div class="rubot-intel-content">
+                    <b>Properties (${myTiles.length}):</b> ${myTiles.length > 0 ? myTiles.map((t) => {
+        const h = GameMemory2.ownership[t.id]?.houses || 0;
+        const hStr = h === 5 ? " [\u{1F3E8}]" : h > 0 ? ` [\u{1F3E0}x${h}]` : "";
+        return `${t.name}${hStr}`;
+      }).join(", ") : "None yet"}<br>
+                    <b>Monopolies:</b> ${myMonopolies.length > 0 ? myMonopolies.map((m) => `<span class="rubot-intel-badge green">${m}</span>`).join(" ") : '<span style="color:rgba(196,181,253,0.5)">None</span>'}
+                </div>
+            </div>
+
+            <div class="rubot-intel-card">
+                <div class="rubot-intel-title">
+                    <span>\u{1F465} OPPONENTS INVENTORIES</span>
+                    <span class="rubot-intel-badge amber">${Object.keys(oppData).length} Tracked</span>
+                </div>
+                <div class="rubot-intel-content">
+        `;
+      const oppEntries = Object.entries(oppData);
+      if (oppEntries.length === 0) {
+        html += `<span style="color:rgba(196,181,253,0.5)">Auto-scanning scoreboard...</span>`;
+      } else {
+        for (const [pName, data] of oppEntries) {
+          const hungryStr = data.hungrySets.length > 0 ? data.hungrySets.map((h) => `<span class="rubot-intel-badge red">${h.group} ${h.ownedCount}/${h.total}</span>`).join(" ") : "";
+          const propStr = data.ownedTiles.length > 0 ? data.ownedTiles.map((t) => t.name).join(", ") : "None yet";
+          html += `
+                    <div style="margin-top: 4px; padding-top: 4px; border-top: 1px solid rgba(139,92,246,0.12);">
+                        <b>${pName}:</b> <span class="rubot-intel-badge green">$${data.cash}</span> ${hungryStr}<br>
+                        <span style="color: rgba(196,181,253,0.7);">${propStr}</span>
+                    </div>
+                `;
+        }
+      }
+      html += `
+                </div>
+            </div>
+
+            <div class="rubot-intel-card">
+                <div class="rubot-intel-title">
+                    <span>\u{1F5FA}\uFE0F BOARD & STRATEGY STATUS</span>
+                    <span class="rubot-intel-badge">${unownedCount} Unowned</span>
+                </div>
+                <div class="rubot-intel-content">
+                    <b>Chat Engagement:</b> ${CONFIG2.CHAT_ENABLED ? '<span class="rubot-intel-badge green">ACTIVE (Smart/Casual)</span>' : '<span class="rubot-intel-badge red">SILENT (Off)</span>'}<br>
+                    <b>Ollama Brain:</b> <span class="rubot-intel-badge green">${CONFIG2.OLLAMA_MODEL}</span>
+                </div>
+            </div>
+        `;
+      container.innerHTML = html;
     }
   };
 
@@ -4161,7 +4274,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
   function delayClick(el, reason = "") {
     if (!el || isActing) return false;
     isActing = true;
-    const delay = Math.floor(Math.random() * (CONFIG.ACTION_DELAY_MAX - CONFIG.ACTION_DELAY_MIN + 1)) + CONFIG.ACTION_DELAY_MIN;
+    const delay = Math.floor(Math.random() * (CONFIG2.ACTION_DELAY_MAX - CONFIG2.ACTION_DELAY_MIN + 1)) + CONFIG2.ACTION_DELAY_MIN;
     logToBot2(`[ACTION] ${reason} (in ${delay}ms)`);
     setTimeout(() => {
       try {
@@ -4189,7 +4302,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
   }
   function executeOrAdvise({ el, title, reason, onExecute, onSkip }) {
     if (!el || isActing) return false;
-    if (CONFIG.ADVISOR_MODE) {
+    if (CONFIG2.ADVISOR_MODE) {
       if (HUDPanel.isProposalActive(title)) {
         return true;
       }
@@ -4235,7 +4348,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       if (processedTradeSignatures.has(sig) && now - processedTradeSignatures.get(sig) < 15e3) {
         return true;
       }
-      if (!CONFIG.AUTO_TRADE_ENABLED) {
+      if (!CONFIG2.AUTO_TRADE_ENABLED) {
         if (declineBtn) {
           processedTradeSignatures.set(sig, now);
           delayClick(declineBtn, "Auto-declining trade (Auto-Trade disabled)");
@@ -4279,7 +4392,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
             onExecute: () => {
               if (verdict.chatReply) ChatEngine.sendChatMessage("tradeReject", verdict.chatReply);
               delayClick(declineBtn, `Declining trade (${verdict.reason})`);
-              if (verdict.counterSwap && CONFIG.AUTO_TRADE_ENABLED) {
+              if (verdict.counterSwap && CONFIG2.AUTO_TRADE_ENABLED) {
                 logToBot2(`[COUNTER TRADE] Scheduling counter-proposal for ${verdict.counterSwap.targetOwner}...`);
                 setTimeout(() => {
                   if (!TradeProposalExecutor.isExecuting) {
@@ -4299,7 +4412,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
      * Proactively opens the Trade UI and submits win-win trade proposals!
      */
     handleProactiveTrade(snapshot) {
-      if (!CONFIG.AUTO_TRADE_ENABLED || TradeProposalExecutor.isExecuting) return false;
+      if (!CONFIG2.AUTO_TRADE_ENABLED || TradeProposalExecutor.isExecuting) return false;
       const createBtn = snapshot.findCreateTradeButton();
       if (!createBtn) return false;
       const swaps = TradeEngine.scanMutualMonopolySwaps();
@@ -4443,7 +4556,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       return false;
     },
     handleAuction(snapshot) {
-      if (!CONFIG.AUTO_AUCTION_ENABLED) return false;
+      if (!CONFIG2.AUTO_AUCTION_ENABLED) return false;
       let bidBtn = snapshot.findAuctionBidButton();
       const passBtn = snapshot.findAuctionPassButton();
       if (!bidBtn && !passBtn) return false;
@@ -4485,7 +4598,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       return false;
     },
     handleHouseBuilding(snapshot) {
-      if (!CONFIG.AUTO_BUILD_ENABLED) return false;
+      if (!CONFIG2.AUTO_BUILD_ENABLED) return false;
       const openCard = snapshot.getOpenPropertyCard ? snapshot.getOpenPropertyCard() : null;
       const completeSets = [];
       for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
@@ -4567,7 +4680,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
      * Autonomous Unmortgaging: Reclaims mortgaged properties when player has cash surplus
      */
     handleUnmortgage(snapshot) {
-      if (!CONFIG.AUTO_MORTGAGE_ENABLED || GameMemory2.myCash <= 0) return false;
+      if (!CONFIG2.AUTO_MORTGAGE_ENABLED || GameMemory2.myCash <= 0) return false;
       const reserve = MarkovRisk.computeDynamicReserve(GameMemory2.myPos);
       const candidates = DebtRecovery.rankUnmortgageCandidates(GameMemory2.myCash, reserve);
       if (candidates.length === 0) return false;
@@ -4600,7 +4713,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       return false;
     },
     handleDebtRecovery(snapshot) {
-      if (!CONFIG.AUTO_MORTGAGE_ENABLED) return false;
+      if (!CONFIG2.AUTO_MORTGAGE_ENABLED) return false;
       const isDebt = GameMemory2.myCash < 0 || GameMemory2.isNegativeDebt;
       if (!isDebt) return false;
       logToBot2(`[DEBT RECOVERY] Negative balance ($${GameMemory2.myCash}). Liquidating assets to survive...`);
@@ -4686,7 +4799,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     async deliberateBeforeEndTurn(snapshot) {
       const endTurnBtn = snapshot.findExactOrIncludes(["end turn", "done", "continue"]);
       if (!endTurnBtn) return false;
-      if (CONFIG.AUTO_TRADE_ENABLED && !TradeProposalExecutor.isExecuting) {
+      if (CONFIG2.AUTO_TRADE_ENABLED && !TradeProposalExecutor.isExecuting) {
         try {
           if (this.handleProactiveTrade(snapshot)) {
             return true;
@@ -4694,7 +4807,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         } catch (_) {
         }
       }
-      if (CONFIG.DELIBERATE_BEFORE_END_TURN && CONFIG.OLLAMA_ENABLED && this.lastDeliberatedTurn !== GameMemory2.turnCount) {
+      if (CONFIG2.DELIBERATE_BEFORE_END_TURN && CONFIG2.OLLAMA_ENABLED && this.lastDeliberatedTurn !== GameMemory2.turnCount) {
         this.lastDeliberatedTurn = GameMemory2.turnCount;
         logToBot2("[STRATEGY] Ollama turn review before ending...");
         const verdict = await OllamaClient.deliberateEndTurnStrategy();
@@ -4875,7 +4988,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     state.evaluateTimeout = scheduleTimeout(async () => {
       state.evaluateTimeout = null;
       await evaluateAndAct();
-    }, CONFIG.OBSERVER_DEBOUNCE_MS);
+    }, CONFIG2.OBSERVER_DEBOUNCE_MS);
   }
   function toggleAutomation() {
     state.status = !state.status;
@@ -4917,7 +5030,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         syncBoardStateFromDOM();
         HUDPanel.updateTelemetry();
       }
-    }, CONFIG.POLL_INTERVAL_MS);
+    }, CONFIG2.POLL_INTERVAL_MS);
   }
   function initWhenReady() {
     if (!document.body || !document.head) {

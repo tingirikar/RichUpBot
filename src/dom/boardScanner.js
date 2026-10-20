@@ -392,6 +392,11 @@ export function syncBoardTilePricesAndBadgesFromDOM() {
                         const price = parseInt(m[1] || m[2], 10);
                         if (!isNaN(price) && price >= 50 && price <= 500) {
                             tile.price = price;
+                            // If a tile on the board has a price badge, it is UNOWNED!
+                            if (GameMemory.ownership[tile.id] && !GameMemory.isMe(GameMemory.ownership[tile.id].owner)) {
+                                GameMemory.ownership[tile.id].owner = null;
+                                GameMemory.ownership[tile.id].houses = 0;
+                            }
                         }
                     }
                 }
@@ -1007,7 +1012,11 @@ export function scrapeTradeModalDOM() {
             givenTiles.push(tile);
         } else {
             receivedTiles.push(tile);
-            if (owner && !GameMemory.isMe(owner)) {
+            if (partnerName && partnerName !== 'Opponent') {
+                if (GameMemory.ownership[tile.id]) {
+                    GameMemory.ownership[tile.id].owner = partnerName;
+                }
+            } else if (owner && !GameMemory.isMe(owner)) {
                 partnerName = owner;
             }
         }

@@ -429,6 +429,7 @@ Respond ONLY with valid JSON:
      * Generates a casual, human-like in-game chat reply to an opponent's message
      */
     async generateChatResponse(sender, messageText) {
+        if (!CONFIG.CHAT_ENABLED) return null;
         if (!CONFIG.OLLAMA_ENABLED || this.status === 'offline') {
             return this.getFallbackChatReply(sender, messageText);
         }
