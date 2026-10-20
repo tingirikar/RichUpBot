@@ -1,4 +1,6 @@
 import { GameMemory } from '../memory/gameMemory.js';
+import { BOARD_TILES } from '../data/boardTiles.js';
+import { logToBot } from './actionExecutor.js';
 
 /**
  * SOCKET.IO & WEBSOCKET TELEMETRY INTERCEPTOR
@@ -141,9 +143,11 @@ function parseSocketIOFrame(raw) {
 
             if (isMeRolling && sum > 0) {
                 GameMemory.myPos = (GameMemory.myPos + sum) % 40;
+                logToBot(`[SOCKET DICE] 🎲 I rolled ${sum} ([${dice.join(',')}]) -> Moved to Tile #${GameMemory.myPos} (${BOARD_TILES[GameMemory.myPos]?.name || 'Unknown'})`);
             } else if (pName && GameMemory.players[pName]) {
                 const currentOppPos = GameMemory.players[pName].pos || 0;
                 GameMemory.players[pName].pos = (currentOppPos + sum) % 40;
+                logToBot(`[SOCKET DICE] 🎲 ${pName} rolled ${sum} -> Tile #${GameMemory.players[pName].pos}`);
             }
         }
 
@@ -156,6 +160,7 @@ function parseSocketIOFrame(raw) {
                 const buyer = payload.playerName || payload.username || (GameMemory.isMyTurn ? (GameMemory.myName || '__ME__') : null);
                 if (buyer && GameMemory.ownership[tileId]) {
                     GameMemory.ownership[tileId].owner = buyer;
+                    logToBot(`[SOCKET PURCHASE] 🏷️ Tile #${tileId} (${BOARD_TILES[tileId]?.name || 'Unknown'}) acquired by ${buyer}`);
                 }
             }
         }

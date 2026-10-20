@@ -285,13 +285,11 @@ export const ActionExecutor = {
     },
 
     handleBuyOrAuction(snapshot) {
-        const buyBtn = snapshot.findBuyPropertyButton();
+        let tile = BOARD_TILES[GameMemory.myPos] || null;
+        const buyBtn = snapshot.findBuyPropertyButton ? snapshot.findBuyPropertyButton(tile) : null;
         const auctionBtn = snapshot.findExactOrIncludes(['auction', 'pass', "don't buy"]);
 
         if (isBuyingLand) return false;
-        if (!buyBtn && !auctionBtn) return false;
-
-        let tile = null;
 
         // Verify or recover tile directly from the prompt card surrounding the buy button
         if (buyBtn) {
@@ -314,6 +312,23 @@ export const ActionExecutor = {
             tile = BOARD_TILES[GameMemory.myPos];
         }
 
+        const isPurchasable = tile && tile.group && (tile.type === 'property' || tile.type === 'airport' || tile.type === 'utility');
+        const owner = tile ? GameMemory.ownership[tile.id]?.owner : null;
+
+        // If standing on an unowned purchasable property but buttons not rendered yet:
+        if (isPurchasable && !owner && !buyBtn && !auctionBtn) {
+            const now = Date.now();
+            if (!this._lastPendingBuyLog || now - this._lastPendingBuyLog > 1200) {
+                this._lastPendingBuyLog = now;
+                logToBot(`[BUY PENDING] Standing on unowned ${tile.name} (Tile #${tile.id}, $${tile.price || 0}), scanning DOM for Buy prompt...`);
+            }
+            return false;
+        }
+
+        if (!buyBtn && !auctionBtn) return false;
+
+        const effectiveCash = Math.max(GameMemory.myCash, GameMemory.players[GameMemory.myName]?.cash || 0);
+
         if (buyBtn) {
             const btnText = normalizeText(buyBtn);
             const priceMatch = /\$?\s*(\d{2,4})|(\d{2,4})\s*\$/.exec(btnText);
@@ -329,10 +344,10 @@ export const ActionExecutor = {
 
             // In RichUp, if the "Buy" button is visibly enabled on the board, the player has enough funds.
             // Using Math.max guarantees immunity to any stale DOM scraping states.
-            const effectiveCash = Math.max(GameMemory.myCash, GameMemory.players[GameMemory.myName]?.cash || 0, price);
+            const candidateCash = Math.max(effectiveCash, price);
+            const decision = MarkovRisk.shouldBuyProperty(tile, price, candidateCash);
 
-            // 1. Prioritize Direct Buy: If we have enough cash, always secure the asset directly!
-            const decision = MarkovRisk.shouldBuyProperty(tile, price, effectiveCash);
+            logToBot(`[BUY EVAL] ${tile ? tile.name : 'Property'} ($${price}) | My Cash: $${effectiveCash} | Decision: ${decision.buy ? 'BUY' : 'SKIP'} (${decision.reason})`);
 
             if (decision.buy) {
                 isBuyingLand = true;
@@ -343,6 +358,7 @@ export const ActionExecutor = {
                     title: `BUY ${tile ? tile.name.toUpperCase() : 'PROPERTY'} ($${price})`,
                     reason: decision.reason,
                     onExecute: () => {
+                        logToBot(`[BUY ACTION] Executing direct purchase for ${tile ? tile.name : 'Property'} ($${price})`);
                         if (tile && GameMemory.ownership[tile.id]) {
                             GameMemory.ownership[tile.id].owner = GameMemory.myName || '__ME__';
                         }
@@ -355,19 +371,24 @@ export const ActionExecutor = {
             }
 
             // 2. If purchase cannot be made (e.g. insufficient cash):
-            const auctionCheck = AuctionSniper.shouldSendToAuctionInsteadOfBuy(tile, price, effectiveCash);
+            const auctionCheck = AuctionSniper.shouldSendToAuctionInsteadOfBuy(tile, price, candidateCash);
+            logToBot(`[AUCTION EVAL] ${tile ? tile.name : 'Property'} ($${price}) -> Send to auction? ${auctionCheck.auction ? 'YES' : 'NO'} (${auctionCheck.reason})`);
             if (auctionCheck.auction && auctionBtn) {
                 return executeOrAdvise({
                     el: auctionBtn,
                     title: 'TRIGGER AUCTION',
                     reason: auctionCheck.reason,
-                    onExecute: () => delayClick(auctionBtn, auctionCheck.reason)
+                    onExecute: () => {
+                        logToBot(`[AUCTION ACTION] Sending ${tile ? tile.name : 'Property'} to auction`);
+                        delayClick(auctionBtn, auctionCheck.reason);
+                    }
                 });
             }
         }
 
         // If we cannot buy directly (e.g. no buy button or not enough cash):
         if (auctionBtn) {
+            logToBot(`[AUCTION EVAL] Cannot afford direct purchase; sending property to auction.`);
             return executeOrAdvise({
                 el: auctionBtn,
                 title: 'PASS / AUCTION PROPERTY',
@@ -659,6 +680,7 @@ export const ActionExecutor = {
         const rollBtn = snapshot.findExactOrIncludes(['roll the dice', 'roll again']);
         if (rollBtn) {
             GameMemory.isMyTurn = true;
+            logToBot(`[DICE ACTION] It's my turn! Rolling dice (Turn #${GameMemory.turnCount + 1}) | Cash: $${GameMemory.myCash} | Pos: Tile #${GameMemory.myPos}`);
 
             return executeOrAdvise({
                 el: rollBtn,
@@ -675,10 +697,45 @@ export const ActionExecutor = {
 
     lastDeliberatedTurn: -1,
     isEndingTurn: false,
+    unownedTileWaitCount: 0,
+    lastGuardedTileId: -1,
+    _lastPendingBuyLog: 0,
 
     async deliberateBeforeEndTurn(snapshot) {
         const endTurnBtn = snapshot.findExactOrIncludes(['end turn', 'done', 'continue']);
         if (!endTurnBtn) return false;
+
+        // HARD PURCHASE SAFETY GUARD: NEVER skip buying when standing on an unowned buyable property!
+        const standingTile = BOARD_TILES[GameMemory.myPos];
+        const isPurchasable = standingTile && standingTile.group && (standingTile.type === 'property' || standingTile.type === 'airport' || standingTile.type === 'utility');
+        const currentOwner = standingTile ? GameMemory.ownership[standingTile.id]?.owner : null;
+        const isUnowned = isPurchasable && !currentOwner;
+        const effectiveCash = Math.max(GameMemory.myCash, GameMemory.players[GameMemory.myName]?.cash || 0);
+        const canAfford = standingTile ? effectiveCash >= (standingTile.price || 0) : false;
+
+        if (isUnowned && canAfford) {
+            if (this.lastGuardedTileId !== standingTile.id) {
+                this.lastGuardedTileId = standingTile.id;
+                this.unownedTileWaitCount = 0;
+            }
+
+            // 1. If Buy button is already rendered, trigger direct purchase immediately!
+            if (this.handleBuyOrAuction(snapshot)) {
+                return true;
+            }
+
+            // 2. If prompt hasn't rendered yet (e.g. dice/movement animation), HOLD TURN!
+            if (this.unownedTileWaitCount < 8) {
+                this.unownedTileWaitCount++;
+                logToBot(`[TURN GUARD] BLOCKED premature 'End Turn'! Standing on unowned ${standingTile.name} (Tile #${standingTile.id}, $${standingTile.price}) with $${effectiveCash} cash. Holding turn for Buy prompt (${this.unownedTileWaitCount}/8)...`);
+                return false;
+            } else {
+                logToBot(`[TURN GUARD TIMEOUT] Waited on ${standingTile.name} ($${standingTile.price}) without Buy/Auction prompt. Proceeding.`);
+            }
+        } else {
+            this.unownedTileWaitCount = 0;
+            this.lastGuardedTileId = -1;
+        }
 
         // BUG 4 FIX: Check for proactive trades before ending turn!
         if (CONFIG.AUTO_TRADE_ENABLED && !TradeProposalExecutor.isExecuting) {
@@ -717,6 +774,15 @@ export const ActionExecutor = {
             return false;
         }
 
+        // Defensive guard: never end turn prematurely if on unowned property we can afford
+        const standingTile = BOARD_TILES[GameMemory.myPos];
+        const isPurchasable = standingTile && standingTile.group && (standingTile.type === 'property' || standingTile.type === 'airport' || standingTile.type === 'utility');
+        const currentOwner = standingTile ? GameMemory.ownership[standingTile.id]?.owner : null;
+        const effectiveCash = Math.max(GameMemory.myCash, GameMemory.players[GameMemory.myName]?.cash || 0);
+        if (isPurchasable && !currentOwner && effectiveCash >= (standingTile.price || 0) && this.unownedTileWaitCount < 8) {
+            return false;
+        }
+
         const endTurnBtn = snapshot.findExactOrIncludes(['end turn', 'done', 'continue']);
         if (endTurnBtn) {
             // If any property card modal is lingering open, dismiss it before ending turn
@@ -729,6 +795,7 @@ export const ActionExecutor = {
             setTimeout(() => { this.isEndingTurn = false; }, 2500);
 
             GameMemory.isMyTurn = false;
+            logToBot(`[TURN ACTION] Ending turn #${GameMemory.turnCount}. Passing turn priority to next player.`);
             return executeOrAdvise({
                 el: endTurnBtn,
                 title: 'END TURN',

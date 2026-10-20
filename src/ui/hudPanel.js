@@ -797,6 +797,19 @@ export const HUDPanel = {
         const container = document.getElementById('rubot-intel-container');
         if (!container) return;
 
+        // Check if inside a live match room
+        const inRoom = window.location.pathname.includes('/room/') || !!document.querySelector('[class*="board" i]');
+        if (!inRoom) {
+            container.innerHTML = `
+                <div style="text-align: center; padding: 28px 14px; color: rgba(196,181,253,0.8);">
+                    <div style="font-size: 28px; margin-bottom: 8px;">🎮</div>
+                    <div style="font-weight: 700; font-size: 13px; color: #a78bfa; margin-bottom: 6px; letter-spacing: 0.5px;">WAITING FOR GAME TO START</div>
+                    <div style="font-size: 11px; line-height: 1.5; color: rgba(196,181,253,0.6);">Join or create a match room to populate live player inventories, monopoly trackers, and real-time trade analytics.</div>
+                </div>
+            `;
+            return;
+        }
+
         const myName = GameMemory.myName || 'matrix';
         const myCash = GameMemory.myCash;
         

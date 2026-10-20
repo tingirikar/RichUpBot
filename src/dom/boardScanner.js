@@ -706,8 +706,10 @@ function parseActivityLogLine(line) {
     // 1. In Prison / Go to Prison events
     if (/got into prison|went to prison|sent to prison/i.test(line)) {
         const playerPart = line.split(/got into prison|went to prison|sent to prison/i)[0].trim();
-        const cleanPlayer = playerPart.replace(/[^\w\s-]/g, '').trim();
-        if (GameMemory.isMe(cleanPlayer)) {
+        const cleanPlayer = playerPart.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim();
+        const isMe = GameMemory.isMe(cleanPlayer);
+        logToBot(`[PRISON EVENT] 🚔 ${isMe ? 'I was' : cleanPlayer + ' was'} sent to prison!`);
+        if (isMe) {
             GameMemory.myPos = 10;
             GameMemory.inJail = true;
         } else if (cleanPlayer && GameMemory.players[cleanPlayer]) {
@@ -721,8 +723,10 @@ function parseActivityLogLine(line) {
     // 2. Left Prison / Got free events
     if (/got free|left prison|paid.*jail|paid.*bail/i.test(line)) {
         const playerPart = line.split(/got free|left prison|paid/i)[0].trim();
-        const cleanPlayer = playerPart.replace(/[^\w\s-]/g, '').trim();
-        if (GameMemory.isMe(cleanPlayer)) {
+        const cleanPlayer = playerPart.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim();
+        const isMe = GameMemory.isMe(cleanPlayer);
+        logToBot(`[PRISON EVENT] 🔓 ${isMe ? 'I got' : cleanPlayer + ' got'} released from prison.`);
+        if (isMe) {
             GameMemory.inJail = false;
         } else if (cleanPlayer && GameMemory.players[cleanPlayer]) {
             GameMemory.players[cleanPlayer].inJail = false;
@@ -734,14 +738,16 @@ function parseActivityLogLine(line) {
     // 3. Dice Roll events (position update)
     const rollMatch = /^(.+?)\s+rolled\s+(\d+)/i.exec(line);
     if (rollMatch) {
-        const player = rollMatch[1].trim();
+        const player = rollMatch[1].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim();
         const rollVal = parseInt(rollMatch[2], 10);
         if (!isNaN(rollVal) && rollVal >= 2 && rollVal <= 12) {
+            const isMe = GameMemory.isMe(player);
+            logToBot(`[DICE EVENT] 🎲 ${isMe ? 'I' : player} rolled ${rollVal}`);
             // Only advance position from text logs if WebSocket is NOT active/healthy!
             // When WebSocket is active, socketHook.js already advanced position with 0ms latency.
             const wsHealthy = typeof GameMemory.isWsHealthy === 'function' && GameMemory.isWsHealthy();
             if (!wsHealthy) {
-                if (GameMemory.isMe(player)) {
+                if (isMe) {
                     GameMemory.myPos = (GameMemory.myPos + rollVal) % 40;
                 } else if (GameMemory.players[player]) {
                     GameMemory.players[player].pos = ((GameMemory.players[player].pos || 0) + rollVal) % 40;
@@ -757,11 +763,17 @@ function parseActivityLogLine(line) {
         for (const tile of BOARD_TILES) {
             if (new RegExp(`\\b${tile.name}\\b`, 'i').test(line)) {
                 const playerPart = line.split(/landed on/i)[0].trim();
-                const cleanPlayer = playerPart.replace(/[^\w\s-]/g, '').trim();
-                if (GameMemory.isMe(cleanPlayer)) {
+                const cleanPlayer = playerPart.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim();
+                const isMe = GameMemory.isMe(cleanPlayer);
+                const priceStr = tile.price ? ` ($${tile.price})` : '';
+                if (isMe) {
                     GameMemory.myPos = tile.id;
+                    logToBot(`[LANDING] 📍 I landed on ${tile.name} (Tile #${tile.id}, ${tile.group || tile.type}${priceStr})`);
                 } else if (cleanPlayer && GameMemory.players[cleanPlayer]) {
                     GameMemory.players[cleanPlayer].pos = tile.id;
+                    logToBot(`[LANDING] 📍 ${cleanPlayer} landed on ${tile.name} (Tile #${tile.id})`);
+                } else if (cleanPlayer) {
+                    logToBot(`[LANDING] 📍 ${cleanPlayer} landed on ${tile.name} (Tile #${tile.id})`);
                 }
                 GameMemory.markLogProcessed(line);
                 return;
@@ -769,17 +781,18 @@ function parseActivityLogLine(line) {
         }
     }
 
+    // 5. House Building events
     if (line.includes('bought a house in')) {
         for (const tile of BOARD_TILES) {
             if (tile.group && new RegExp(`\\b${tile.name}\\b`, 'i').test(line)) {
                 const buyerPart = line.split(/bought a house in/i)[0].trim();
-                const cleanBuyer = buyerPart.replace(/[^\w\s-]/g, '').trim();
+                const cleanBuyer = buyerPart.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim();
                 if (cleanBuyer && GameMemory.ownership[tile.id]) {
                     GameMemory.ownership[tile.id].owner = cleanBuyer;
                     GameMemory.ownership[tile.id].houses = Math.min(5, (GameMemory.ownership[tile.id].houses || 0) + 1);
-                    if (GameMemory.isMe(cleanBuyer)) {
-                        GameMemory.myPos = tile.id;
-                    }
+                    const isMe = GameMemory.isMe(cleanBuyer);
+                    if (isMe) GameMemory.myPos = tile.id;
+                    logToBot(`[BUILD EVENT] 🏠 ${isMe ? 'I' : cleanBuyer} bought a house in ${tile.name} (${GameMemory.ownership[tile.id].houses}/5)`);
                     GameMemory.markLogProcessed(line);
                     return;
                 }
@@ -787,17 +800,18 @@ function parseActivityLogLine(line) {
         }
     }
 
+    // 6. Hotel Building events
     if (line.includes('bought a hotel in')) {
         for (const tile of BOARD_TILES) {
             if (tile.group && new RegExp(`\\b${tile.name}\\b`, 'i').test(line)) {
                 const buyerPart = line.split(/bought a hotel in/i)[0].trim();
-                const cleanBuyer = buyerPart.replace(/[^\w\s-]/g, '').trim();
+                const cleanBuyer = buyerPart.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim();
                 if (cleanBuyer && GameMemory.ownership[tile.id]) {
                     GameMemory.ownership[tile.id].owner = cleanBuyer;
                     GameMemory.ownership[tile.id].houses = 5;
-                    if (GameMemory.isMe(cleanBuyer)) {
-                        GameMemory.myPos = tile.id;
-                    }
+                    const isMe = GameMemory.isMe(cleanBuyer);
+                    if (isMe) GameMemory.myPos = tile.id;
+                    logToBot(`[BUILD EVENT] 🏨 ${isMe ? 'I' : cleanBuyer} bought a HOTEL in ${tile.name}!`);
                     GameMemory.markLogProcessed(line);
                     return;
                 }
@@ -805,6 +819,7 @@ function parseActivityLogLine(line) {
         }
     }
 
+    // 7. Property Purchases
     if (line.includes('bought') && !line.includes('house') && !line.includes('hotel')) {
         for (const tile of BOARD_TILES) {
             if (tile.group && new RegExp(`\\b${tile.name}\\b`, 'i').test(line)) {
@@ -812,11 +827,13 @@ function parseActivityLogLine(line) {
                 const cleanBuyer = buyerPart.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim();
                 if (cleanBuyer && GameMemory.ownership[tile.id]) {
                     GameMemory.ownership[tile.id].owner = cleanBuyer;
-                    if (GameMemory.isMe(cleanBuyer)) {
+                    const isMe = GameMemory.isMe(cleanBuyer);
+                    if (isMe) {
                         GameMemory.myPos = tile.id;
+                        logToBot(`[PURCHASE EVENT] 🏷️ I purchased ${tile.name} (${tile.group}, $${tile.price})!`);
                     } else {
                         GameMemory.players[cleanBuyer] = GameMemory.players[cleanBuyer] || { name: cleanBuyer, cash: 1500, pos: 0, isMe: false };
-                        logToBot(`[MARKET INTEL] ${cleanBuyer} bought ${tile.name} (${tile.group})`);
+                        logToBot(`[PURCHASE EVENT] 🏷️ ${cleanBuyer} bought ${tile.name} (${tile.group}, $${tile.price})`);
                     }
                     GameMemory.markLogProcessed(line);
                     return;
@@ -825,9 +842,11 @@ function parseActivityLogLine(line) {
         }
     }
 
+    // 8. Bankruptcy events
     let m = /^(.+?)\s+bankrupted/i.exec(line);
     if (m) {
-        const bankruptPlayer = m[1].trim();
+        const bankruptPlayer = m[1].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[^\w\s-]/g, '').trim();
+        logToBot(`[BANKRUPTCY] ⚠️ ${bankruptPlayer} went bankrupt! Assets returned to bank.`);
         for (const id of Object.keys(GameMemory.ownership)) {
             if (GameMemory.ownership[id].owner === bankruptPlayer) {
                 GameMemory.ownership[id].owner = null;
@@ -839,11 +858,14 @@ function parseActivityLogLine(line) {
         return;
     }
 
+    // 9. Mortgage / Unmortgage events
     if (line.includes('mortgaged')) {
         for (const tile of BOARD_TILES) {
             if (tile.group && new RegExp(`\\b${tile.name}\\b`, 'i').test(line)) {
                 if (GameMemory.ownership[tile.id]) {
-                    GameMemory.ownership[tile.id].mortgaged = !line.includes('unmortgaged');
+                    const isUn = line.includes('unmortgaged');
+                    GameMemory.ownership[tile.id].mortgaged = !isUn;
+                    logToBot(`[MORTGAGE EVENT] 🏦 ${tile.name} was ${isUn ? 'unmortgaged' : 'mortgaged'}.`);
                     GameMemory.markLogProcessed(line);
                     return;
                 }
@@ -851,17 +873,33 @@ function parseActivityLogLine(line) {
         }
     }
 
+    // 10. Traded events
     if (line.includes('traded')) {
         for (const tile of BOARD_TILES) {
             if (tile.group && new RegExp(`\\b${tile.name}\\b`, 'i').test(line)) {
                 const matchTo = /to\s+([A-Za-z0-9_-]+)/i.exec(line);
                 if (matchTo && GameMemory.ownership[tile.id]) {
                     GameMemory.ownership[tile.id].owner = matchTo[1].trim();
+                    logToBot(`[TRADE EVENT] 🤝 ${tile.name} transferred to ${matchTo[1].trim()}`);
                     GameMemory.markLogProcessed(line);
                     return;
                 }
             }
         }
+    }
+
+    // 11. Cards / Surprise / Treasure / Chance events
+    if (/drew a card|got a card|surprise|treasure|chance/i.test(line)) {
+        logToBot(`[CARD EVENT] 🃏 ${line}`);
+        GameMemory.markLogProcessed(line);
+        return;
+    }
+
+    // 12. General Game Notices (taxes, salary, go)
+    if (/tax|salary|bonus|reward|passed start|passed go/i.test(line)) {
+        logToBot(`[GAME EVENT] 🔔 ${line}`);
+        GameMemory.markLogProcessed(line);
+        return;
     }
 }
 

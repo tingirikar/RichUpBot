@@ -58,14 +58,14 @@ export function createDOMSnapshot() {
             return null;
         },
 
-        findBuyPropertyButton() {
+        findBuyPropertyButton(targetTile = null) {
             // 1. Direct scan across all detected buttons
             for (const b of allButtons) {
                 const txt = b.text;
                 if (
                     (txt.includes('buy') || txt.includes('purchase')) &&
-                    !txt.includes("don't buy") &&
-                    !txt.includes("dont buy") &&
+                    !txt.includes("don't") &&
+                    !txt.includes("dont") &&
                     !txt.includes('house') &&
                     !txt.includes('hotel') &&
                     !txt.includes('back') &&
@@ -75,22 +75,31 @@ export function createDOMSnapshot() {
                 }
             }
 
-            // 2. Check modal or center prompt if present
-            const modal = document.querySelector('[role="dialog"], [class*="modal" i], [class*="card" i]');
-            if (modal && (!hud || !hud.contains(modal))) {
-                const modalBtns = modal.querySelectorAll('button, [role="button"], [class*="btn" i], div');
+            // 2. Check open property card or modal prompt
+            const searchContainers = [];
+            const openCard = this.getOpenPropertyCard ? this.getOpenPropertyCard() : null;
+            if (openCard && openCard.el) searchContainers.push(openCard.el);
+
+            const modals = document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="prompt" i], [class*="popup" i], [class*="action" i], [class*="drawer" i]');
+            for (let i = 0; i < modals.length; i++) {
+                if (!hud || !hud.contains(modals[i])) searchContainers.push(modals[i]);
+            }
+
+            for (const container of searchContainers) {
+                const modalBtns = container.querySelectorAll('button, [role="button"], [class*="btn" i], [class*="button" i], div[tabindex]');
                 for (let i = 0; i < modalBtns.length; i++) {
                     const btn = modalBtns[i];
                     if (!isVisibleAndEnabled(btn)) continue;
                     const txt = normalizeText(btn);
                     if (
-                        txt.length <= 35 &&
-                        (txt.includes('buy') || txt.includes('purchase')) &&
+                        txt.length <= 40 &&
+                        (txt.includes('buy') || txt.includes('purchase') || (targetTile && (txt.includes(`$${targetTile.price}`) || txt === `${targetTile.price}`))) &&
                         !txt.includes("don't") &&
                         !txt.includes("dont") &&
                         !txt.includes('house') &&
                         !txt.includes('hotel') &&
-                        !txt.includes('back')
+                        !txt.includes('back') &&
+                        !txt.includes('cancel')
                     ) {
                         return btn;
                     }
@@ -98,14 +107,14 @@ export function createDOMSnapshot() {
             }
 
             // 3. Fallback: scan any clickable element on the page
-            const allClickables = Array.from(document.querySelectorAll('button, [role="button"], [class*="btn" i], div, a, span'))
+            const allClickables = Array.from(document.querySelectorAll('button, [role="button"], [class*="btn" i], [class*="button" i], div[role="button"]'))
                 .filter(el => !hud || !hud.contains(el));
             
             for (const el of allClickables) {
                 if (!isVisibleAndEnabled(el)) continue;
                 const txt = normalizeText(el);
                 if (
-                    txt.length <= 35 &&
+                    txt.length <= 40 &&
                     (txt.includes('buy') || txt.includes('purchase')) &&
                     !txt.includes("don't") &&
                     !txt.includes("dont") &&
