@@ -55,7 +55,7 @@ export function delayClick(el, reason = '') {
         } finally {
             setTimeout(() => {
                 isActing = false;
-            }, 120);
+            }, 400);
         }
     }, delay);
 
@@ -471,13 +471,9 @@ export const ActionExecutor = {
     async handleHouseBuilding(snapshot) {
         if (!CONFIG.AUTO_BUILD_ENABLED) return false;
 
-        // CRITICAL BUG FIX 1: Can only upgrade buildings when it is our turn!
-        if (!GameMemory.isMyTurn) return false;
-
-        // Extra safety check against board status text
-        const bodyText = (document.body ? document.body.innerText : '').toLowerCase();
-        const myName = (GameMemory.myName || '').toLowerCase();
-        if (bodyText.includes('is playing...') && myName && !bodyText.includes(`${myName} is playing...`)) {
+        // Can upgrade buildings whenever turn controls are active or it is our turn
+        const hasTurnControls = Boolean(snapshot.findExactOrIncludes(['roll the dice', 'roll again', 'end turn']));
+        if (!hasTurnControls && !GameMemory.isMyTurn) {
             return false;
         }
 
@@ -791,22 +787,90 @@ export const ActionExecutor = {
         return false;
     },
 
+    insolventTicks: 0,
+    isLiquidating: false,
+    isRollingDice: false,
+
     handleDebtRecovery(snapshot) {
         if (!CONFIG.AUTO_MORTGAGE_ENABLED) return false;
+        if (this.isLiquidating) return true;
 
         // Debt is strictly when player cash is negative (GameMemory.myCash < 0)
         // or an explicit debt modal/warning is visible (GameMemory.isNegativeDebt)
-        const isDebt = GameMemory.myCash < 0 || GameMemory.isNegativeDebt;
-        if (!isDebt) return false;
+        const myPlayerCash = GameMemory.players[GameMemory.myName]?.cash;
+        const isDebt = GameMemory.myCash < 0 || GameMemory.isNegativeDebt || (typeof myPlayerCash === 'number' && myPlayerCash < 0);
+        if (!isDebt) {
+            this.insolventTicks = 0;
+            return false;
+        }
 
         logToBot(`[DEBT RECOVERY] Negative balance ($${GameMemory.myCash}). Liquidating assets to survive...`);
 
         const openCard = snapshot.getOpenPropertyCard ? snapshot.getOpenPropertyCard() : null;
 
+        // If an opponent's card is open, close it immediately so we can liquidate our own assets
+        if (openCard && !GameMemory.isMe(GameMemory.ownership[openCard.tile.id]?.owner)) {
+            const closeBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
+            if (closeBtn) {
+                delayClick(closeBtn, `Closing opponent card ${openCard.tile.name} to select our asset for liquidation`);
+                return true;
+            }
+        }
+
+        // Even Build Check on Open Card:
+        // If openCard has houses, but sibling properties in the same monopoly have MORE houses,
+        // Even Build rules forbid downgrading openCard until siblings are downgraded!
+        if (openCard && (GameMemory.ownership[openCard.tile.id]?.houses || 0) > 0 && openCard.tile.group) {
+            const groupTiles = BOARD_TILES.filter(t => t.group === openCard.tile.group);
+            const maxHousesInGroup = Math.max(...groupTiles.map(t => GameMemory.ownership[t.id]?.houses || 0));
+            if ((GameMemory.ownership[openCard.tile.id]?.houses || 0) < maxHousesInGroup) {
+                const siblingWithMax = groupTiles.find(t => (GameMemory.ownership[t.id]?.houses || 0) === maxHousesInGroup);
+                if (siblingWithMax) {
+                    const sidebarProp = snapshot.findSidebarPropertyItem(siblingWithMax.name);
+                    if (sidebarProp) {
+                        return executeOrAdvise({
+                            el: sidebarProp,
+                            title: `SWITCH TO ${siblingWithMax.name.toUpperCase()} (EVEN BUILD)`,
+                            reason: `Even Build requires selling from ${siblingWithMax.name} (${maxHousesInGroup} houses) before ${openCard.tile.name}.`,
+                            onExecute: () => delayClick(sidebarProp, `Switching to ${siblingWithMax.name} for even build`)
+                        });
+                    }
+                }
+            }
+        }
+
         // CRITICAL BUG 3 FIX: If an open property card is ALREADY MORTGAGED, CLOSE IT IMMEDIATELY!
         // We cannot mortgage an already-mortgaged card; its button is Unmortgage which costs money!
         const targets = DebtRecovery.rankLiquidationTargets();
         const bestTarget = targets.length > 0 ? targets[0] : null;
+
+        // TRUE INSOLVENCY / BANKRUPTCY HANDLING:
+        // If cash is negative AND there are zero liquidatable assets (all properties mortgaged, 0 houses)
+        const hasAnyLiquidatableAsset = BOARD_TILES.some(t => {
+            const info = GameMemory.ownership[t.id];
+            return info && GameMemory.isMe(info.owner) && (!info.mortgaged || (info.houses || 0) > 0);
+        });
+
+        if (!hasAnyLiquidatableAsset && !openCard) {
+            this.insolventTicks = (this.insolventTicks || 0) + 1;
+            logToBot(`[INSOLVENCY CHECK] Negative balance ($${GameMemory.myCash}) with zero assets or houses left (Tick ${this.insolventTicks}/4)...`);
+            if (this.insolventTicks >= 4) {
+                const bankruptBtn = snapshot.findBankruptButton ? snapshot.findBankruptButton() : snapshot.findExactOrIncludes(['bankrupt']);
+                if (bankruptBtn) {
+                    return executeOrAdvise({
+                        el: bankruptBtn,
+                        title: 'DECLARE BANKRUPTCY (INSOLVENT)',
+                        reason: `Negative balance ($${GameMemory.myCash}) with zero remaining assets or houses. Conceding match gracefully.`,
+                        onExecute: () => {
+                            delayClick(bankruptBtn, 'Declaring bankruptcy due to complete insolvency');
+                        }
+                    });
+                }
+            }
+            return false;
+        } else {
+            this.insolventTicks = 0;
+        }
 
         if (openCard && GameMemory.ownership[openCard.tile.id]?.mortgaged) {
             if (bestTarget) {
@@ -850,6 +914,8 @@ export const ActionExecutor = {
                     title: `MORTGAGE: ${tileName.toUpperCase()}`,
                     reason: `In debt ($${GameMemory.myCash})! Mortgaging asset to clear debt immediately.`,
                     onExecute: () => {
+                        this.isLiquidating = true;
+                        setTimeout(() => { this.isLiquidating = false; }, 800);
                         if (GameMemory.ownership[openCard.tile.id]) {
                             GameMemory.ownership[openCard.tile.id].mortgaged = true;
                         }
@@ -865,7 +931,11 @@ export const ActionExecutor = {
                     el: sellHouseBtn,
                     title: `SELL HOUSE: ${openCard.tile.name.toUpperCase()} [↓]`,
                     reason: `In debt ($${GameMemory.myCash})! Selling house to clear debt immediately.`,
-                    onExecute: () => delayClick(sellHouseBtn, 'Clicking [↓] to sell house')
+                    onExecute: () => {
+                        this.isLiquidating = true;
+                        setTimeout(() => { this.isLiquidating = false; }, 800);
+                        delayClick(sellHouseBtn, 'Clicking [↓] to sell house');
+                    }
                 });
             }
         }
@@ -887,6 +957,8 @@ export const ActionExecutor = {
     },
 
     handleRollDice(snapshot) {
+        if (this.isRollingDice) return false;
+
         const rollBtn = snapshot.findExactOrIncludes(['roll the dice', 'roll again']);
         if (!rollBtn) return false;
 
@@ -917,6 +989,8 @@ export const ActionExecutor = {
             title: `ROLL THE DICE (Turn #${GameMemory.turnCount + 1})`,
             reason: `My turn! Cash: $${GameMemory.myCash} | Pos: Tile #${GameMemory.myPos}`,
             onExecute: () => {
+                this.isRollingDice = true;
+                setTimeout(() => { this.isRollingDice = false; }, 2200);
                 GameMemory.turnCount++;
                 delayClick(rollBtn, `Rolling dice`);
             }
@@ -932,6 +1006,18 @@ export const ActionExecutor = {
     async deliberateBeforeEndTurn(snapshot) {
         const endTurnBtn = snapshot.findExactOrIncludes(['end turn', 'done', 'continue']);
         if (!endTurnBtn) return false;
+
+        // CRITICAL DEBT GUARD: In RichUp, you CANNOT end turn while in debt!
+        // The server blocks/disables ending turn when cash is negative. We MUST liquidate assets first!
+        const myPlayerCash = GameMemory.players[GameMemory.myName]?.cash;
+        const isDebt = GameMemory.myCash < 0 || GameMemory.isNegativeDebt || (typeof myPlayerCash === 'number' && myPlayerCash < 0);
+        if (isDebt) {
+            logToBot(`[DEBT GUARD] Cannot end turn while in debt ($${GameMemory.myCash}). Liquidating assets to survive...`);
+            if (this.handleDebtRecovery(snapshot)) {
+                return true;
+            }
+            return false; // MUST hold turn until debt is cleared or resolved!
+        }
 
         // HARD PURCHASE SAFETY GUARD: NEVER skip buying when standing on an unowned buyable property!
         const standingTile = BOARD_TILES[GameMemory.myPos];
@@ -996,6 +1082,14 @@ export const ActionExecutor = {
     handleEndTurn(snapshot) {
         // BUG 2 FIX: Debounce lock prevents spamming end turn while server transition is pending
         if (this.isEndingTurn) return false;
+
+        // CRITICAL DEBT GUARD: Never attempt to click End Turn while in debt!
+        const myPlayerCash = GameMemory.players[GameMemory.myName]?.cash;
+        const isDebt = GameMemory.myCash < 0 || GameMemory.isNegativeDebt || (typeof myPlayerCash === 'number' && myPlayerCash < 0);
+        if (isDebt) {
+            logToBot(`[DEBT GUARD] Blocked End Turn click: current balance is negative ($${GameMemory.myCash}).`);
+            return false;
+        }
 
         // Verify that the board does not say another player is playing
         const bodyText = (document.body ? document.body.innerText : '').toLowerCase();

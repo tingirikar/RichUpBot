@@ -231,6 +231,18 @@ export const TradeEngine = {
         }
         const weAlreadyHaveMonopoly = myExistingMonopolies.length > 0;
 
+        // VETO CHECK 0: MONOPOLY BREAK VETO - NEVER TRADE AWAY A CARD FROM A COMPLETED MONOPOLY WE OWN!
+        for (const tile of givenTiles) {
+            if (tile.group && myExistingMonopolies.includes(tile.group)) {
+                return {
+                    accept: false,
+                    counterSwap: null,
+                    reason: `MONOPOLY BREAK VETO: Cannot trade away ${tile.name}; it is part of our completed ${tile.group} monopoly!`,
+                    chatReply: CONFIG.CHAT_ENABLED ? `not breaking my set sry` : null
+                };
+            }
+        }
+
         // VETO CHECK 1: Detect if trade completes an opponent monopoly
         let givesOppMonopoly = false;
         let oppGroupName = '';
@@ -245,6 +257,25 @@ export const TradeEngine = {
                     givenBlockerTile = tile;
                     break;
                 }
+            }
+        }
+
+        // If opponent ALREADY owns a monopoly, NEVER give them another set!
+        if (givesOppMonopoly) {
+            const oppMonopolies = [];
+            for (const [gName, gTiles] of Object.entries(GROUP_TILES)) {
+                if (gName === 'Airport' || gName === 'Utility') continue;
+                if (gTiles.every(t => GameMemory.ownership[t.id]?.owner === partnerName)) {
+                    oppMonopolies.push(gName);
+                }
+            }
+            if (oppMonopolies.length > 0) {
+                return {
+                    accept: false,
+                    counterSwap: null,
+                    reason: `MONOPOLY DENIAL: ${partnerName} already owns ${oppMonopolies.join(', ')}. Will NOT give them another monopoly!`,
+                    chatReply: CONFIG.CHAT_ENABLED ? `u already have a set lol no way` : null
+                };
             }
         }
 
@@ -273,6 +304,18 @@ export const TradeEngine = {
                     myCompletedGroup = tile.group;
                     break;
                 }
+            }
+        }
+
+        // CASH EXTORTION VETO: Never pay significant cash to an opponent unless we receive an instant monopoly with zero opponent properties
+        if (givenCash > 100) {
+            if (!completesMyMonopoly || givesOppMonopoly) {
+                return {
+                    accept: false,
+                    counterSwap: this.findCounterTrade(tradeData),
+                    reason: `CASH EXTORTION VETO: Opponent demands $${givenCash} cash sweetener! Refusing to fund opponent.`,
+                    chatReply: CONFIG.CHAT_ENABLED ? `not paying $${givenCash} cash lol` : null
+                };
             }
         }
 

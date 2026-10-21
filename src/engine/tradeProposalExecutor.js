@@ -3,6 +3,7 @@ import { delayClick, logToBot } from '../dom/actionExecutor.js';
 import { ChatEngine } from '../ui/chatEngine.js';
 import { BOARD_TILES } from '../data/boardTiles.js';
 import { GameMemory } from '../memory/gameMemory.js';
+import { CONFIG } from '../config.js';
 
 /**
  * TRADE PROPOSAL EXECUTOR

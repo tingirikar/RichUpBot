@@ -83,42 +83,58 @@ export function syncBoardStateFromDOM() {
         logToBot(`[ROOM SWITCH] Joined room '${GameMemory.currentRoomId || 'Lobby/Menu'}'. Cleared previous game state.`);
     }
 
+    const hud = document.getElementById('rubot-hud-panel');
     const pageText = document.body.innerText || '';
-    const isInGame = Boolean(
-        pageText.includes('is playing') ||
-        pageText.includes('Roll the dice') ||
-        pageText.includes('End turn') ||
-        pageText.includes('Game started') ||
-        document.querySelector('[class*="bankrupt" i]')
+
+    // Live gameplay indicators (dice on board, roll button, bankrupt button, properties panel, board container)
+    const hasCashOnScreen = /\$\s*\d+|\d+\s*\$/.test(pageText);
+    const hasGameElements = Boolean(
+        hasCashOnScreen ||
+        document.querySelector('[class*="board" i], [class*="tile" i], [class*="dice" i]') ||
+        Array.from(document.querySelectorAll('button, [role="button"]')).some(b => {
+            if (hud && hud.contains(b)) return false;
+            const t = (b.innerText || '').trim().toLowerCase();
+            return t.includes('roll') || t.includes('end turn') || t.includes('bankrupt') || t.includes('create') || t.includes('trades');
+        }) ||
+        /roll.*dice|end turn|is playing|bankrupt|my properties|trades/i.test(pageText)
     );
 
-    // If game has NOT started yet, run dedicated lobby synchronization & pruning
-    if (!isInGame) {
-        syncLobbyStateAndPlayers();
+    // If game has NOT started yet, run dedicated lobby synchronization & pruning only if in lobby
+    if (!hasGameElements && !hasCashOnScreen && GameMemory.turnCount === 0) {
+        const isLobby = Boolean(
+            Array.from(document.querySelectorAll('button, [role="button"]')).some(el => {
+                if (hud && hud.contains(el)) return false;
+                const t = (el.innerText || '').trim().toLowerCase();
+                return t === 'ready up' || t === 'join game' || t === 'change color' || t === 'start game';
+            })
+        );
+        if (isLobby) {
+            syncLobbyStateAndPlayers();
+        }
         return;
     }
 
-    // --- IN-GAME SCANNING (100% Zero-Log Dependent Continuous Active DOM Sync) ---
+    // --- IN-GAME SCANNING (Protected by error boundaries) ---
     // 1. Live Player Balances and Avatar Colors from Scoreboard List
-    detectLocalPlayerFromPlayerList();
+    try { detectLocalPlayerFromPlayerList(); } catch (e) { logToBot(`[Scoreboard Sync Err] ${e}`); }
 
     // 2. Right Sidebar "My properties" panel: 100% verified ground truth for our own cards
-    syncMyPropertiesFromSidebar();
+    try { syncMyPropertiesFromSidebar(); } catch (e) { logToBot(`[Sidebar Sync Err] ${e}`); }
 
     // 3. Visual Board Tile Scraper: Active color ribbon matching, house counts, and mortgage badges for all 40 tiles
-    syncBoardTileOwnershipAndPricesFromDOM();
+    try { syncBoardTileOwnershipAndPricesFromDOM(); } catch (e) { logToBot(`[Board Tiles Sync Err] ${e}`); }
 
     // 4. Property Card Modal Scraper: rent progression, house costs, owner if card modal is open
-    syncPropertyCardModalFromDOM();
+    try { syncPropertyCardModalFromDOM(); } catch (e) { logToBot(`[Card Modal Sync Err] ${e}`); }
 
     // 5. Trade Modal Scraper: 2-way complete inventory sync whenever trade modal is open
-    syncTradeModalInventoriesFromDOM();
+    try { syncTradeModalInventoriesFromDOM(); } catch (e) { logToBot(`[Trade Modal Sync Err] ${e}`); }
 
     // 6. Visual DOM Coordinate Scraper: read pixel coordinates of floating avatar tokens
-    scanPlayerTokenPositionsFromDOM();
+    try { scanPlayerTokenPositionsFromDOM(); } catch (e) { logToBot(`[Token Scraper Err] ${e}`); }
 
     // 7. Activity Logs: Purely for HUD terminal commentary (Zero impact on bot decisions)
-    scanActivityLogsOnly();
+    try { scanActivityLogsOnly(); } catch (e) { logToBot(`[Activity Log Err] ${e}`); }
 }
 
 /**
@@ -126,8 +142,21 @@ export function syncBoardStateFromDOM() {
  * Accurately extracts all players currently sitting in the lobby and prunes stale players from previous games.
  */
 function syncLobbyStateAndPlayers() {
+    // HARD SAFETY GUARD: NEVER reset game state or prune if a match is actively running!
+    const pageText = document.body ? document.body.innerText : '';
+    const hasCashBalances = /\$\s*\d+|\d+\s*\$/.test(pageText);
+    const hasActiveTurnControls = Boolean(
+        document.querySelector('[class*="board" i], [class*="tile" i], [class*="dice" i]') ||
+        Array.from(document.querySelectorAll('button, [role="button"]')).some(b => {
+            const t = (b.innerText || '').trim().toLowerCase();
+            return t.includes('roll') || t.includes('end turn') || t.includes('bankrupt') || t.includes('trades');
+        })
+    );
+    if (GameMemory.turnCount > 0 || hasCashBalances || hasActiveTurnControls) {
+        return;
+    }
+
     const hud = document.getElementById('rubot-hud-panel');
-    const pageText = document.body.innerText || '';
 
     // 1. Reset board tile ownership & turn state in lobby
     for (const tileId of Object.keys(GameMemory.ownership)) {
@@ -323,6 +352,7 @@ function syncLobbyStateAndPlayers() {
     // 5. CRITICAL FIX: Prune all stale players from previous match!
     if (currentLobbyPlayers.size > 0) {
         for (const existingName of Object.keys(GameMemory.players)) {
+            if (GameMemory.isMe(existingName)) continue; // NEVER delete our own identity!
             if (!currentLobbyPlayers.has(existingName)) {
                 logToBot(`[LOBBY PRUNE] Removed stale opponent '${existingName}' from previous match.`);
                 delete GameMemory.players[existingName];
@@ -399,46 +429,53 @@ function detectLocalPlayerFromPlayerList() {
 
     const currentName = GameMemory.myName;
 
-    // 3. Class-Agnostic Scoreboard Discovery:
-    // Find the container element that holds 2 to 8 player cards, each containing a dollar sign
-    const allContainers = document.querySelectorAll('div, section, aside, ul');
-    let bestScoreboardContainer = null;
-    let maxDollarChildren = 0;
+    // 3. Class-Agnostic Scoreboard Card Discovery:
+    // Every player row in RichUp is located in the top-right scoreboard area:
+    // - x > 48% of screen width (strictly in the right half of the screen)
+    // - y < 65% of screen height (strictly in the upper portion above properties)
+    // - contains cash with '$' (e.g. $1890, $-337) OR 'bankrupt'
+    const directCards = Array.from(document.querySelectorAll('div, section, li, tr, button')).filter(el => {
+        if (hud && hud.contains(el)) return false;
+        if (el.closest('[class*="chat" i], [class*="modal" i], [role="dialog"]')) return false;
 
-    for (let i = 0; i < allContainers.length; i++) {
-        const el = allContainers[i];
-        if (hud && hud.contains(el)) continue;
-        if (el === document.body || el === document.documentElement) continue;
-
-        // Ensure container is strictly located in the right sidebar (never match board tile rows)
         const rect = el.getBoundingClientRect();
-        if (rect.left < window.innerWidth * 0.40) continue;
-        if (rect.top > window.innerHeight * 0.60) continue;
-        if (rect.width < 100) continue;
+        if (rect.left < window.innerWidth * 0.48) return false;
+        if (rect.top > window.innerHeight * 0.65) return false;
+        if (rect.height < 18 || rect.height > 95 || rect.width < 90) return false;
 
-        const children = Array.from(el.children);
-        if (children.length >= 2 && children.length <= 10) {
-            let dollarCount = 0;
-            for (const child of children) {
-                const cText = child.innerText || '';
-                if (cText.includes('$') && cText.length < 160 && !cText.toLowerCase().includes('my properties')) {
-                    dollarCount++;
-                }
-            }
-            if (dollarCount >= 2 && dollarCount > maxDollarChildren && (el.innerText || '').length < 800) {
-                maxDollarChildren = dollarCount;
-                bestScoreboardContainer = el;
+        const text = (el.innerText || '').trim();
+        if (text.length > 120 || text.length < 2) return false;
+        if (/my properties|trades\b|create|bankrupt button|dice|rules/i.test(text)) return false;
+
+        const hasCashOrBankrupt = /\$|\b(?:bankrupt)\b/i.test(text);
+        if (!hasCashOrBankrupt) return false;
+
+        // Ensure this is a discrete player card (not a huge container wrapping multiple players)
+        const innerWithDollar = Array.from(el.children).filter(c => (c.innerText || '').includes('$'));
+        return innerWithDollar.length <= 1;
+    });
+
+    let rows = directCards;
+    if (rows.length === 0) {
+        // Fallback: Check for container children
+        const allContainers = document.querySelectorAll('div, section, aside, ul');
+        for (let i = 0; i < allContainers.length; i++) {
+            const el = allContainers[i];
+            if (hud && hud.contains(el)) continue;
+            const rect = el.getBoundingClientRect();
+            if (rect.left < window.innerWidth * 0.45 || rect.top > window.innerHeight * 0.65) continue;
+            const kids = Array.from(el.children).filter(k => (k.innerText || '').includes('$') || /bankrupt/i.test(k.innerText || ''));
+            if (kids.length >= 2 && kids.length <= 8) {
+                rows = kids;
+                break;
             }
         }
     }
 
     let foundLocalPlayerInScoreboard = false;
-
     const activeScoreboardPlayers = new Set();
 
-    // 4. Extract players from discovered scoreboard container
-    if (bestScoreboardContainer) {
-        const rows = Array.from(bestScoreboardContainer.children);
+    if (rows.length > 0) {
         for (const row of rows) {
             const rowText = row.innerText || '';
             if (!rowText.includes('$') || rowText.length > 160) continue;
@@ -495,15 +532,16 @@ function detectLocalPlayerFromPlayerList() {
             activeScoreboardPlayers.add(candidateName);
 
             // In RichUp, only the local player's row has the interactive leave [->] button
+            const innerHtml = (row.innerHTML || '').toString();
             const hasLeaveIcon = Boolean(
                 row.querySelector('[class*="leave" i], [class*="exit" i], [title*="leave" i], [aria-label*="leave" i], button[aria-label*="leave" i]') ||
-                row.innerHTML.includes('->') ||
-                row.innerHTML.includes('M17 16l4') ||
-                row.innerHTML.includes('M11 16l-4-4') ||
-                row.innerHTML.includes('M15 3h4a2') ||
-                row.innerHTML.includes('M9 21H5a2') ||
-                row.innerHTML.includes('M16 17l5-5-5-5') ||
-                row.innerHTML.includes('logout')
+                innerHtml.includes('->') ||
+                innerHtml.includes('M17 16l4') ||
+                innerHtml.includes('M11 16l-4-4') ||
+                innerHtml.includes('M15 3h4a2') ||
+                innerHtml.includes('M9 21H5a2') ||
+                innerHtml.includes('M16 17l5-5-5-5') ||
+                innerHtml.includes('logout')
             );
 
             const isKnownMe = (currentName && candidateName.toLowerCase() === currentName.toLowerCase()) ||
@@ -535,6 +573,36 @@ function detectLocalPlayerFromPlayerList() {
                 }
             }
 
+            // Deep search candidate elements inside player card row if primary avatar didn't yield a vibrant color
+            if (!playerColor) {
+                const innerShapes = Array.from(row.querySelectorAll('svg, path, circle, rect, div, span, img'));
+                for (const shape of innerShapes) {
+                    const sStyle = window.getComputedStyle(shape);
+                    let p = parseColor(sStyle.backgroundColor);
+                    if (p && isVibrantPlayerColor(p)) {
+                        playerColor = p;
+                        break;
+                    }
+                    const fillAttr = shape.getAttribute ? shape.getAttribute('fill') : null;
+                    if (fillAttr) {
+                        let pf = parseColor(fillAttr);
+                        if (pf && isVibrantPlayerColor(pf)) {
+                            playerColor = pf;
+                            playerFill = fillAttr;
+                            break;
+                        }
+                    }
+                    if (sStyle.fill) {
+                        let pf = parseColor(sStyle.fill);
+                        if (pf && isVibrantPlayerColor(pf)) {
+                            playerColor = pf;
+                            playerFill = sStyle.fill;
+                            break;
+                        }
+                    }
+                }
+            }
+
             const existingColor = GameMemory.players[candidateName]?.color || null;
             const existingFill = GameMemory.players[candidateName]?.fill || null;
             const finalColor = playerColor || existingColor;
@@ -545,6 +613,7 @@ function detectLocalPlayerFromPlayerList() {
                 GameMemory.setMyName(candidateName);
                 GameMemory.myCash = parsedCash;
                 GameMemory.cashVerified = true;
+                GameMemory.isNegativeDebt = parsedCash < 0;
                 GameMemory.players[candidateName] = {
                     cash: parsedCash,
                     pos: GameMemory.myPos,
@@ -571,6 +640,7 @@ function detectLocalPlayerFromPlayerList() {
             if (typeof sbCash === 'number') {
                 GameMemory.myCash = sbCash;
                 GameMemory.cashVerified = true;
+                GameMemory.isNegativeDebt = sbCash < 0;
                 foundLocalPlayerInScoreboard = true;
             }
         }
@@ -582,53 +652,6 @@ function detectLocalPlayerFromPlayerList() {
                     delete GameMemory.players[pName];
                 }
             }
-        }
-    }
-
-    // 5. Fallback: Scan other elements IF scoreboard container did not locate local player
-    if (!foundLocalPlayerInScoreboard && currentName) {
-        const currentLower = currentName.toLowerCase();
-        const candidates = document.querySelectorAll('div, section, li, tr, p');
-        for (let i = 0; i < candidates.length; i++) {
-            const el = candidates[i];
-            if (hud && hud.contains(el)) continue;
-
-            const text = el.innerText || '';
-            // Strictly exclude anything resembling activity logs or game action text
-            if (/paid|bought|rolled|landed|rent|tax|pardon|jail|prison|bankrupt|joined|left|game started|is playing|received|pay|sent/i.test(text)) {
-                continue;
-            }
-
-            if (text.toLowerCase().includes(currentLower) && text.includes('$') && text.length <= 150) {
-                const normText = text.replace(/[−–—]/g, '-');
-                const negMatch = /(?:-\s*\$\s*(\d{1,6})|\$\s*-\s*(\d{1,6}))/.exec(normText);
-                let parsedCash;
-                if (negMatch) {
-                    parsedCash = -parseInt(negMatch[1] || negMatch[2], 10);
-                } else {
-                    const posMatch = /(?:\$\s*(\d{1,6})|(\d{1,6})\s*\$)/.exec(normText);
-                    if (posMatch) parsedCash = parseInt(posMatch[1] || posMatch[2], 10);
-                }
-
-                if (typeof parsedCash === 'number' && !isNaN(parsedCash)) {
-                    GameMemory.myCash = parsedCash;
-                    GameMemory.cashVerified = true;
-                    GameMemory.players[currentName] = GameMemory.players[currentName] || { cash: parsedCash, pos: GameMemory.myPos, isMe: true };
-                    GameMemory.players[currentName].cash = parsedCash;
-                    GameMemory.players[currentName].isMe = true;
-                    foundLocalPlayerInScoreboard = true;
-                    break;
-                }
-            }
-        }
-    }
-
-    // 6. Direct fallback if player name is known and present in players dictionary
-    if (!foundLocalPlayerInScoreboard && GameMemory.myName && GameMemory.players[GameMemory.myName]) {
-        const storedCash = GameMemory.players[GameMemory.myName].cash;
-        if (typeof storedCash === 'number') {
-            GameMemory.myCash = storedCash;
-            GameMemory.cashVerified = true;
         }
     }
 }
@@ -732,9 +755,9 @@ export function syncBoardTileOwnershipAndPricesFromDOM() {
         }
 
         // 3. Dynamic mortgage styling (diagonal stripes, opacity, or text)
-        const tileStyle = window.getComputedStyle(tileEl);
+        const tileCls = (tileEl.className?.baseVal !== undefined ? tileEl.className.baseVal : (tileEl.className || '')).toString().toLowerCase();
         const isMortgagedTile = /mortgaged/i.test(text) ||
-                                (tileEl.className || '').toString().toLowerCase().includes('mortgage') ||
+                                tileCls.includes('mortgage') ||
                                 Boolean(tileEl.querySelector?.('[class*="mortgage" i]')) ||
                                 (tileStyle.opacity && parseFloat(tileStyle.opacity) < 0.65);
 
@@ -920,7 +943,8 @@ export function scanPlayerTokenPositionsFromDOM() {
         const isRound = style.borderRadius && (parseInt(style.borderRadius) >= 10 || style.borderRadius.includes('%'));
         const isSvg = el.tagName.toLowerCase() === 'svg';
         const isImg = el.tagName.toLowerCase() === 'img';
-        const hasAvatarClass = (el.className || '').toString().toLowerCase().includes('avatar') || (el.className || '').toString().toLowerCase().includes('token');
+        const clsName = (el.className?.baseVal !== undefined ? el.className.baseVal : (el.className || '')).toString().toLowerCase();
+        const hasAvatarClass = clsName.includes('avatar') || clsName.includes('token');
 
         return isRound || isSvg || isImg || hasAvatarClass;
     });
@@ -968,7 +992,7 @@ export function scanPlayerTokenPositionsFromDOM() {
                 minDistance = 0;
                 break;
             }
-            if (t.el && t.el.contains(tokenEl)) {
+            if (t.el && typeof t.el.contains === 'function' && t.el.contains(tokenEl)) {
                 bestTile = t;
                 minDistance = 0;
                 break;
@@ -1158,9 +1182,9 @@ function syncMyPropertiesFromSidebar() {
         for (const tile of BOARD_TILES) {
             if (tile.group && new RegExp(`^${tile.name}\\b`, 'i').test(rowText)) {
                 const inner = (row.innerHTML || '').toLowerCase();
-                const style = window.getComputedStyle(row);
+                const rowCls = (row.className?.baseVal !== undefined ? row.className.baseVal : (row.className || '')).toString().toLowerCase();
                 const isMortgagedRow = inner.includes('mortgage') || 
-                                       row.className.toString().toLowerCase().includes('mortgage') ||
+                                       rowCls.includes('mortgage') ||
                                        (style.opacity && parseFloat(style.opacity) < 0.7);
                 if (isMortgagedRow && GameMemory.ownership[tile.id]) {
                     GameMemory.ownership[tile.id].mortgaged = true;
@@ -1233,7 +1257,7 @@ function scanActivityLogsOnly() {
     for (let i = 0; i < candidateEls.length; i++) {
         const el = candidateEls[i];
         if (isExcluded(el)) continue;
-        if (el.children.length > 5) continue; // Skip large parent containers
+        if ((el.children?.length ?? 0) > 5) continue; // Skip large parent containers
 
         const line = (el.innerText || '').replace(/\s+/g, ' ').trim();
         if (line.length >= 6 && line.length <= 220 && !processedLines.has(line)) {
@@ -1638,7 +1662,8 @@ export function syncTradeModalInventoriesFromDOM() {
                         GameMemory.ownership[tile.id].houses = 5;
                     }
 
-                    const isMort = /mortgage/i.test(text) || card.className.toLowerCase().includes('mortgage');
+                    const cardCls = (card.className?.baseVal !== undefined ? card.className.baseVal : (card.className || '')).toString().toLowerCase();
+                    const isMort = /mortgage/i.test(text) || cardCls.includes('mortgage');
                     if (isMort) {
                         GameMemory.ownership[tile.id].mortgaged = true;
                     }
@@ -1753,14 +1778,15 @@ export function scrapeTradeModalDOM() {
         }
     }
 
-    // 2. Dynamic property tiles extraction scoped by selected status & verified ownership
+    // 2. Dynamic property tiles extraction scoped by physical column X-coordinates
     const cards = Array.from(modal.querySelectorAll('div, li, button, [class*="item" i], [class*="property" i], [class*="card" i]'));
-    const matchedTiles = [];
     const matchedTileIds = new Set();
+    const givenTiles = [];
+    const receivedTiles = [];
 
     for (const card of cards) {
         // Skip unselected / faded / inactive cards
-        const cls = (card.className || '').toLowerCase();
+        const cls = (card.className?.baseVal !== undefined ? card.className.baseVal : (card.className || '')).toString().toLowerCase();
         if (cls.includes('unselected') || cls.includes('inactive') || cls.includes('disabled')) continue;
 
         const style = window.getComputedStyle(card);
@@ -1778,30 +1804,21 @@ export function scrapeTradeModalDOM() {
             const tName = tile.name.toLowerCase();
             if (cleanText === tName || cleanText.startsWith(tName) || cleanText.endsWith(tName) || rawText.toLowerCase().includes(tName)) {
                 matchedTileIds.add(tile.id);
-                matchedTiles.push(tile);
-                break;
-            }
-        }
-    }
 
-    // STRICT OWNERSHIP-BASED SEPARATION (Zero Hallucination Guarantee!):
-    // If WE own it, it is a property WE are giving! (We can NEVER give what we don't own!)
-    // If SOMEONE ELSE owns it, it is a property WE are receiving!
-    const givenTiles = [];
-    const receivedTiles = [];
+                // Geometric Column Placement (Zero Hallucination Guarantee!):
+                // In RichUp, Left Column = Left Player, Right Column = Right Player
+                const cardRect = card.getBoundingClientRect();
+                const cardCenterX = cardRect.left + cardRect.width / 2;
+                const isLeftColumn = cardCenterX < modalMidX;
 
-    for (const tile of matchedTiles) {
-        const owner = GameMemory.ownership[tile.id]?.owner;
-        if (GameMemory.isMe(owner)) {
-            givenTiles.push(tile);
-        } else {
-            receivedTiles.push(tile);
-            if (partnerName && partnerName !== 'Opponent') {
-                if (GameMemory.ownership[tile.id]) {
-                    GameMemory.ownership[tile.id].owner = partnerName;
+                if (meIsOnLeft) {
+                    if (isLeftColumn) givenTiles.push(tile);
+                    else receivedTiles.push(tile);
+                } else {
+                    if (isLeftColumn) receivedTiles.push(tile);
+                    else givenTiles.push(tile);
                 }
-            } else if (owner && !GameMemory.isMe(owner)) {
-                partnerName = owner;
+                break;
             }
         }
     }

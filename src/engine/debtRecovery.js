@@ -13,17 +13,37 @@ export const DebtRecovery = {
         const targets = [];
         const blockers = new Set(OpponentTracker.getCriticalBlockers().map(b => b.tile.id));
 
+        // Calculate max houses per group for Even Build compliance
+        const groupMaxHouses = {};
+        for (const tile of BOARD_TILES) {
+            if (!tile.group) continue;
+            const info = GameMemory.ownership[tile.id];
+            if (info && GameMemory.isMe(info.owner)) {
+                groupMaxHouses[tile.group] = Math.max(groupMaxHouses[tile.group] || 0, info.houses || 0);
+            }
+        }
+
         for (const tile of BOARD_TILES) {
             if (!tile.group) continue;
             const info = GameMemory.ownership[tile.id];
             if (!info || !GameMemory.isMe(info.owner) || info.mortgaged) continue;
 
             const { owned, total } = GameMemory.getGroupCount(tile.group, '__ME__');
+            const groupMax = groupMaxHouses[tile.group] || 0;
+
+            // In RichUp / Monopoly rules:
+            // 1. If a group has ANY houses (groupMax > 0), no property in that group can be mortgaged until ALL houses are sold.
+            // 2. Under Even Build, you can ONLY sell a house from a property if it has the MAXIMUM number of houses in that group.
+            const canSellHouse = info.houses > 0 && info.houses === groupMax;
+            const canMortgage = info.houses === 0 && groupMax === 0;
+
+            // Skip properties that currently cannot be mortgaged or downgraded due to sibling houses
+            if (!canSellHouse && !canMortgage) continue;
 
             // Strategic sacrifice score: lower score = liquidate FIRST
             let sacrificeScore = tile.price * (1 + tile.markov * 10);
 
-            // Never sacrifice complete monopolies unless literally going bankrupt
+            // Never sacrifice complete monopolies unless literally forced
             if (owned === total) {
                 sacrificeScore *= 10.0;
             } else if (owned === total - 1) {
@@ -35,13 +55,20 @@ export const DebtRecovery = {
                 sacrificeScore *= 5.0;
             }
 
-            // If it has houses, calculate house refund value
+            // If it can sell a house, selling a house preserves property title ownership
+            if (canSellHouse) {
+                // Adjust score so house sales on monopolies are considered before mortgaging vital singletons
+                sacrificeScore = Math.min(sacrificeScore, 280 + tile.houseCost * 0.5);
+            }
+
             const mortgageValue = Math.round(tile.price / 2);
             const houseSellValue = Math.round(tile.houseCost / 2);
 
             targets.push({
                 tile,
                 houses: info.houses,
+                canSellHouse,
+                canMortgage,
                 mortgageValue,
                 houseSellValue,
                 sacrificeScore

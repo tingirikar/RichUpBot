@@ -703,6 +703,9 @@ export const HUDPanel = {
                 this.elements.phaseBadge.textContent = CONFIG.ADVISOR_MODE ? 'ADVISOR' : 'ACTIVE';
             }
         }
+        if (this.activeTab === 'intel') {
+            this.updateIntelTab();
+        }
     },
 
     appendLog(msg) {

@@ -274,8 +274,18 @@ export function createDOMSnapshot() {
                 if (hud && hud.contains(m)) continue;
                 if (!isVisibleAndEnabled(m)) continue;
 
+                // STRICTLY EXCLUDE TRADE MODALS: Trade modals must ONLY be handled by handleTrade()!
+                if (m.querySelector('input[type="range"], [class*="trade" i]') || (m.className || '').toString().toLowerCase().includes('trade')) {
+                    continue;
+                }
+
                 const text = (m.innerText || '').toLowerCase();
-                if (text.includes('are you sure') || text.includes('confirm') || text.includes('mortgage') || text.includes('proceed') || text.includes('unmortgage')) {
+                // Never treat trade, propose, or counter dialogs as generic confirmation dialogs!
+                if (text.includes('trade') || text.includes('propose') || text.includes('counter')) {
+                    continue;
+                }
+
+                if (text.includes('are you sure') || text.includes('confirm action') || text.includes('confirm mortgage') || text.includes('confirm bankruptcy')) {
                     const btns = m.querySelectorAll('button, [role="button"], [class*="btn" i]');
                     for (let j = 0; j < btns.length; j++) {
                         const b = btns[j];

@@ -233,8 +233,16 @@ function startObserver() {
             evaluateAndAct();
         } else {
             // Keep HUD telemetry and identity in sync even in standby/lobby!
-            syncBoardStateFromDOM();
-            HUDPanel.updateTelemetry();
+            try {
+                syncBoardStateFromDOM();
+            } catch (err) {
+                logToBot(`[DOM Sync Warning] ${err}`);
+            }
+            try {
+                HUDPanel.updateTelemetry();
+            } catch (err) {
+                logToBot(`[Telemetry Warning] ${err}`);
+            }
         }
     }, CONFIG.POLL_INTERVAL_MS);
 }
