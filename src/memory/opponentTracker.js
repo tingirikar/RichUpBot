@@ -27,6 +27,11 @@ export const OpponentTracker = {
             }
         }
 
+        const isSamePlayer = (a, b) => {
+            if (!a || !b) return false;
+            return a.trim().toLowerCase() === b.trim().toLowerCase();
+        };
+
         for (const pName of playerNames) {
             if (GameMemory.isMe(pName)) continue;
             const pData = GameMemory.players[pName] || { cash: 500, pos: 0, bankrupt: false };
@@ -39,7 +44,7 @@ export const OpponentTracker = {
             for (const tile of BOARD_TILES) {
                 if (!tile.group) continue;
                 const info = GameMemory.ownership[tile.id];
-                if (info && info.owner === pName) {
+                if (info && isSamePlayer(info.owner, pName)) {
                     ownedTiles.push(tile);
                     totalPropertyNetWorth += tile.price;
                 }
@@ -48,9 +53,9 @@ export const OpponentTracker = {
             // Check each color group for monopoly threats
             for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
                 if (tiles[0].type !== 'property') continue;
-                const ownedCount = tiles.filter(t => GameMemory.ownership[t.id]?.owner === pName).length;
+                const ownedCount = tiles.filter(t => isSamePlayer(GameMemory.ownership[t.id]?.owner, pName)).length;
                 if (ownedCount === tiles.length - 1) {
-                    const missingTile = tiles.find(t => GameMemory.ownership[t.id]?.owner !== pName);
+                    const missingTile = tiles.find(t => !isSamePlayer(GameMemory.ownership[t.id]?.owner, pName));
                     const holder = GameMemory.ownership[missingTile?.id]?.owner || 'Unowned';
                     hungrySets.push({
                         group: groupName,

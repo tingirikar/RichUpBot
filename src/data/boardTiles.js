@@ -128,7 +128,7 @@ export const BOARD_LABELS_BLACKLIST = new Set([
     ...BOARD_TILES.map(t => t.name.toLowerCase()),
     'start', 'passing by', 'in prison', 'vacation', 'go to prison', 'treasure',
     'surprise', 'income tax', 'earnings tax', 'luxury tax', 'electric', 'water', 'company',
-    'airport', 'collect', 'on hold', 'trades', 'bankrupt', 'votekick', 'buy', 'sell',
+    'airport', 'collect', 'on hold', 'trades', 'bankrupt', 'votekick', 'buy', 'buy for', 'buy for:', 'buy land', 'buy property', 'sell',
     'connection lost', 'disconnected', 'reconnecting', 'server error', 'ping',
     'advisor', 'auto-pilot', 'danger ev', 'survival reserve', 'position', 'my name', 'cash',
     'store', 'shop', 'inventory', 'profile', 'settings', 'rules', 'lobby', 'room', 'host',

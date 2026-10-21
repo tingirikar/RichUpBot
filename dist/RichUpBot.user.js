@@ -196,6 +196,10 @@
     "bankrupt",
     "votekick",
     "buy",
+    "buy for",
+    "buy for:",
+    "buy land",
+    "buy property",
     "sell",
     "connection lost",
     "disconnected",
@@ -481,8 +485,8 @@
     if (hud && hud.contains(el)) return false;
     if (el.getAttribute("aria-disabled") === "true") return false;
     if (el.classList && (el.classList.contains("disabled") || el.classList.contains("btn-disabled"))) return false;
-    const style2 = window.getComputedStyle(el);
-    if (style2.display === "none" || style2.visibility === "hidden" || parseFloat(style2.opacity) === 0 || style2.pointerEvents === "none") {
+    const style = window.getComputedStyle(el);
+    if (style.display === "none" || style.visibility === "hidden" || parseFloat(style.opacity) === 0 || style.pointerEvents === "none") {
       return false;
     }
     const rect = el.getBoundingClientRect();
@@ -1015,6 +1019,10 @@
           playerNames.add(info.owner);
         }
       }
+      const isSamePlayer = (a, b) => {
+        if (!a || !b) return false;
+        return a.trim().toLowerCase() === b.trim().toLowerCase();
+      };
       for (const pName of playerNames) {
         if (GameMemory.isMe(pName)) continue;
         const pData = GameMemory.players[pName] || { cash: 500, pos: 0, bankrupt: false };
@@ -1025,16 +1033,16 @@
         for (const tile of BOARD_TILES) {
           if (!tile.group) continue;
           const info = GameMemory.ownership[tile.id];
-          if (info && info.owner === pName) {
+          if (info && isSamePlayer(info.owner, pName)) {
             ownedTiles.push(tile);
             totalPropertyNetWorth += tile.price;
           }
         }
         for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
           if (tiles[0].type !== "property") continue;
-          const ownedCount = tiles.filter((t) => GameMemory.ownership[t.id]?.owner === pName).length;
+          const ownedCount = tiles.filter((t) => isSamePlayer(GameMemory.ownership[t.id]?.owner, pName)).length;
           if (ownedCount === tiles.length - 1) {
-            const missingTile = tiles.find((t) => GameMemory.ownership[t.id]?.owner !== pName);
+            const missingTile = tiles.find((t) => !isSamePlayer(GameMemory.ownership[t.id]?.owner, pName));
             const holder = GameMemory.ownership[missingTile?.id]?.owner || "Unowned";
             hungrySets.push({
               group: groupName,
@@ -3500,7 +3508,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       for (const row of rows) {
         const rowText = row.innerText || "";
         if (!rowText.includes("$") || rowText.length > 160) continue;
-        if (/\b(?:paid|bought|rolled|landed|rent|tax|joined|left|game started|is playing)\b/i.test(rowText)) continue;
+        if (/\b(?:paid|bought|buy|buying|rolled|landed|rent|tax|joined|left|game started|is playing)\b/i.test(rowText)) continue;
         const normalizedRow = rowText.replace(/[−–—]/g, "-");
         const negCashMatch = /(?:-\s*\$\s*(\d{1,6})|\$\s*-\s*(\d{1,6}))/.exec(normalizedRow);
         let parsedCash;
@@ -3520,8 +3528,9 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         const candidateLines = textWithoutCash.split("\n").map((l) => l.trim()).filter(Boolean);
         let candidateName = null;
         for (const line of candidateLines) {
-          const clean = line.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[->\]\[→←\|👑]/g, "").replace(/\b-?\d+\b/g, "").trim();
-          if (clean.length >= 2 && clean.length <= 24 && !BOARD_LABELS_BLACKLIST.has(clean.toLowerCase()) && !clean.toLowerCase().includes("share") && !clean.toLowerCase().includes("copy")) {
+          const clean = line.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[->\]\[→←\|👑:]/g, "").replace(/\b-?\d+\b/g, "").trim();
+          const lower = clean.toLowerCase();
+          if (clean.length >= 2 && clean.length <= 24 && !BOARD_LABELS_BLACKLIST.has(lower) && !lower.startsWith("buy") && !lower.startsWith("pay") && !lower.startsWith("bid") && !lower.includes("share") && !lower.includes("copy")) {
             candidateName = clean;
             break;
           }
@@ -3538,8 +3547,8 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         let playerColor = null;
         let playerFill = null;
         if (avEl) {
-          const style2 = window.getComputedStyle(avEl);
-          let parsed = parseColor(style2.backgroundColor);
+          const style = window.getComputedStyle(avEl);
+          let parsed = parseColor(style.backgroundColor);
           if (!parsed || !isVibrantPlayerColor(parsed)) {
             const svgShape = avEl.querySelector('path[fill]:not([fill="none"]):not([fill="#fff"]):not([fill="#ffffff"]), circle[fill]:not([fill="none"]), rect[fill]:not([fill="none"])') || (avEl.tagName.toLowerCase() === "svg" ? avEl : null);
             if (svgShape) {
@@ -3549,7 +3558,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
             }
           }
           if (!parsed || !isVibrantPlayerColor(parsed)) {
-            parsed = parseColor(style2.color);
+            parsed = parseColor(style.color);
           }
           if (parsed && isVibrantPlayerColor(parsed)) {
             playerColor = parsed;
@@ -3698,6 +3707,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         if (houseSvg) houseCount = 1;
       }
       const tileCls = (tileEl.className?.baseVal !== void 0 ? tileEl.className.baseVal : tileEl.className || "").toString().toLowerCase();
+      const tileStyle = window.getComputedStyle(tileEl);
       const isMortgagedTile = /mortgaged/i.test(text) || tileCls.includes("mortgage") || Boolean(tileEl.querySelector?.('[class*="mortgage" i]')) || tileStyle.opacity && parseFloat(tileStyle.opacity) < 0.65;
       if (GameMemory.isMe(GameMemory.ownership[tileId]?.owner)) {
         if (houseCount > 0) GameMemory.ownership[tileId].houses = houseCount;
@@ -3708,10 +3718,10 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       childEls.push(tileEl);
       const colorMatches = [];
       for (const child of childEls) {
-        const style2 = window.getComputedStyle(child);
-        const bgParsed = parseColor(style2.backgroundColor);
-        const fillParsed = parseColor(style2.fill) || (child.getAttribute ? parseColor(child.getAttribute("fill")) : null);
-        const colParsed = parseColor(style2.color);
+        const style = window.getComputedStyle(child);
+        const bgParsed = parseColor(style.backgroundColor);
+        const fillParsed = parseColor(style.fill) || (child.getAttribute ? parseColor(child.getAttribute("fill")) : null);
+        const colParsed = parseColor(style.color);
         const testColors = [bgParsed, fillParsed, colParsed].filter(Boolean);
         for (const c of testColors) {
           if (!isVibrantPlayerColor(c)) continue;
@@ -3805,8 +3815,8 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       let src = "";
       let classSnippet = "";
       if (avEl) {
-        const style2 = window.getComputedStyle(avEl);
-        color = style2.backgroundColor || style2.color || "";
+        const style = window.getComputedStyle(avEl);
+        color = style.backgroundColor || style.color || "";
         classSnippet = (avEl.className || "").toString();
         if (avEl.tagName.toLowerCase() === "img") {
           src = avEl.src || avEl.getAttribute("data-src") || "";
@@ -3831,8 +3841,8 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       const r = el.getBoundingClientRect();
       if (r.width < 18 || r.width > 65 || r.height < 18 || r.height > 65) return false;
       if (r.left < boardRect.left || r.right > boardRect.right || r.top < boardRect.top || r.bottom > boardRect.bottom) return false;
-      const style2 = window.getComputedStyle(el);
-      const isRound = style2.borderRadius && (parseInt(style2.borderRadius) >= 10 || style2.borderRadius.includes("%"));
+      const style = window.getComputedStyle(el);
+      const isRound = style.borderRadius && (parseInt(style.borderRadius) >= 10 || style.borderRadius.includes("%"));
       const isSvg = el.tagName.toLowerCase() === "svg";
       const isImg = el.tagName.toLowerCase() === "img";
       const clsName = (el.className?.baseVal !== void 0 ? el.className.baseVal : el.className || "").toString().toLowerCase();
@@ -3843,8 +3853,8 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       const tr = tokenEl.getBoundingClientRect();
       const tcx = tr.left + tr.width / 2;
       const tcy = tr.top + tr.height / 2;
-      const style2 = window.getComputedStyle(tokenEl);
-      const tColor = style2.backgroundColor || style2.color || "";
+      const style = window.getComputedStyle(tokenEl);
+      const tColor = style.backgroundColor || style.color || "";
       const tSrc = tokenEl.tagName.toLowerCase() === "img" ? tokenEl.src || "" : "";
       const tColoredShape = tokenEl.querySelector('path[fill]:not([fill="none"]):not([fill="#fff"]):not([fill="#ffffff"]), circle[fill]:not([fill="none"]), rect[fill]:not([fill="none"])') || (tokenEl.tagName.toLowerCase() === "svg" ? tokenEl : tokenEl.querySelector("svg, circle, path"));
       const tFill = tColoredShape ? tColoredShape.getAttribute("fill") || window.getComputedStyle(tColoredShape).fill || "" : "";
@@ -4017,7 +4027,8 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         if (tile.group && new RegExp(`^${tile.name}\\b`, "i").test(rowText)) {
           const inner = (row.innerHTML || "").toLowerCase();
           const rowCls = (row.className?.baseVal !== void 0 ? row.className.baseVal : row.className || "").toString().toLowerCase();
-          const isMortgagedRow = inner.includes("mortgage") || rowCls.includes("mortgage") || style.opacity && parseFloat(style.opacity) < 0.7;
+          const rowStyle = window.getComputedStyle(row);
+          const isMortgagedRow = inner.includes("mortgage") || rowCls.includes("mortgage") || rowStyle.opacity && parseFloat(rowStyle.opacity) < 0.7;
           if (isMortgagedRow && GameMemory.ownership[tile.id]) {
             GameMemory.ownership[tile.id].mortgaged = true;
           }
@@ -4517,8 +4528,8 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     for (const card of cards) {
       const cls = (card.className?.baseVal !== void 0 ? card.className.baseVal : card.className || "").toString().toLowerCase();
       if (cls.includes("unselected") || cls.includes("inactive") || cls.includes("disabled")) continue;
-      const style2 = window.getComputedStyle(card);
-      if (parseFloat(style2.opacity) < 0.65) continue;
+      const style = window.getComputedStyle(card);
+      if (parseFloat(style.opacity) < 0.65) continue;
       const rawText = (card.innerText || "").trim();
       if (!rawText || rawText.length > 50) continue;
       const cleanText = rawText.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
@@ -4579,9 +4590,9 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         link.href = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap";
         document.head.appendChild(link);
       }
-      const style2 = document.createElement("style");
-      style2.id = "rubot-hud-style";
-      style2.textContent = `
+      const style = document.createElement("style");
+      style.id = "rubot-hud-style";
+      style.textContent = `
             #rubot-hud-panel {
                 position: fixed;
                 top: ${savedGeom.top}px;
@@ -4806,7 +4817,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
             .rubot-adv-btn.exec { background: #10b981; color: #fff; }
             .rubot-adv-btn.skip { background: rgba(255,255,255,0.08); color: #c4b5fd; border: 1px solid rgba(139,92,246,0.2); }
         `;
-      document.head.appendChild(style2);
+      document.head.appendChild(style);
       const panel = document.createElement("div");
       panel.id = "rubot-hud-panel";
       panel.innerHTML = `

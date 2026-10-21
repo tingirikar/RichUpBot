@@ -480,8 +480,8 @@ function detectLocalPlayerFromPlayerList() {
             const rowText = row.innerText || '';
             if (!rowText.includes('$') || rowText.length > 160) continue;
 
-            // Strictly filter out any row that contains activity log words
-            if (/\b(?:paid|bought|rolled|landed|rent|tax|joined|left|game started|is playing)\b/i.test(rowText)) continue;
+            // Strictly filter out any row that contains activity log words or button actions
+            if (/\b(?:paid|bought|buy|buying|rolled|landed|rent|tax|joined|left|game started|is playing)\b/i.test(rowText)) continue;
 
             // Normalize Unicode minus (U+2212) and dashes to ASCII hyphen
             const normalizedRow = rowText.replace(/[−–—]/g, '-');
@@ -514,14 +514,18 @@ function detectLocalPlayerFromPlayerList() {
                 // Remove emojis, icons, crowns, door badges, and standalone delta numbers (like "25" or "-25")
                 const clean = line
                     .replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '')
-                    .replace(/[->\]\[→←\|👑]/g, '')
+                    .replace(/[->\]\[→←\|👑:]/g, '')
                     .replace(/\b-?\d+\b/g, '')
                     .trim();
+                const lower = clean.toLowerCase();
                 if (
                     clean.length >= 2 && clean.length <= 24 &&
-                    !BOARD_LABELS_BLACKLIST.has(clean.toLowerCase()) &&
-                    !clean.toLowerCase().includes('share') &&
-                    !clean.toLowerCase().includes('copy')
+                    !BOARD_LABELS_BLACKLIST.has(lower) &&
+                    !lower.startsWith('buy') &&
+                    !lower.startsWith('pay') &&
+                    !lower.startsWith('bid') &&
+                    !lower.includes('share') &&
+                    !lower.includes('copy')
                 ) {
                     candidateName = clean;
                     break;
@@ -756,6 +760,7 @@ export function syncBoardTileOwnershipAndPricesFromDOM() {
 
         // 3. Dynamic mortgage styling (diagonal stripes, opacity, or text)
         const tileCls = (tileEl.className?.baseVal !== undefined ? tileEl.className.baseVal : (tileEl.className || '')).toString().toLowerCase();
+        const tileStyle = window.getComputedStyle(tileEl);
         const isMortgagedTile = /mortgaged/i.test(text) ||
                                 tileCls.includes('mortgage') ||
                                 Boolean(tileEl.querySelector?.('[class*="mortgage" i]')) ||
@@ -1183,9 +1188,10 @@ function syncMyPropertiesFromSidebar() {
             if (tile.group && new RegExp(`^${tile.name}\\b`, 'i').test(rowText)) {
                 const inner = (row.innerHTML || '').toLowerCase();
                 const rowCls = (row.className?.baseVal !== undefined ? row.className.baseVal : (row.className || '')).toString().toLowerCase();
+                const rowStyle = window.getComputedStyle(row);
                 const isMortgagedRow = inner.includes('mortgage') || 
                                        rowCls.includes('mortgage') ||
-                                       (style.opacity && parseFloat(style.opacity) < 0.7);
+                                       (rowStyle.opacity && parseFloat(rowStyle.opacity) < 0.7);
                 if (isMortgagedRow && GameMemory.ownership[tile.id]) {
                     GameMemory.ownership[tile.id].mortgaged = true;
                 }
