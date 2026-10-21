@@ -1,6 +1,6 @@
 import { CONFIG } from '../config.js';
 import { GameMemory } from '../memory/gameMemory.js';
-import { BOARD_TILES, GROUP_TILES } from '../data/boardTiles.js';
+import { BOARD_TILES, GROUP_TILES, GROUP_POWER } from '../data/boardTiles.js';
 import { normalizeText } from './elementFinder.js';
 import { MarkovRisk } from '../engine/markovRisk.js';
 import { JailStrategy } from '../engine/jailStrategy.js';
@@ -642,18 +642,50 @@ export const ActionExecutor = {
 
         // 4. PRIORITY B: UPGRADE HOUSES ON COMPLETE UNMORTGAGED MONOPOLIES
         if (completeSets.length > 0) {
-            let targetSet = completeSets.find(s => 
-                (chosenGroup && s.groupName.toLowerCase() === chosenGroup.toLowerCase()) &&
-                s.minHouses < 5 && (GameMemory.myCash - s.houseCost >= reserve)
-            );
-            if (!targetSet) {
-                targetSet = completeSets.find(s => s.minHouses < 5 && (GameMemory.myCash - s.houseCost >= reserve));
+            // Sort by Country Power so high-power monopolies (Germany, China, France) are ALWAYS prioritized!
+            completeSets.sort((a, b) => {
+                const powerA = GROUP_POWER[a.groupName] || 50;
+                const powerB = GROUP_POWER[b.groupName] || 50;
+                return powerB - powerA;
+            });
+
+            // Also calculate mathematical ROI (3-house rush, strike zone ambush, hotel avoidance)
+            const mathCandidates = HouseBuilder.rankHouseUpgrades(GameMemory.myCash);
+
+            let targetSet = null;
+            let candidateTile = null;
+
+            if (chosenTile || chosenGroup) {
+                targetSet = completeSets.find(s => 
+                    (chosenGroup && s.groupName.toLowerCase() === chosenGroup.toLowerCase()) &&
+                    s.minHouses < 5 && (GameMemory.myCash - s.houseCost >= reserve)
+                );
+                if (targetSet) {
+                    if (chosenTile) {
+                        candidateTile = targetSet.tiles.find(t => t.name.toLowerCase() === chosenTile.toLowerCase() && (GameMemory.ownership[t.id]?.houses || 0) === targetSet.minHouses);
+                    }
+                    if (!candidateTile) {
+                        candidateTile = targetSet.tiles.find(t => (GameMemory.ownership[t.id]?.houses || 0) === targetSet.minHouses);
+                    }
+                }
             }
 
-            if (targetSet) {
-                // EVEN BUILDING RULE: Find the specific tile in this set that has minHouses!
-                const candidateTile = targetSet.tiles.find(t => (GameMemory.ownership[t.id]?.houses || 0) === targetSet.minHouses);
-                if (!candidateTile) return false;
+            // Fallback to mathematical ROI candidate if AI didn't specify or target unavailable
+            if (!targetSet && mathCandidates.length > 0) {
+                const topMath = mathCandidates[0];
+                targetSet = completeSets.find(s => s.tiles.some(t => t.id === topMath.tile.id));
+                candidateTile = topMath.tile;
+            }
+
+            // Final fallback: highest GROUP_POWER completeSet
+            if (!targetSet) {
+                targetSet = completeSets.find(s => s.minHouses < 5 && (GameMemory.myCash - s.houseCost >= reserve));
+                if (targetSet) {
+                    candidateTile = targetSet.tiles.find(t => (GameMemory.ownership[t.id]?.houses || 0) === targetSet.minHouses);
+                }
+            }
+
+            if (targetSet && candidateTile) {
 
                 // If a different property card is open, switch directly via right sidebar or dismiss it!
                 if (openCard && openCard.tile.id !== candidateTile.id) {

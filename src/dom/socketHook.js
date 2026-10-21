@@ -186,12 +186,68 @@ function parseSocketIOFrame(raw) {
                 const buyer = isMe ? (GameMemory.myName || '__ME__') : pName;
                 if (GameMemory.ownership[tileId]) {
                     GameMemory.ownership[tileId].owner = buyer;
-                    logToBot(`[PURCHASE] 🏷️ Tile #${tileId} (${BOARD_TILES[tileId]?.name || 'Unknown'}) acquired by ${buyer}`);
+                    logToBot(`[WS TELEMETRY] 🏷️ Tile #${tileId} (${BOARD_TILES[tileId]?.name || 'Unknown'}) acquired by ${buyer}`);
                 }
             }
         }
 
-        // 4. Turn Ended / Started
+        // 4. Auctions: Update owner when auction is won
+        if (eventName.includes('auction')) {
+            const tileId = typeof payload.blockIndex === 'number' ? payload.blockIndex : 
+                           (typeof payload.tileId === 'number' ? payload.tileId : payload.tileIndex);
+            const winner = payload.winner || payload.playerName || payload.username || payload.name || payload.player;
+            if (typeof tileId === 'number' && winner && GameMemory.ownership[tileId]) {
+                const isMe = GameMemory.isMe(winner);
+                const buyer = isMe ? (GameMemory.myName || '__ME__') : winner;
+                GameMemory.ownership[tileId].owner = buyer;
+                logToBot(`[WS TELEMETRY] 🔨 Tile #${tileId} won at auction by ${buyer}`);
+            }
+        }
+
+        // 5. House / Hotel / Build / Upgrade Events
+        if (eventName.includes('house') || eventName.includes('hotel') || eventName.includes('build') || eventName.includes('upgrade')) {
+            const tileId = typeof payload.blockIndex === 'number' ? payload.blockIndex : 
+                           (typeof payload.tileId === 'number' ? payload.tileId : payload.tileIndex);
+            if (typeof tileId === 'number' && GameMemory.ownership[tileId]) {
+                const houses = payload.houses ?? payload.count ?? payload.level ?? payload.houseCount;
+                if (typeof houses === 'number') {
+                    GameMemory.ownership[tileId].houses = Math.max(0, Math.min(5, houses));
+                } else if (eventName.includes('hotel')) {
+                    GameMemory.ownership[tileId].houses = 5;
+                } else {
+                    GameMemory.ownership[tileId].houses = Math.min(5, (GameMemory.ownership[tileId].houses || 0) + 1);
+                }
+                logToBot(`[WS TELEMETRY] 🏠 Tile #${tileId} houses updated -> ${GameMemory.ownership[tileId].houses}/5`);
+            }
+        }
+
+        // 6. Mortgage / Unmortgage Events
+        if (eventName.includes('mortgage')) {
+            const tileId = typeof payload.blockIndex === 'number' ? payload.blockIndex : 
+                           (typeof payload.tileId === 'number' ? payload.tileId : payload.tileIndex);
+            const isUn = eventName.includes('unmortgage');
+            if (typeof tileId === 'number' && GameMemory.ownership[tileId]) {
+                GameMemory.ownership[tileId].mortgaged = !isUn;
+                logToBot(`[WS TELEMETRY] 🏦 Tile #${tileId} ${isUn ? 'unmortgaged' : 'mortgaged'}`);
+            }
+        }
+
+        // 7. Bankruptcy: Clear assets of bankrupt player
+        if (eventName.includes('bankrupt')) {
+            const pName = payload.playerName || payload.username || payload.name || payload.player;
+            if (pName) {
+                logToBot(`[WS TELEMETRY] ⚠️ ${pName} declared bankruptcy. Assets released.`);
+                for (const id of Object.keys(GameMemory.ownership)) {
+                    if (GameMemory.ownership[id].owner === pName) {
+                        GameMemory.ownership[id].owner = null;
+                        GameMemory.ownership[id].houses = 0;
+                        GameMemory.ownership[id].mortgaged = false;
+                    }
+                }
+            }
+        }
+
+        // 8. Turn Ended / Started
         if (eventName.includes('turn')) {
             const active = payload.activePlayer || payload.player || payload.username || payload.name;
             if (active) {
@@ -201,6 +257,9 @@ function parseSocketIOFrame(raw) {
 
         // Deep sync player stats (cash & positions) across all payloads
         deepSyncFromObject(payload);
+
+        // Deep sync property board state (ownership, houses, mortgages) across all payloads
+        deepSyncPropertiesFromPayload(payload);
     } catch (_) {
         // Ignore JSON parse errors on malformed payloads
     }
@@ -248,4 +307,102 @@ function deepSyncFromObject(obj) {
     for (const k of Object.keys(obj)) {
         if (typeof obj[k] === 'object') deepSyncFromObject(obj[k]);
     }
+}
+
+/**
+ * Ingests full board state arrays, properties, and blocks from WebSocket match payloads
+ */
+function deepSyncPropertiesFromPayload(payload) {
+    if (!payload || typeof payload !== 'object') return;
+
+    // Player ID to Name lookup map
+    const playerMap = new Map();
+    for (const name of Object.keys(GameMemory.players)) {
+        playerMap.set(name, name);
+    }
+    const playersList = Array.isArray(payload.players) ? payload.players : (Array.isArray(payload.playerList) ? payload.playerList : null);
+    if (playersList) {
+        for (const p of playersList) {
+            const pName = p.name || p.username;
+            const pId = p.id ?? p.userId ?? p.user_id ?? p.playerId;
+            if (pName) {
+                if (pId !== undefined) playerMap.set(String(pId), pName);
+                playerMap.set(pName, pName);
+            }
+        }
+    }
+
+    const resolveOwner = (raw) => {
+        if (raw === null || raw === undefined || raw === false || raw === '') return null;
+        if (typeof raw === 'string') {
+            if (playerMap.has(raw)) return playerMap.get(raw);
+            if (GameMemory.isMe(raw)) return GameMemory.myName || '__ME__';
+            return raw;
+        }
+        if (typeof raw === 'number' && playerMap.has(String(raw))) {
+            return playerMap.get(String(raw));
+        }
+        if (typeof raw === 'object' && (raw.name || raw.username)) {
+            return raw.name || raw.username;
+        }
+        return null;
+    };
+
+    const visited = new Set();
+
+    const scan = (obj, depth = 0) => {
+        if (!obj || typeof obj !== 'object' || depth > 5 || visited.has(obj)) return;
+        visited.add(obj);
+
+        if (Array.isArray(obj)) {
+            for (let i = 0; i < obj.length; i++) {
+                const item = obj[i];
+                if (!item) continue;
+
+                if (typeof item === 'string' && obj.length >= 35 && i < 40 && GameMemory.ownership[i]) {
+                    const resolved = resolveOwner(item);
+                    if (resolved) GameMemory.ownership[i].owner = resolved;
+                    continue;
+                }
+
+                if (typeof item === 'object') {
+                    const tileId = typeof item.blockIndex === 'number' ? item.blockIndex : 
+                                   (typeof item.tileId === 'number' ? item.tileId : 
+                                   (typeof item.index === 'number' ? item.index : (typeof item.id === 'number' && item.id < 40 ? item.id : null)));
+
+                    const targetId = tileId !== null ? tileId : (obj.length >= 35 && i < 40 ? i : null);
+
+                    if (targetId !== null && GameMemory.ownership[targetId]) {
+                        if (item.owner !== undefined || item.ownerName !== undefined || item.ownerId !== undefined || item.userId !== undefined) {
+                            const rawOwner = item.owner ?? item.ownerName ?? item.ownerId ?? item.userId;
+                            GameMemory.ownership[targetId].owner = resolveOwner(rawOwner);
+                        }
+                        if (typeof item.houses === 'number') {
+                            GameMemory.ownership[targetId].houses = Math.max(0, Math.min(5, item.houses));
+                        } else if (item.hotel) {
+                            GameMemory.ownership[targetId].houses = 5;
+                        }
+                        if (typeof item.mortgaged === 'boolean') {
+                            GameMemory.ownership[targetId].mortgaged = item.mortgaged;
+                        } else if (typeof item.isMortgaged === 'boolean') {
+                            GameMemory.ownership[targetId].mortgaged = item.isMortgaged;
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
+        if (obj.properties || obj.tiles || obj.blocks || obj.board) {
+            scan(obj.properties || obj.tiles || obj.blocks || obj.board, depth + 1);
+        }
+
+        for (const k of Object.keys(obj)) {
+            if (typeof obj[k] === 'object' && obj[k] !== null && k !== 'processedLogs' && k !== 'wsMessages') {
+                scan(obj[k], depth + 1);
+            }
+        }
+    };
+
+    scan(payload);
 }

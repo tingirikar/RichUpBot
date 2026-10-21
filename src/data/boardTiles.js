@@ -96,6 +96,33 @@ export const TILE_BY_ID = Object.freeze(
 // High-traffic, deadly color sets in Monopoly (landing right out of Jail)
 export const HIGH_TRAFFIC_GROUPS = new Set(['Germany', 'China', 'France', 'Italy']);
 
+/**
+ * RICHUP COUNTRY MONOPOLY POWER INDEX (0-100)
+ * Calculated from stationary Markov landing probabilities (especially outside Prison),
+ * house building cost efficiency ($/house to reach 3 houses), and KO / rent lethality.
+ */
+export const GROUP_POWER = Object.freeze({
+    // Tier 1: Game Enders (Peak Prison exit landing frequencies + high rent ROI)
+    'Germany': 95,   // Orange: Sits 6, 8, 9 from Prison, cheap $100 houses, highest landing rate
+    'China':   88,   // Red: High frequency right after Germany, $1,100 rent
+
+    // Tier 2: Heavy Hitters
+    'France':  82,   // Yellow: $1,200 rent, high late-game traffic
+    'USA':     80,   // Dark Blue: Only 2 tiles to build, massive $2,000 rent
+    'UK':      75,   // Green: Huge $1,400 rent, but expensive $200 houses
+
+    // Tier 3: Budget / Mid-Game
+    'Italy':   68,   // Pink: Cheap $100 houses, moderate $900 rent
+    'Israel':  52,   // Light Blue: Ultra-cheap $50 houses, low $600 ceiling
+
+    // Tier 4: Weakest
+    'Brazil':  30,   // Brown: 2 tiles, maximum rent capped at only $240 / $460
+
+    // Non-monopoly utility groups
+    'Airport': 45,
+    'Utility': 20
+});
+
 // Blacklist of board & UI labels so DOM cash scraper never mistakes system UI for player username or cash
 export const BOARD_LABELS_BLACKLIST = new Set([
     ...BOARD_TILES.map(t => t.name.toLowerCase()),

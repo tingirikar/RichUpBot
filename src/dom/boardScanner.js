@@ -12,6 +12,69 @@ import { TradeProposalExecutor } from '../engine/tradeProposalExecutor.js';
  * 3. Activity feed logs
  * 4. Floating avatar tokens and pixel (x, y) coordinates on the board
  */
+/**
+ * Color Utilities for Active Visual DOM Board Scraping
+ */
+export function parseColor(str) {
+    if (!str || typeof str !== 'string') return null;
+    str = str.trim().toLowerCase();
+    if (str === 'transparent' || str === 'inherit' || str === 'none') return null;
+
+    // 1. rgb / rgba
+    const rgbMatch = /^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/i.exec(str);
+    if (rgbMatch) {
+        const a = rgbMatch[4] !== undefined ? parseFloat(rgbMatch[4]) : 1;
+        if (a < 0.15) return null;
+        return {
+            r: parseInt(rgbMatch[1], 10),
+            g: parseInt(rgbMatch[2], 10),
+            b: parseInt(rgbMatch[3], 10),
+            a
+        };
+    }
+
+    // 2. hex
+    const hexMatch = /^#([0-9a-f]{3,8})$/i.exec(str);
+    if (hexMatch) {
+        let hex = hexMatch[1];
+        if (hex.length === 3 || hex.length === 4) {
+            hex = hex.split('').map(c => c + c).join('');
+        }
+        if (hex.length >= 6) {
+            return {
+                r: parseInt(hex.slice(0, 2), 16),
+                g: parseInt(hex.slice(2, 4), 16),
+                b: parseInt(hex.slice(4, 6), 16),
+                a: hex.length === 8 ? parseInt(hex.slice(6, 8), 16) / 255 : 1
+            };
+        }
+    }
+
+    return null;
+}
+
+export function isVibrantPlayerColor(c) {
+    if (!c) return false;
+    const max = Math.max(c.r, c.g, c.b);
+    const min = Math.min(c.r, c.g, c.b);
+    const delta = max - min;
+    // Saturation and brightness bounds:
+    // RichUp player avatars are vibrant saturated hues (yellow, orange, green, purple, blue, red)
+    if (max < 40) return false;                  // Too dark / black
+    if (min > 225 && delta < 25) return false;   // Too bright / white
+    if (delta < 25) return false;                 // Neutral grey / desaturated
+    return true;
+}
+
+export function colorDistance(c1, c2) {
+    if (!c1 || !c2) return Infinity;
+    // Human perceptual weighting: red=0.3, green=0.59, blue=0.11
+    const dr = c1.r - c2.r;
+    const dg = c1.g - c2.g;
+    const db = c1.b - c2.b;
+    return Math.sqrt(0.3 * dr * dr + 0.59 * dg * dg + 0.11 * db * db);
+}
+
 export function syncBoardStateFromDOM() {
     if (!document.body) return;
 
@@ -35,23 +98,26 @@ export function syncBoardStateFromDOM() {
         return;
     }
 
-    // --- IN-GAME SCANNING ---
-    // 1. Always verify Live Player Balances from Scoreboard List
+    // --- IN-GAME SCANNING (100% Zero-Log Dependent Continuous Active DOM Sync) ---
+    // 1. Live Player Balances and Avatar Colors from Scoreboard List
     detectLocalPlayerFromPlayerList();
 
-    // 2. Dynamically read exact property prices and live house badges from board tiles
-    syncBoardTilePricesAndBadgesFromDOM();
-
-    // 3. Dynamically scrape live rent table and house costs if any property card modal is open
-    syncPropertyCardModalFromDOM();
-
-    // 4. Sync Properties & House Counts from "My properties" Sidebar
+    // 2. Right Sidebar "My properties" panel: 100% verified ground truth for our own cards
     syncMyPropertiesFromSidebar();
 
-    // 5. Visual DOM Coordinate Scraper: read pixel coordinates of floating avatar tokens
+    // 3. Visual Board Tile Scraper: Active color ribbon matching, house counts, and mortgage badges for all 40 tiles
+    syncBoardTileOwnershipAndPricesFromDOM();
+
+    // 4. Property Card Modal Scraper: rent progression, house costs, owner if card modal is open
+    syncPropertyCardModalFromDOM();
+
+    // 5. Trade Modal Scraper: 2-way complete inventory sync whenever trade modal is open
+    syncTradeModalInventoriesFromDOM();
+
+    // 6. Visual DOM Coordinate Scraper: read pixel coordinates of floating avatar tokens
     scanPlayerTokenPositionsFromDOM();
 
-    // 6. Activity Logs: Safely parse activity log events without corrupting verified cash
+    // 7. Activity Logs: Purely for HUD terminal commentary (Zero impact on bot decisions)
     scanActivityLogsOnly();
 }
 
@@ -262,6 +328,13 @@ function syncLobbyStateAndPlayers() {
                 delete GameMemory.players[existingName];
             }
         }
+    } else {
+        // If in lobby and no player rows rendered yet, wipe all old opponents immediately!
+        for (const existingName of Object.keys(GameMemory.players)) {
+            if (!GameMemory.isMe(existingName)) {
+                delete GameMemory.players[existingName];
+            }
+        }
     }
 }
 
@@ -295,6 +368,33 @@ function detectLocalPlayerFromPlayerList() {
     )) {
         GameMemory.myName = null;
         try { localStorage.removeItem('richup_bot_my_name'); } catch (_) {}
+    }
+
+    // 2b. Self-Healing Identity Detector:
+    // If "Roll the dice" or "End turn" is visible, the player whose turn it is ("X is playing...") is ME!
+    if (!GameMemory.myName) {
+        const rollOrEndBtn = Array.from(document.querySelectorAll('button, [role="button"]')).some(b => {
+            const t = (b.innerText || '').trim().toLowerCase();
+            return t === 'roll the dice' || t === 'roll again' || t === 'end turn';
+        });
+        if (rollOrEndBtn) {
+            const pText = document.body ? document.body.innerText : '';
+            const playingMatch = /([a-zA-Z0-9_-]{2,24})\s+is playing/i.exec(pText);
+            if (playingMatch && !BOARD_LABELS_BLACKLIST.has(playingMatch[1].toLowerCase())) {
+                GameMemory.setMyName(playingMatch[1]);
+                logToBot(`[IDENTITY SELF-HEAL] Identified local player '${playingMatch[1]}' from active turn state!`);
+            }
+        }
+    }
+
+    // 2c. Restore from localStorage if available
+    if (!GameMemory.myName) {
+        try {
+            const saved = localStorage.getItem('richup_bot_my_name');
+            if (saved && !BOARD_LABELS_BLACKLIST.has(saved.toLowerCase())) {
+                GameMemory.setMyName(saved);
+            }
+        } catch (_) {}
     }
 
     const currentName = GameMemory.myName;
@@ -396,15 +496,49 @@ function detectLocalPlayerFromPlayerList() {
 
             // In RichUp, only the local player's row has the interactive leave [->] button
             const hasLeaveIcon = Boolean(
-                row.querySelector('[class*="leave" i], [class*="exit" i], [title*="leave" i], [aria-label*="leave" i]') ||
+                row.querySelector('[class*="leave" i], [class*="exit" i], [title*="leave" i], [aria-label*="leave" i], button[aria-label*="leave" i]') ||
                 row.innerHTML.includes('->') ||
                 row.innerHTML.includes('M17 16l4') ||
                 row.innerHTML.includes('M11 16l-4-4') ||
-                row.innerHTML.includes('M15 3h4a2')
+                row.innerHTML.includes('M15 3h4a2') ||
+                row.innerHTML.includes('M9 21H5a2') ||
+                row.innerHTML.includes('M16 17l5-5-5-5') ||
+                row.innerHTML.includes('logout')
             );
 
-            const isKnownMe = currentName && candidateName.toLowerCase() === currentName.toLowerCase();
+            const isKnownMe = (currentName && candidateName.toLowerCase() === currentName.toLowerCase()) ||
+                              (GameMemory.myName && candidateName.toLowerCase() === GameMemory.myName.toLowerCase());
             const isBankrupt = rowText.toLowerCase().includes('bankrupt') || row.classList.contains('bankrupt');
+
+            // Extract player avatar element & color from the scoreboard row
+            const avEl = row.querySelector('svg, img, [class*="avatar" i], [class*="face" i], [class*="token" i], [class*="user" i], div[style*="border-radius"], div[style*="background"]');
+            let playerColor = null;
+            let playerFill = null;
+
+            if (avEl) {
+                const style = window.getComputedStyle(avEl);
+                let parsed = parseColor(style.backgroundColor);
+                if (!parsed || !isVibrantPlayerColor(parsed)) {
+                    const svgShape = avEl.querySelector('path[fill]:not([fill="none"]):not([fill="#fff"]):not([fill="#ffffff"]), circle[fill]:not([fill="none"]), rect[fill]:not([fill="none"])')
+                        || (avEl.tagName.toLowerCase() === 'svg' ? avEl : null);
+                    if (svgShape) {
+                        const fillVal = svgShape.getAttribute('fill') || window.getComputedStyle(svgShape).fill;
+                        parsed = parseColor(fillVal);
+                        if (parsed && isVibrantPlayerColor(parsed)) playerFill = fillVal;
+                    }
+                }
+                if (!parsed || !isVibrantPlayerColor(parsed)) {
+                    parsed = parseColor(style.color);
+                }
+                if (parsed && isVibrantPlayerColor(parsed)) {
+                    playerColor = parsed;
+                }
+            }
+
+            const existingColor = GameMemory.players[candidateName]?.color || null;
+            const existingFill = GameMemory.players[candidateName]?.fill || null;
+            const finalColor = playerColor || existingColor;
+            const finalFill = playerFill || existingFill;
 
             if (hasLeaveIcon || isKnownMe) {
                 foundLocalPlayerInScoreboard = true;
@@ -415,15 +549,29 @@ function detectLocalPlayerFromPlayerList() {
                     cash: parsedCash,
                     pos: GameMemory.myPos,
                     isMe: true,
-                    bankrupt: isBankrupt
+                    bankrupt: isBankrupt,
+                    color: finalColor,
+                    fill: finalFill
                 };
             } else {
                 GameMemory.players[candidateName] = {
                     cash: parsedCash,
                     pos: GameMemory.players[candidateName]?.pos || 0,
                     isMe: false,
-                    bankrupt: isBankrupt
+                    bankrupt: isBankrupt,
+                    color: finalColor,
+                    fill: finalFill
                 };
+            }
+        }
+
+        // Auto-sync local cash from scoreboard player entry if foundLocalPlayerInScoreboard was true
+        if (!foundLocalPlayerInScoreboard && GameMemory.myName && GameMemory.players[GameMemory.myName]) {
+            const sbCash = GameMemory.players[GameMemory.myName].cash;
+            if (typeof sbCash === 'number') {
+                GameMemory.myCash = sbCash;
+                GameMemory.cashVerified = true;
+                foundLocalPlayerInScoreboard = true;
             }
         }
 
@@ -486,41 +634,165 @@ function detectLocalPlayerFromPlayerList() {
 }
 
 /**
- * Dynamically reads property purchase prices and live house badges directly off board tiles
+ * CONTINUOUS ACTIVE VISUAL BOARD TILE SCRAPER (100% Zero-Log Dependent)
+ * 
+ * Accurately reads all 40 tiles directly from the visual board DOM:
+ * 1. Reads dynamic property purchase prices from unowned price tags ($60 - $500).
+ * 2. Visual Color Ribbon Matching: Detects the outer ownership ribbon / tab on each tile,
+ *    matches its RGB color to the active scoreboard player avatar colors, and assigns
+ *    ownership with zero reliance on activity logs.
+ * 3. Verified local ownership from "My properties" sidebar is strictly preserved.
+ * 4. Scrapes live house counts (🏠 x 2, 🏠 x 3, 🏠 x 4) and hotel badges (🏨).
+ * 5. Scrapes live mortgage badges and diagonal striped / dim overlays.
+ * 6. Correctly identifies unowned tiles when the purchase price is displayed and no player color tab is present.
  */
-export function syncBoardTilePricesAndBadgesFromDOM() {
+export function syncBoardTileOwnershipAndPricesFromDOM() {
     const hud = document.getElementById('rubot-hud-panel');
-    const allEls = document.querySelectorAll('div, [class*="tile"], [class*="cell"]');
+    const boardEl = document.querySelector('[class*="board" i], main, section') || document.body;
+    if (!boardEl) return;
 
-    for (let i = 0; i < allEls.length; i++) {
-        const el = allEls[i];
-        if (hud && hud.contains(el)) continue;
+    const boardRect = boardEl.getBoundingClientRect();
+    if (boardRect.width < 150 || boardRect.height < 150) return;
 
-        const text = el.innerText || '';
-        if (text.length > 100) continue;
+    // Active players with registered avatar colors
+    const activePlayersWithColors = [];
+    for (const [pName, pData] of Object.entries(GameMemory.players)) {
+        if (pData && pData.color && !pData.bankrupt) {
+            activePlayersWithColors.push({
+                name: pName,
+                isMe: GameMemory.isMe(pName),
+                color: pData.color
+            });
+        }
+    }
 
-        for (const tile of BOARD_TILES) {
-            if (!tile.group) continue;
-            if (new RegExp(`\\b${tile.name}\\b`, 'i').test(text)) {
-                // 1. Dynamic property price tag on board tile
-                if (text.includes('$')) {
-                    const m = /(\d{2,4})\s*\$|\$\s*(\d{2,4})/.exec(text);
-                    if (m) {
-                        const price = parseInt(m[1] || m[2], 10);
-                        if (!isNaN(price) && price >= 50 && price <= 500) {
-                            tile.price = price;
-                        }
-                    }
-                }
+    // Discover discrete tile DOM elements on the board
+    const candidateEls = Array.from(boardEl.querySelectorAll('div, [class*="tile" i], [class*="cell" i], [class*="block" i]')).filter(el => {
+        if (hud && hud.contains(el)) return false;
+        if (el.closest('[class*="chat" i], [class*="scoreboard" i], [class*="modal" i], [class*="sidebar" i]')) return false;
+        const r = el.getBoundingClientRect();
+        return r.width >= 25 && r.width <= 190 && r.height >= 25 && r.height <= 190;
+    });
 
-                // 2. Dynamic house/hotel badges on board tile (e.g. "🏠 x 3", "hotel")
-                const houseMatch = /(?:🏠\s*x?\s*|x\s*)(\d)/i.exec(text);
-                if (houseMatch && GameMemory.ownership[tile.id]) {
-                    GameMemory.ownership[tile.id].houses = parseInt(houseMatch[1], 10);
-                } else if (/hotel/i.test(text) && GameMemory.ownership[tile.id]) {
-                    GameMemory.ownership[tile.id].houses = 5;
+    const tileElements = new Map(); // tileId -> el
+
+    for (const tile of BOARD_TILES) {
+        if (!tile.group) continue;
+        const nameRegex = new RegExp(`\\b${tile.name}\\b`, 'i');
+
+        let bestEl = null;
+        let smallestArea = Infinity;
+
+        for (const el of candidateEls) {
+            const text = (el.innerText || '').trim();
+            if (text.length > 70) continue;
+            if (nameRegex.test(text)) {
+                const r = el.getBoundingClientRect();
+                const area = r.width * r.height;
+                if (area < smallestArea) {
+                    smallestArea = area;
+                    bestEl = el;
                 }
             }
+        }
+
+        if (bestEl) {
+            tileElements.set(tile.id, bestEl);
+        }
+    }
+
+    // Inspect each property tile on the board
+    for (const [tileId, tileEl] of tileElements.entries()) {
+        const tile = BOARD_TILES[tileId];
+        if (!tile) continue;
+
+        const text = (tileEl.innerText || '').trim();
+
+        // 1. Dynamic property price tag on board tile (e.g. "270 $", "$270")
+        const priceMatch = /(?:^|[^\d])(\d{2,4})\s*\$|\$\s*(\d{2,4})/.exec(text);
+        let tileHasPriceTag = false;
+        if (priceMatch) {
+            const p = parseInt(priceMatch[1] || priceMatch[2], 10);
+            if (!isNaN(p) && p >= 50 && p <= 500) {
+                tile.price = p;
+                tileHasPriceTag = true;
+            }
+        }
+
+        // 2. Dynamic house/hotel badges on board tile (e.g. "🏠 x 3", "hotel")
+        let houseCount = 0;
+        const houseMatch = /(?:🏠\s*x?\s*|x\s*)(\d)/i.exec(text);
+        if (houseMatch) {
+            houseCount = Math.min(5, parseInt(houseMatch[1], 10));
+        } else if (/hotel|🏨/i.test(text)) {
+            houseCount = 5;
+        } else {
+            const houseSvg = tileEl.querySelector?.('svg[class*="house" i], [class*="house" i], [class*="hotel" i]');
+            if (houseSvg) houseCount = 1;
+        }
+
+        // 3. Dynamic mortgage styling (diagonal stripes, opacity, or text)
+        const tileStyle = window.getComputedStyle(tileEl);
+        const isMortgagedTile = /mortgaged/i.test(text) ||
+                                (tileEl.className || '').toString().toLowerCase().includes('mortgage') ||
+                                Boolean(tileEl.querySelector?.('[class*="mortgage" i]')) ||
+                                (tileStyle.opacity && parseFloat(tileStyle.opacity) < 0.65);
+
+        // 4. OWNERSHIP DETERMINATION
+        // Priority A: If Right Sidebar already verified local player owns this, preserve ME as owner!
+        if (GameMemory.isMe(GameMemory.ownership[tileId]?.owner)) {
+            if (houseCount > 0) GameMemory.ownership[tileId].houses = houseCount;
+            if (isMortgagedTile) GameMemory.ownership[tileId].mortgaged = true;
+            continue;
+        }
+
+        // Priority B: Visual Color Ribbon Matching on Board Tile
+        const childEls = Array.from(tileEl.querySelectorAll('div, span, [class*="owner" i], [class*="bar" i], [class*="ribbon" i], [class*="strip" i], [class*="cell" i]'));
+        childEls.push(tileEl);
+
+        const colorMatches = [];
+
+        for (const child of childEls) {
+            const style = window.getComputedStyle(child);
+            const bgParsed = parseColor(style.backgroundColor);
+            const fillParsed = parseColor(style.fill) || (child.getAttribute ? parseColor(child.getAttribute('fill')) : null);
+            const colParsed = parseColor(style.color);
+
+            const testColors = [bgParsed, fillParsed, colParsed].filter(Boolean);
+
+            for (const c of testColors) {
+                if (!isVibrantPlayerColor(c)) continue;
+
+                for (const p of activePlayersWithColors) {
+                    const dist = colorDistance(c, p.color);
+                    if (dist < 42) {
+                        colorMatches.push({
+                            player: p.name,
+                            dist,
+                            isMe: p.isMe
+                        });
+                    }
+                }
+            }
+        }
+
+        if (colorMatches.length > 0) {
+            // Pick match with smallest color distance
+            colorMatches.sort((a, b) => a.dist - b.dist);
+            const best = colorMatches[0];
+
+            if (best.isMe) {
+                GameMemory.ownership[tileId].owner = GameMemory.myName || '__ME__';
+            } else {
+                GameMemory.ownership[tileId].owner = best.player;
+            }
+            GameMemory.ownership[tileId].houses = houseCount;
+            GameMemory.ownership[tileId].mortgaged = Boolean(isMortgagedTile);
+        } else if (tileHasPriceTag && houseCount === 0) {
+            // Displays purchase price tag and has NO player color ribbon -> UNOWNED!
+            GameMemory.ownership[tileId].owner = null;
+            GameMemory.ownership[tileId].houses = 0;
+            GameMemory.ownership[tileId].mortgaged = false;
         }
     }
 
@@ -529,12 +801,15 @@ export function syncBoardTilePricesAndBadgesFromDOM() {
     if (bodyText.includes("negative amount of money") || bodyText.includes("Sell properties or trade")) {
         GameMemory.isNegativeDebt = true;
         if (GameMemory.myCash >= 0) {
-            GameMemory.myCash = -50; // Ensure cash flag triggers debt recovery immediately
+            GameMemory.myCash = -50;
         }
     } else {
         GameMemory.isNegativeDebt = GameMemory.myCash < 0;
     }
 }
+
+// Backward compatible alias
+export const syncBoardTilePricesAndBadgesFromDOM = syncBoardTileOwnershipAndPricesFromDOM;
 
 /**
  * Visual DOM Coordinate Scraper for Player Avatars on the Board (Gap 2)
@@ -1296,6 +1571,81 @@ function parseActivityLogLine(line) {
         logToBot(`[GAME EVENT] 🔔 ${line}`);
         GameMemory.markLogProcessed(line);
         return;
+    }
+}
+
+/**
+ * Synchronizes entire portfolios for both players whenever any Trade Modal is open
+ * Reads all cards displayed in Left (Proposer) and Right (Target) columns.
+ */
+export function syncTradeModalInventoriesFromDOM() {
+    const modal = document.querySelector('[role="dialog"], [class*="modal" i], [class*="trade" i]');
+    if (!modal) return;
+
+    const modalRect = modal.getBoundingClientRect();
+    if (modalRect.width < 100 || modalRect.height < 100) return;
+    const modalMidX = modalRect.left + modalRect.width / 2;
+
+    let leftPlayerName = null;
+    let rightPlayerName = null;
+
+    const headerCandidates = Array.from(modal.querySelectorAll('h1, h2, h3, h4, h5, div, span, strong, b, p')).filter(el => {
+        const rect = el.getBoundingClientRect();
+        return rect.top < (modalRect.top + modalRect.height * 0.40) && rect.height > 10;
+    });
+
+    for (const el of headerCandidates) {
+        const t = (el.innerText || '').trim();
+        if (t.length >= 2 && t.length <= 25 && !t.includes('$') && !t.toLowerCase().includes('trade') && !t.toLowerCase().includes('create') && !BOARD_LABELS_BLACKLIST.has(t.toLowerCase())) {
+            const rect = el.getBoundingClientRect();
+            const center = rect.left + rect.width / 2;
+            for (const pName of Object.keys(GameMemory.players)) {
+                if (t.toLowerCase().includes(pName.toLowerCase()) || pName.toLowerCase().includes(t.toLowerCase())) {
+                    if (center < modalMidX && !leftPlayerName) leftPlayerName = pName;
+                    else if (center >= modalMidX && !rightPlayerName) rightPlayerName = pName;
+                }
+            }
+            if (GameMemory.isMe(t)) {
+                if (center < modalMidX && !leftPlayerName) leftPlayerName = t;
+                else if (center >= modalMidX && !rightPlayerName) rightPlayerName = t;
+            }
+        }
+    }
+
+    if (!leftPlayerName && !rightPlayerName) return;
+
+    // All property cards rendered in the trade modal
+    const cards = Array.from(modal.querySelectorAll('div, li, button, [class*="item" i], [class*="property" i], [class*="card" i]'));
+    for (const card of cards) {
+        const text = (card.innerText || '').trim();
+        if (!text || text.length > 60) continue;
+
+        for (const tile of BOARD_TILES) {
+            if (!tile.group) continue;
+            const tName = tile.name.toLowerCase();
+            if (text.toLowerCase().includes(tName)) {
+                const rect = card.getBoundingClientRect();
+                const center = rect.left + rect.width / 2;
+                const ownerName = center < modalMidX ? leftPlayerName : rightPlayerName;
+                if (ownerName && GameMemory.ownership[tile.id]) {
+                    const isMe = GameMemory.isMe(ownerName);
+                    GameMemory.ownership[tile.id].owner = isMe ? (GameMemory.myName || '__ME__') : ownerName;
+
+                    const houseMatch = /(?:x\s*|houses?\s*)(\d)/i.exec(text);
+                    if (houseMatch) {
+                        GameMemory.ownership[tile.id].houses = parseInt(houseMatch[1], 10);
+                    } else if (/hotel/i.test(text)) {
+                        GameMemory.ownership[tile.id].houses = 5;
+                    }
+
+                    const isMort = /mortgage/i.test(text) || card.className.toLowerCase().includes('mortgage');
+                    if (isMort) {
+                        GameMemory.ownership[tile.id].mortgaged = true;
+                    }
+                }
+                break;
+            }
+        }
     }
 }
 

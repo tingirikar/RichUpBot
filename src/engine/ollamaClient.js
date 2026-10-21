@@ -401,10 +401,12 @@ Net Cash Transfer: ${tradeData.receivedCash - tradeData.givenCash >= 0 ? `+$${tr
 === GRANDMASTER TRADING DIRECTIVE ===
 You are an elite Grandmaster Monopoly AI whose primary objective is to WIN.
 CRITICAL RULES:
-1. NEVER accept or propose a trade in the opponent's favor.
+1. NEVER accept or propose a trade in the opponent's favor. Cash alone can NEVER compensate for giving away a monopoly!
 2. If the trade completes a monopoly for ${partner} and does NOT complete a monopoly for us, it is a FATAL DANGER — you MUST output "DECLINE".
-3. If both players get a monopoly, verify if ${partner} has high cash to rush hotels immediately. If they have a massive cash advantage, DECLINE unless they pay huge cash to balance building power.
-4. When declining or negotiating, clearly state in "chatReply" why it failed and what counter-asset or cash we demand.
+3. If WE already hold a completed monopoly, our primary winning path is building houses and starving opponents. You MUST output "DECLINE" to any request for our properties unless it secures an immediate 2nd completed monopoly for us!
+4. Selling properties for cash alone is strictly forbidden — properties are irreplaceable blockers.
+5. If both players get a monopoly (Mutual Monopoly Swap): Rate Country Power: Germany (95) >= China (88) > France (82) >= USA (80) > UK (75) > Italy (68) > Israel (52) > Brazil (30). We MUST receive a set >= opponent's set in power! If their set is stronger, you MUST output "DECLINE" or "NEGOTIATE" demanding substantial cash ($150-$350+) to balance building power.
+6. When declining or negotiating, clearly state in "chatReply" why it failed and what counter-asset or cash we demand.
 
 Respond ONLY with valid JSON:
 {

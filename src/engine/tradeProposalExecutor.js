@@ -1,6 +1,8 @@
 import { createDOMSnapshot } from '../dom/elementFinder.js';
 import { delayClick, logToBot } from '../dom/actionExecutor.js';
 import { ChatEngine } from '../ui/chatEngine.js';
+import { BOARD_TILES } from '../data/boardTiles.js';
+import { GameMemory } from '../memory/gameMemory.js';
 
 /**
  * TRADE PROPOSAL EXECUTOR
@@ -81,6 +83,26 @@ export const TradeProposalExecutor = {
             await sleep(700);
 
             // STEP 3: Wait for 2-column trade configuration window
+            const tradeModal = document.querySelector('[role="dialog"], [class*="modal" i], [class*="trade" i]');
+            if (tradeModal) {
+                const modalRect = tradeModal.getBoundingClientRect();
+                const modalCenter = modalRect.left + modalRect.width / 2;
+                const modalCards = Array.from(tradeModal.querySelectorAll('button, div, li, span, p'));
+                for (const card of modalCards) {
+                    const txt = (card.innerText || '').trim().toLowerCase();
+                    if (!txt || txt.length > 35) continue;
+                    const r = card.getBoundingClientRect();
+                    const isRight = (r.left + r.width / 2) >= modalCenter;
+                    for (const t of BOARD_TILES) {
+                        if (t.group && (txt === t.name.toLowerCase() || txt.startsWith(t.name.toLowerCase()))) {
+                            if (GameMemory.ownership[t.id]) {
+                                GameMemory.ownership[t.id].owner = isRight ? swap.targetOwner : (GameMemory.myName || '__ME__');
+                            }
+                        }
+                    }
+                }
+            }
+
             const givenTiles = Array.isArray(swap.myGivenTiles) 
                 ? swap.myGivenTiles 
                 : (swap.myGivenTile ? [swap.myGivenTile] : []);
@@ -102,16 +124,26 @@ export const TradeProposalExecutor = {
                 ? swap.myReceivedTiles
                 : (swap.myReceivedTile ? [swap.myReceivedTile] : []);
 
+            let allRequestedFound = true;
             for (const tile of receivedTiles) {
                 const snap4 = createDOMSnapshot();
                 const theirPropCard = snap4.findTradePropertyCard(tile.name, 'theirs');
                 if (theirPropCard) {
                     theirPropCard.click();
                     logToBot(`[TRADE CREATOR] Selected request property: ${tile.name}`);
+                    if (GameMemory.ownership[tile.id]) GameMemory.ownership[tile.id].owner = swap.targetOwner;
                     await sleep(350);
                 } else {
-                    logToBot(`[TRADE CREATOR] Could not find request property: ${tile.name}`);
+                    logToBot(`[TRADE CREATOR] ${swap.targetOwner} does not hold ${tile.name}. Closing modal.`);
+                    allRequestedFound = false;
+                    break;
                 }
+            }
+
+            if (!allRequestedFound) {
+                this.closeTradeModal();
+                if (onComplete) onComplete(false);
+                return;
             }
 
             // STEP 4: Set cash if applicable (via range sliders)
@@ -234,15 +266,33 @@ export const TradeProposalExecutor = {
                 nativeSetter.call(input, String(clamped));
             }
 
+            input.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+            input.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
             input.dispatchEvent(new Event('input', { bubbles: true }));
             input.dispatchEvent(new Event('change', { bubbles: true }));
+            input.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+            input.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
         } catch (_) {}
     },
 
     closeTradeModal() {
-        const closeBtn = document.querySelector('[role="dialog"] button, [class*="modal" i] button, [class*="close" i], button[aria-label*="close" i]');
-        if (closeBtn) {
-            closeBtn.click();
-        }
+        try {
+            const modal = document.querySelector('[role="dialog"], [class*="modal" i], [class*="trade" i]');
+            if (!modal) return;
+            const elements = Array.from(modal.querySelectorAll('button, [role="button"], span, div, svg'));
+            const closeBtn = elements.find(b => {
+                const t = (b.innerText || '').trim().toLowerCase();
+                const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+                const title = (b.getAttribute('title') || '').toLowerCase();
+                const cls = (b.className?.baseVal || b.className || '').toString().toLowerCase();
+                return t === '✕' || t === 'x' || t === 'cancel' || t === 'close' || 
+                       aria.includes('close') || aria.includes('cancel') ||
+                       title.includes('close') || title.includes('cancel') ||
+                       cls.includes('close') || cls.includes('cancel');
+            });
+            if (closeBtn) {
+                closeBtn.click();
+            }
+        } catch (_) {}
     }
 };

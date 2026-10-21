@@ -182,8 +182,27 @@ export const OpponentTracker = {
                 }
             }
         }
-        // Prefer safe non-blockers, but fallback to any singleton if needed to secure a monopoly!
-        return safe.length > 0 ? safe : tradable;
+        // Strictly return only safe non-blockers to prevent leaking critical blockers in trades!
+        return safe;
+    },
+
+    /**
+     * All singletons owned (including blockers) - strictly for Mutual Monopoly Swaps where
+     * giving away a blocker is justified by immediately completing our own monopoly.
+     */
+    getAllTradableSingletons() {
+        const tradable = [];
+        for (const tile of BOARD_TILES) {
+            if (!tile.group) continue;
+            const info = GameMemory.ownership[tile.id];
+            if (info && GameMemory.isMe(info.owner) && info.houses === 0) {
+                const { owned, total } = GameMemory.getGroupCount(tile.group, '__ME__');
+                if (owned < total - 1) {
+                    tradable.push(tile);
+                }
+            }
+        }
+        return tradable;
     },
 
     isBlockerAgainstAnyOpponent(tile) {
