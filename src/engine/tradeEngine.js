@@ -2,7 +2,7 @@ import { GROUP_TILES, BOARD_TILES, GROUP_POWER } from '../data/boardTiles.js';
 import { GameMemory } from '../memory/gameMemory.js';
 import { OpponentTracker } from '../memory/opponentTracker.js';
 import { CONFIG } from '../config.js';
-import { logToBot } from '../dom/actionExecutor.js';
+import { logToBot } from '../protocol/actionExecutor.js';
 
 /**
  * GAME-THEORETIC MINIMAX TRADE ENGINE

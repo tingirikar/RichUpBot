@@ -8,6 +8,101 @@ import { logToBot } from './actionExecutor.js';
  * Intercepts unsafeWindow.WebSocket at document-start to decode
  * RichUp's native Socket.IO wire protocol (42/api/game,[...])
  */
+let onSocketMessageCallback = null;
+export function setSocketMessageCallback(fn) {
+    onSocketMessageCallback = fn;
+}
+
+/**
+ * Direct Zero-UI Action Dispatcher
+ * Sends actions straight to the backend game server over the live WebSocket.
+ */
+export function sendSocketAction(eventName, payload) {
+    const ws = GameMemory.activeSocket;
+    if (!ws || ws.readyState !== 1) { // 1 = WebSocket.OPEN
+        return false;
+    }
+
+    const prefix = GameMemory.socketPrefix || '42/api/game,';
+    const packet = payload !== undefined 
+        ? `${prefix}${JSON.stringify([eventName, payload])}`
+        : `${prefix}${JSON.stringify([eventName])}`;
+    logToBot(`[ZERO-UI WS] 🚀 Sent: ${eventName}${payload !== undefined ? ' ' + JSON.stringify(payload) : ''}`);
+    ws.send(packet);
+    return true;
+}
+
+/**
+ * Forces a full authoritative game state resync from the server.
+ * RichUp wire protocol secret: sending { snapshot: "" } triggers instant sync-game-state!
+ */
+export function requestFullStateResync() {
+    logToBot(`[PROTOCOL] 🔄 Requesting authoritative game state resync from server...`);
+    return sendSocketAction('request-sync', { snapshot: '' });
+}
+
+export function getPlayerIdByName(name) {
+    if (!name) return null;
+    const cleanTarget = String(name).replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[->\]\[→←\|👑:]/g, '').replace(/[^\w\s-]/g, '').trim().toLowerCase();
+    for (const [pName, pData] of Object.entries(GameMemory.players)) {
+        const cleanName = String(pName).replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[->\]\[→←\|👑:]/g, '').replace(/[^\w\s-]/g, '').trim().toLowerCase();
+        if (cleanName === cleanTarget && pData?.id !== undefined) {
+            return pData.id;
+        }
+    }
+    return null;
+}
+
+function hookSocketInstance(ws) {
+    if (!ws || ws.__richupSendHooked) return;
+    ws.__richupSendHooked = true;
+    GameMemory.activeSocket = ws;
+
+    const origSend = ws.send;
+    ws.send = function (data) {
+        try {
+            const raw = typeof data === 'string' ? data : '';
+            if (raw && raw !== '2' && raw !== '3') {
+                console.log('%c[OUTGOING WS FRAME]', 'color: #38bdf8; font-weight: bold;', raw);
+                if (!GameMemory.wsOutgoing) GameMemory.wsOutgoing = [];
+                if (GameMemory.wsOutgoing.length >= 50) GameMemory.wsOutgoing.shift();
+                GameMemory.wsOutgoing.push({
+                    ts: Date.now(),
+                    raw
+                });
+                logToBot(`[WS OUTGOING] 📤 ${raw.slice(0, 140)}`);
+                parseOutgoingSocketIOFrame(raw);
+            }
+        } catch (err) {
+            console.warn('[RichUpBot WS Hook] Error in ws.send hook:', err);
+        }
+        return origSend.apply(this, arguments);
+    };
+}
+
+function parseOutgoingSocketIOFrame(raw) {
+    if (!raw || typeof raw !== 'string') return;
+    const bracketIdx = raw.indexOf('[');
+    if (bracketIdx === -1) return;
+
+    // Sniff prefix (e.g. "42/api/game,")
+    const prefix = raw.slice(0, bracketIdx);
+    if (prefix) {
+        GameMemory.socketPrefix = prefix;
+    }
+
+    try {
+        const arr = JSON.parse(raw.slice(bracketIdx));
+        if (!Array.isArray(arr) || arr.length === 0) return;
+
+        const eventName = arr[0];
+        const payload = arr[1];
+
+        logToBot(`[WS ACTION DETECTED] Event: "${eventName}" Payload: ${JSON.stringify(payload)}`);
+        console.log('[RICHUP OUTGOING ACTION]', { eventName, payload, prefix });
+    } catch (_) {}
+}
+
 export function installWebSocketHook() {
     const targetWin = (typeof unsafeWindow !== 'undefined' && unsafeWindow) ? unsafeWindow : window;
     if (targetWin.__richupWsHooked) return;
@@ -19,8 +114,8 @@ export function installWebSocketHook() {
     targetWin.WebSocket = function (...args) {
         const ws = new NativeWS(...args);
 
-        // Store active WS instance
-        GameMemory.activeSocket = ws;
+        // Store active WS instance and hook send
+        hookSocketInstance(ws);
         console.log('[RichUpBot WS Hook] Native WebSocket intercepted:', args[0]);
 
         ws.addEventListener('message', (event) => {
@@ -40,6 +135,26 @@ export function installWebSocketHook() {
             }
         });
         return ws;
+    };
+
+    // Also hook NativeWS.prototype.send to catch sockets created before or outside wrapper
+    const origProtoSend = NativeWS.prototype.send;
+    NativeWS.prototype.send = function (data) {
+        try {
+            hookSocketInstance(this);
+            const raw = typeof data === 'string' ? data : '';
+            if (raw && raw !== '2' && raw !== '3') {
+                console.log('%c[OUTGOING WS PROTO FRAME]', 'color: #38bdf8; font-weight: bold;', raw);
+                if (!GameMemory.wsOutgoing) GameMemory.wsOutgoing = [];
+                if (GameMemory.wsOutgoing.length >= 50) GameMemory.wsOutgoing.shift();
+                GameMemory.wsOutgoing.push({
+                    ts: Date.now(),
+                    raw
+                });
+                parseOutgoingSocketIOFrame(raw);
+            }
+        } catch (_) {}
+        return origProtoSend.apply(this, arguments);
     };
 
     targetWin.WebSocket.prototype = NativeWS.prototype;
@@ -66,34 +181,45 @@ function parseSocketIOFrame(raw) {
         GameMemory.wsActive = true;
         GameMemory.wsLastMessageTime = Date.now();
 
-        // 1. Sniff Room Settings & Player Identity at Match Init
+        // 1. Sniff Room Settings & Player Identity at Match Init / Sync
         if (
             eventName.includes('game') ||
             eventName.includes('init') ||
             eventName.includes('state') ||
             eventName.includes('room')
         ) {
-            if (payload.settings) {
-                if (typeof payload.settings.can_collect_rent_in_jail === 'boolean') {
-                    GameMemory.roomSettings.collectRentInJail = payload.settings.can_collect_rent_in_jail;
+            const gs = payload.gameState || payload.room || payload;
+            const settings = gs.settings || payload.settings;
+
+            if (settings) {
+                if (typeof settings.can_collect_rent_in_jail === 'boolean') {
+                    GameMemory.roomSettings.collectRentInJail = settings.can_collect_rent_in_jail;
                 }
-                if (typeof payload.settings.double_on_start === 'boolean') {
-                    GameMemory.roomSettings.doubleOnStart = payload.settings.double_on_start;
+                if (typeof settings.double_on_start === 'boolean') {
+                    GameMemory.roomSettings.doubleOnStart = settings.double_on_start;
                 }
-                if (typeof payload.settings.pass_start_bonus === 'number') {
-                    GameMemory.roomSettings.passStartBonus = payload.settings.pass_start_bonus;
+                if (typeof settings.pass_start_bonus === 'number') {
+                    GameMemory.roomSettings.passStartBonus = settings.pass_start_bonus;
                 }
-                if (typeof payload.settings.starting_cash === 'number') {
-                    GameMemory.roomSettings.startingCash = payload.settings.starting_cash;
-                    if (!GameMemory.cashVerified) {
-                        GameMemory.myCash = payload.settings.starting_cash;
-                    }
+                if (typeof settings.startingCash === 'number') {
+                    GameMemory.roomSettings.startingCash = settings.startingCash;
+                } else if (typeof settings.starting_cash === 'number') {
+                    GameMemory.roomSettings.startingCash = settings.starting_cash;
+                }
+                if (GameMemory.roomSettings.startingCash && !GameMemory.cashVerified) {
+                    GameMemory.myCash = GameMemory.roomSettings.startingCash;
                 }
             }
 
             // Immediately promote WebSocket as primary source of truth for player balances and identity
-            const myId = payload.myId || payload.my_id || payload.userId || payload.user_id || payload.playerId;
-            const playersList = Array.isArray(payload.players) ? payload.players : (Array.isArray(payload.playerList) ? payload.playerList : null);
+            const myId = payload.selfParticipantId || payload.myId || payload.my_id || payload.userId || payload.user_id || payload.playerId;
+            if (myId) {
+                GameMemory.myId = myId;
+            }
+            const playersList = Array.isArray(gs.participants) ? gs.participants :
+                                (Array.isArray(payload.participants) ? payload.participants :
+                                (Array.isArray(gs.players) ? gs.players : 
+                                (Array.isArray(payload.playerList) ? payload.playerList : null)));
 
             if (playersList) {
                 const me = myId ? playersList.find(p => p.id === myId || p.userId === myId || p.isMe || p.is_me)
@@ -101,6 +227,11 @@ function parseSocketIOFrame(raw) {
                 if (me && (me.name || me.username)) {
                     GameMemory.setMyName(me.name || me.username);
                 }
+
+                // Exact jail suspension detection from RichUp boardConfig & corner block
+                const prisonIdx = gs.boardConfig?.prisonBlockIndex ?? 10;
+                const prisonBlock = Array.isArray(gs.blocks) ? gs.blocks[prisonIdx] : null;
+                const prisonSuspensions = (prisonBlock && typeof prisonBlock.suspendedTurnsRemaining === 'object') ? prisonBlock.suspendedTurnsRemaining : null;
 
                 const validNames = new Set();
                 for (const p of playersList) {
@@ -110,18 +241,23 @@ function parseSocketIOFrame(raw) {
                     const rawMoney = typeof p.money === 'number' ? p.money : 
                                      (typeof p.cash === 'number' ? p.cash : 
                                      (typeof p.balance === 'number' ? p.balance : null));
-                    const isThisPlayerMe = GameMemory.isMe(pName) || (myId && p.id === myId) || Boolean(p.isMe || p.is_me);
+                    const isThisPlayerMe = GameMemory.isMe(pName) || (myId && (p.id === myId || p.userId === myId)) || Boolean(p.isMe || p.is_me);
+                    const pId = p.id ?? p.userId ?? p.user_id ?? p.playerId;
 
                     const playerPos = typeof p.position === 'number' ? p.position : 
                                       (typeof p.pos === 'number' ? p.pos : (GameMemory.players[pName]?.pos || 0));
 
+                    const realJailTurns = prisonSuspensions && pId ? (prisonSuspensions[pId] || 0) : 0;
+                    const isReallyInJail = realJailTurns > 0 || (playerPos === prisonIdx && Boolean(p.inJail || p.jailTurns || p.in_jail));
+
                     if (rawMoney !== null) {
                         GameMemory.players[pName] = {
+                            id: pId,
                             cash: rawMoney,
                             pos: playerPos,
-                            inJail: Boolean(p.inJail || p.jailTurns || p.in_jail),
+                            inJail: isReallyInJail,
                             isMe: isThisPlayerMe,
-                            bankrupt: Boolean(p.bankrupt)
+                            bankrupt: Boolean(p.bankrupt || p.bankruptedAt)
                         };
 
                         if (isThisPlayerMe) {
@@ -129,9 +265,42 @@ function parseSocketIOFrame(raw) {
                             GameMemory.myCash = rawMoney;
                             GameMemory.cashVerified = true;
                             GameMemory.myPos = playerPos;
-                            if (typeof p.inJail === 'boolean') GameMemory.inJail = p.inJail;
+                            GameMemory.inJail = isReallyInJail;
+                            GameMemory.jailTurns = realJailTurns;
                         }
                     }
+                }
+
+                // Turn tracking via currentPlayerIndex
+                if (typeof gs.currentPlayerIndex === 'number' && playersList[gs.currentPlayerIndex]) {
+                    const curP = playersList[gs.currentPlayerIndex];
+                    GameMemory.isMyTurn = Boolean(GameMemory.isMe(curP.name || curP.username) || (myId && curP.id === myId));
+                }
+
+                // Authoritative roll & turn action state from gameState
+                if (typeof gs.cubesRolledInTurn === 'boolean') {
+                    if (GameMemory.isMyTurn) {
+                        GameMemory.hasRolled = gs.cubesRolledInTurn;
+                    }
+                }
+                if (typeof gs.canPerformTurnActions === 'boolean') {
+                    GameMemory.canPerformTurnActions = gs.canPerformTurnActions;
+                }
+                if (typeof gs.doublesInARow === 'number') {
+                    GameMemory.doublesInARow = gs.doublesInARow;
+                }
+
+                // Sync turnClock & anti-AFK timers from authoritative state
+                if (gs.turnClock) {
+                    GameMemory.updateTurnClock(gs.turnClock);
+                }
+
+                // Sync trades and auction from gameState if available
+                if (Array.isArray(gs.trades)) {
+                    GameMemory.trades = gs.trades;
+                }
+                if (gs.auction !== undefined) {
+                    GameMemory.activeAuction = gs.auction;
                 }
 
                 // Prune any disconnected or stale players not in current room playersList
@@ -153,14 +322,26 @@ function parseSocketIOFrame(raw) {
             }
         }
 
-        // 2. Dice Rolled: Strictly advance myPos ONLY if pName is explicitly verified as ME!
+        // 2. Dice Rolled: Advance positions and detect doubles ("Roll again")
         if (eventName.includes('roll') || eventName.includes('dice')) {
             const dice = Array.isArray(payload.dice) ? payload.dice : (Array.isArray(payload) ? payload : []);
             const sum = (dice[0] || 0) + (dice[1] || 0);
+            const isDoubles = dice.length >= 2 && dice[0] === dice[1] && dice[0] > 0;
             const pName = payload.playerName || payload.username || payload.name || payload.player;
 
-            // NEVER fall back to isMyTurn! Only advance if pName explicitly matches local player!
-            if (pName && GameMemory.isMe(pName) && sum > 0) {
+            // In RichUp, dice-rolled event does not always carry pName; it applies to whoever's turn it currently is!
+            const isMeRolling = (pName && GameMemory.isMe(pName)) || (!pName && GameMemory.isMyTurn);
+
+            if (isMeRolling && sum > 0) {
+                if (isDoubles) {
+                    GameMemory.hasRolled = false; // Reset flag to trigger "Roll again"!
+                    GameMemory.doublesInARow = (GameMemory.doublesInARow || 0) + 1;
+                    logToBot(`[DICE] 🎲 DOUBLES ROLLED ([${dice[0]},${dice[1]}])! "Roll again" granted (Doubles #${GameMemory.doublesInARow})`);
+                } else {
+                    GameMemory.hasRolled = true;
+                    GameMemory.doublesInARow = 0;
+                }
+
                 if (!GameMemory.inJail) {
                     GameMemory.myPos = (GameMemory.myPos + sum) % 40;
                     logToBot(`[DICE] 🎲 I rolled ${sum} ([${dice.join(',')}]) -> Moved to Tile #${GameMemory.myPos} (${BOARD_TILES[GameMemory.myPos]?.name || 'Unknown'})`);
@@ -248,10 +429,108 @@ function parseSocketIOFrame(raw) {
         }
 
         // 8. Turn Ended / Started
-        if (eventName.includes('turn')) {
+        if (eventName === 'turn-ended' || eventName.includes('turn-ended')) {
+            GameMemory.hasRolled = false;
+            GameMemory.isMyTurn = false;
+        } else if (eventName.includes('turn')) {
             const active = payload.activePlayer || payload.player || payload.username || payload.name;
             if (active) {
                 GameMemory.isMyTurn = GameMemory.isMe(active);
+                if (GameMemory.isMyTurn) {
+                    GameMemory.hasRolled = false;
+                }
+            }
+        }
+
+        // 9. Auction Lifecycle
+        if (eventName === 'auction-started' || eventName.includes('auction-started')) {
+            const blockIndex = typeof payload.blockIndex === 'number' ? payload.blockIndex : GameMemory.myPos;
+            GameMemory.activeAuction = {
+                blockIndex,
+                currentBid: typeof payload.amount === 'number' ? payload.amount : 0
+            };
+        }
+        if (eventName === 'auction-bade' || eventName.includes('auction-bade')) {
+            if (GameMemory.activeAuction && typeof payload.amount === 'number') {
+                GameMemory.activeAuction.currentBid = payload.amount;
+            }
+        }
+        if (eventName === 'auction-ended' || eventName.includes('auction-ended')) {
+            GameMemory.activeAuction = null;
+        }
+
+        // 10. Trade Lifecycle
+        if (eventName === 'trade-created' || eventName.includes('trade-created')) {
+            const tr = payload.trade || payload;
+            if (tr) {
+                if (!GameMemory.trades) GameMemory.trades = [];
+                if (!GameMemory.trades.some(t => t.id === tr.id)) {
+                    GameMemory.trades.push(tr);
+                }
+                // If we proposed this trade, track its ID so we can cancel it if it goes stale
+                if (tr.initiatorId === GameMemory.myId || (GameMemory.myName && tr.initiator?.name === GameMemory.myName)) {
+                    GameMemory.activeOutgoingTradeId = tr.id;
+                    GameMemory.activeOutgoingTradeTime = Date.now();
+                    logToBot(`[TRADE] 📤 Outgoing trade registered (ID: ${tr.id}).`);
+                }
+            }
+        }
+        if (eventName === 'trade-confirmed' || eventName === 'trade-declined' || eventName === 'trade-deleted') {
+            const trId = payload.tradeId || payload.id;
+            if (trId) {
+                if (GameMemory.trades) {
+                    GameMemory.trades = GameMemory.trades.filter(t => t.id !== trId);
+                }
+                if (GameMemory.activeOutgoingTradeId === trId) {
+                    GameMemory.activeOutgoingTradeId = null;
+                    GameMemory.activeOutgoingTradeTime = 0;
+                }
+            }
+        }
+
+        // 11. Turn-Clock Events (Anti-AFK & Time Extensions)
+        if (eventName === 'clock-time-requested' || eventName.includes('clock-time-requested')) {
+            const reqPid = payload.playerId || payload.participantId;
+            if (reqPid && reqPid !== GameMemory.myId) {
+                sendSocketAction('grant-clock-time');
+                logToBot('[TURN CLOCK] ⏱️ Opponent requested clock time -> Automatically granted +60s extension.');
+            }
+        }
+        if (eventName === 'clock-time-granted' || eventName.includes('clock-time-granted')) {
+            if (GameMemory.turnClock) {
+                GameMemory.turnClock.grantedMs = (GameMemory.turnClock.grantedMs || 0) + 60000;
+                GameMemory.turnClock.turnExpiresAt = (GameMemory.turnClock.turnExpiresAt || Date.now()) + 60000;
+            }
+            logToBot('[TURN CLOCK] ⏱️ Clock time granted (+60s)!');
+        }
+
+        // 12. Anti-Stall Auto-Votekick
+        if (eventName === 'new-votekick-request' || eventName.includes('votekick')) {
+            const targetId = payload.playerId || payload.votingPlayerId || payload.targetPlayerId;
+            if (targetId && targetId !== GameMemory.myId) {
+                sendSocketAction('votekick-player', { playerId: targetId });
+                logToBot(`[ANTI-STALL] 🗳️ Voted YES on votekick request to remove AFK staller.`);
+            }
+        }
+
+        // 13. Game Ended & Coin Reward Auto-Claim
+        if (eventName === 'game-ended' || eventName.includes('game-ended')) {
+            const winnerId = payload.winnerId;
+            const isMeWinner = Boolean(winnerId && (winnerId === GameMemory.myId || GameMemory.isMe(winnerId)));
+            if (isMeWinner) {
+                logToBot(`[VICTORY] 🏆 Match WON! Claiming free post-game coin rewards...`);
+                try {
+                    fetch('/api/game/claim-coin-reward', {
+                        method: 'POST',
+                        credentials: 'include',
+                        headers: { 'Content-Type': 'application/json' }
+                    })
+                    .then(r => r.json())
+                    .then(res => {
+                        logToBot(`[VICTORY] 💰 Coins claimed successfully: ${JSON.stringify(res)}`);
+                    })
+                    .catch(() => {});
+                } catch (_) {}
             }
         }
 
@@ -260,6 +539,13 @@ function parseSocketIOFrame(raw) {
 
         // Deep sync property board state (ownership, houses, mortgages) across all payloads
         deepSyncPropertiesFromPayload(payload);
+
+        // Trigger live protocol evaluation on any incoming game packet
+        if (onSocketMessageCallback) {
+            try {
+                onSocketMessageCallback(eventName, payload);
+            } catch (_) {}
+        }
     } catch (_) {
         // Ignore JSON parse errors on malformed payloads
     }
@@ -320,7 +606,11 @@ function deepSyncPropertiesFromPayload(payload) {
     for (const name of Object.keys(GameMemory.players)) {
         playerMap.set(name, name);
     }
-    const playersList = Array.isArray(payload.players) ? payload.players : (Array.isArray(payload.playerList) ? payload.playerList : null);
+    const gs = payload.gameState || payload.room || payload;
+    const playersList = Array.isArray(gs.participants) ? gs.participants :
+                        (Array.isArray(payload.participants) ? payload.participants :
+                        (Array.isArray(gs.players) ? gs.players : 
+                        (Array.isArray(payload.playerList) ? payload.playerList : null)));
     if (playersList) {
         for (const p of playersList) {
             const pName = p.name || p.username;

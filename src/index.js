@@ -1,14 +1,13 @@
 import { CONFIG } from './config.js';
 import { GameMemory } from './memory/gameMemory.js';
-import { installWebSocketHook } from './dom/socketHook.js';
-import { createDOMSnapshot } from './dom/elementFinder.js';
-import { syncBoardStateFromDOM } from './dom/boardScanner.js';
-import { ActionExecutor, getIsActing, logToBot } from './dom/actionExecutor.js';
+import { installWebSocketHook, setSocketMessageCallback } from './protocol/socketHook.js';
+import { ActionExecutor, getIsActing, logToBot } from './protocol/actionExecutor.js';
+import { TradeProposalExecutor } from './engine/tradeProposalExecutor.js';
 import { ChatEngine } from './ui/chatEngine.js';
 import { HUDPanel } from './ui/hudPanel.js';
 
 // =========================================================================
-// INSTANCE CLEANUP (Prevent duplicate observers/timers on hot reloads)
+// INSTANCE CLEANUP (Prevent duplicate timers on hot reloads)
 // =========================================================================
 if (window.__richupAuto && typeof window.__richupAuto.cleanup === 'function') {
     window.__richupAuto.cleanup();
@@ -16,14 +15,12 @@ if (window.__richupAuto && typeof window.__richupAuto.cleanup === 'function') {
 
 const state = window.__richupAuto = {
     status: false,
-    observer: null,
     timeouts: new Set(),
     intervals: new Set(),
     evaluateTimeout: null,
     keydownHandler: null,
     cleanup() {
         this.status = false;
-        if (this.observer) this.observer.disconnect();
         this.timeouts.forEach(id => clearTimeout(id));
         this.intervals.forEach(id => clearInterval(id));
         this.timeouts.clear();
@@ -52,122 +49,104 @@ function scheduleInterval(fn, delay) {
     return id;
 }
 
-function checkGameStarted(snapshot) {
-    // In lobby or color selection, game has not started yet
-    return !snapshot.findExactOrIncludes(['change color', 'join game', 'create game', 'ready up']);
-}
-
 let isEvaluating = false;
 
+/**
+ * Pure Protocol Event-Driven Evaluation
+ * Operates 100% on network state - Zero DOM queries
+ */
 async function evaluateAndAct() {
     try {
         if (!state.status || getIsActing() || isEvaluating) return;
         isEvaluating = true;
 
-        // Sync board state & telemetry with error boundaries
-        try {
-            syncBoardStateFromDOM();
-        } catch (err) {
-            logToBot(`[DOM Sync Warning] ${err}`);
-        }
-
+        // Keep HUD stats up to date
         try {
             HUDPanel.updateTelemetry();
+        } catch (_) {}
+
+        // Check for opponent chat messages (non-blocking background task)
+        try {
+            ChatEngine.scanAndRespondToOpponentChat().catch(() => {});
+        } catch (_) {}
+
+        // 0. Turn-Clock & Anti-AFK Safety Watchdog (Auto-grants/requests time & prevents timeouts)
+        try {
+            TradeProposalExecutor.cancelStaleProposal();
+            if (ActionExecutor.handleTurnClockWatchdog()) return;
         } catch (err) {
-            logToBot(`[Telemetry Warning] ${err}`);
+            logToBot(`[Clock Watchdog Warning] ${err}`);
         }
 
-        // Check for opponent chat messages and engage naturally
+        // 1. Check for incoming trade offer (minimax / Ollama)
         try {
-            await ChatEngine.scanAndRespondToOpponentChat();
+            if (await ActionExecutor.handleTrade()) return;
         } catch (err) {
-            logToBot(`[Chat Scan Warning] ${err}`);
+            logToBot(`[Trade Warning] ${err}`);
         }
 
-        let snapshot;
+        // 2. Check for Debt Recovery / Liquidation (negative cash must be cleared to proceed)
         try {
-            snapshot = createDOMSnapshot();
+            if (ActionExecutor.handleDebtRecovery()) return;
         } catch (err) {
-            logToBot(`[DOM Snapshot Error] ${err}`);
-            return;
+            logToBot(`[Debt Warning] ${err}`);
         }
 
-        // 0. Check for secondary confirmation modals (e.g. custom rule "Are you sure?" prompts)
+        // 3. Check for Jail decisions (bail / pardon / doubles)
         try {
-            if (ActionExecutor.handleConfirmationModal(snapshot)) return;
+            if (ActionExecutor.handleJail()) return;
         } catch (err) {
-            logToBot(`[Confirmation Modal Warning] ${err}`);
+            logToBot(`[Jail Warning] ${err}`);
         }
 
-        // 1. Check for incoming trade modal (Hybrid Ollama / Minimax)
+        // 4. Check for landing on unowned property (Buy vs Auction)
         try {
-            if (await ActionExecutor.handleTrade(snapshot)) return;
+            if (ActionExecutor.handleBuyOrAuction()) return;
         } catch (err) {
-            logToBot(`[Trade Step Warning] ${err}`);
+            logToBot(`[Buy/Auction Warning] ${err}`);
         }
 
-        // 2. Check for Debt Recovery / Mortgaging (Negative cash must be resolved to proceed)
+        // 5. Roll Dice if it's our turn to roll
         try {
-            if (ActionExecutor.handleDebtRecovery(snapshot)) return;
+            if (ActionExecutor.handleRollDice()) return;
         } catch (err) {
-            logToBot(`[Debt Step Warning] ${err}`);
-        }
-
-        // 3. Check for Jail decisions (room & phase aware)
-        try {
-            if (ActionExecutor.handleJail(snapshot)) return;
-        } catch (err) {
-            logToBot(`[Jail Step Warning] ${err}`);
-        }
-
-        // 4. Check for landing on unowned property (Buy vs Auction) - MUST precede rolling dice/roll again
-        try {
-            if (ActionExecutor.handleBuyOrAuction(snapshot)) return;
-        } catch (err) {
-            logToBot(`[Buy/Auction Step Warning] ${err}`);
-        }
-
-        // 5. Roll Dice if it's our turn to roll (or roll again on doubles)
-        try {
-            if (ActionExecutor.handleRollDice(snapshot)) return;
-        } catch (err) {
-            logToBot(`[Roll Step Warning] ${err}`);
+            logToBot(`[Roll Warning] ${err}`);
         }
 
         // 6. Check for ongoing Auction bidding
         try {
-            if (ActionExecutor.handleAuction(snapshot)) return;
+            if (ActionExecutor.handleAuction()) return;
         } catch (err) {
-            logToBot(`[Auction Bid Step Warning] ${err}`);
+            logToBot(`[Auction Warning] ${err}`);
         }
 
-        // 7. Check for House Building upgrades (on monopolies)
+        // 7. Check for House Building upgrades on completed monopolies
         try {
-            if (await ActionExecutor.handleHouseBuilding(snapshot)) return;
+            if (await ActionExecutor.handleHouseBuilding()) return;
         } catch (err) {
-            logToBot(`[Build Step Warning] ${err}`);
+            logToBot(`[Build Warning] ${err}`);
         }
 
-        // 8. Check for Autonomous Unmortgaging (when cash is surplus)
+        // 8. Check for Autonomous Unmortgaging (surplus cash)
         try {
-            if (ActionExecutor.handleUnmortgage(snapshot)) return;
+            if (ActionExecutor.handleUnmortgage()) return;
         } catch (err) {
-            logToBot(`[Unmortgage Step Warning] ${err}`);
+            logToBot(`[Unmortgage Warning] ${err}`);
         }
 
         // 9. Check for Proactive Mutual Monopoly Swaps
         try {
-            if (ActionExecutor.handleProactiveTrade(snapshot)) return;
+            if (ActionExecutor.handleProactiveTrade()) return;
         } catch (err) {
-            logToBot(`[Proactive Trade Step Warning] ${err}`);
+            logToBot(`[Trade Swap Warning] ${err}`);
         }
 
         // 10. Deliberate Strategic Review & Turn Completion (End Turn)
         try {
-            await ActionExecutor.deliberateBeforeEndTurn(snapshot);
+            await ActionExecutor.deliberateBeforeEndTurn();
         } catch (err) {
-            logToBot(`[End Turn Step Warning] ${err}`);
-            try { ActionExecutor.handleEndTurn(snapshot); } catch (_) {}
+            logToBot(`[End Turn Warning] ${err}`);
+            try { ActionExecutor.handleEndTurn(); } catch (_) {}
         }
 
     } catch (err) {
@@ -186,7 +165,7 @@ function scheduleEvaluate() {
     state.evaluateTimeout = scheduleTimeout(async () => {
         state.evaluateTimeout = null;
         await evaluateAndAct();
-    }, CONFIG.OBSERVER_DEBOUNCE_MS);
+    }, 60);
 }
 
 function toggleAutomation() {
@@ -194,57 +173,11 @@ function toggleAutomation() {
     HUDPanel.updateMasterButton(state.status);
 
     if (state.status) {
-        const snap = createDOMSnapshot();
-        if (!checkGameStarted(snap)) {
-            logToBot('Lobby detected. Bot will activate once match starts.');
-        } else {
-            logToBot('GRANDMASTER AI ENGAGED. AUTONOMOUS GAMEPLAY ACTIVE.');
-        }
+        logToBot('🚀 GRANDMASTER AI ENGAGED. PURE PROTOCOL ACTIVE.');
         evaluateAndAct();
     } else {
-        logToBot('Automation Paused (STANDBY).');
+        logToBot('⏸️ Automation Paused (STANDBY).');
     }
-}
-
-function startObserver() {
-    const target = document.body;
-    if (!target) return;
-
-    state.observer = new MutationObserver((mutations) => {
-        if (!state.status || getIsActing()) return;
-        for (let i = 0; i < mutations.length; i++) {
-            const m = mutations[i];
-            if (HUDPanel.elements.panel && HUDPanel.elements.panel.contains(m.target)) continue;
-            scheduleEvaluate();
-            return;
-        }
-    });
-
-    state.observer.observe(target, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-        characterData: true
-    });
-
-    // Heartbeat polling (runs both in standby for telemetry & active for gameplay)
-    scheduleInterval(() => {
-        if (state.status && !getIsActing()) {
-            evaluateAndAct();
-        } else {
-            // Keep HUD telemetry and identity in sync even in standby/lobby!
-            try {
-                syncBoardStateFromDOM();
-            } catch (err) {
-                logToBot(`[DOM Sync Warning] ${err}`);
-            }
-            try {
-                HUDPanel.updateTelemetry();
-            } catch (err) {
-                logToBot(`[Telemetry Warning] ${err}`);
-            }
-        }
-    }, CONFIG.POLL_INTERVAL_MS);
 }
 
 function initWhenReady() {
@@ -267,11 +200,28 @@ function initWhenReady() {
         }
     );
 
-    // Initial DOM sync right after injection
-    syncBoardStateFromDOM();
     HUDPanel.updateTelemetry();
 
-    startObserver();
+    // Event-driven reactive wakeup on any server WebSocket packet
+    setSocketMessageCallback((eventName) => {
+        if (state.status) {
+            scheduleEvaluate();
+        }
+        try {
+            HUDPanel.updateTelemetry();
+        } catch (_) {}
+    });
+
+    // 250ms Heartbeat polling (keeps turn clock & HUD stats live)
+    scheduleInterval(() => {
+        if (state.status && !getIsActing()) {
+            evaluateAndAct();
+        } else {
+            try {
+                HUDPanel.updateTelemetry();
+            } catch (_) {}
+        }
+    }, 250);
 
     // Hotkey '=' to toggle AI on/off
     state.keydownHandler = (e) => {

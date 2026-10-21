@@ -1,6 +1,6 @@
-# RICHUP.IO Intelligent Bot
+# RUBOT
 
-an intelligent bot, without autonomously plays richup.io games!
+an intelligent bot, which autonomously plays richup.io games!
 
 ## features
 

@@ -13,6 +13,7 @@ const banner = `// ==UserScript==
 // @grant        GM_xmlhttpRequest
 // @grant        GM.xmlHttpRequest
 // @grant        unsafeWindow
+// @inject-into  page
 // @connect      localhost
 // @connect      127.0.0.1
 // @run-at       document-start

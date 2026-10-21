@@ -1,7 +1,8 @@
 import { CONFIG } from '../config.js';
 import { GameMemory } from '../memory/gameMemory.js';
 import { OllamaClient } from '../engine/ollamaClient.js';
-import { logToBot } from '../dom/actionExecutor.js';
+import { logToBot } from '../protocol/actionExecutor.js';
+import { sendSocketAction } from '../protocol/socketHook.js';
 
 /**
  * CONTEXT-AWARE REACT CHAT ENGINE
@@ -120,12 +121,17 @@ export const ChatEngine = {
             return false;
         }
 
-        const input = document.querySelector('input[placeholder*="say" i], input[placeholder*="something" i], input[placeholder*="chat" i], input[placeholder*="message" i], textarea');
-        if (!input) return false;
-
         this.lastSentTime = now;
         this.lastSentText = message;
         logToBot(`[CHAT SEND] "${message}"`);
+
+        // Pure Protocol Zero-UI chat emission
+        if (sendSocketAction('chat:send-message', { content: message })) {
+            return true;
+        }
+
+        const input = document.querySelector('input[placeholder*="say" i], input[placeholder*="something" i], input[placeholder*="chat" i], input[placeholder*="message" i], textarea');
+        if (!input) return false;
 
         // Humanized typing delay
         setTimeout(() => {

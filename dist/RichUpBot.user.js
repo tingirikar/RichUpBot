@@ -9,6 +9,7 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM.xmlHttpRequest
 // @grant        unsafeWindow
+// @inject-into  page
 // @connect      localhost
 // @connect      127.0.0.1
 // @run-at       document-start
@@ -289,8 +290,41 @@
     jailTurns: 0,
     turnCount: 0,
     isMyTurn: false,
+    hasRolled: false,
+    doublesInARow: 0,
+    canPerformTurnActions: false,
     isNegativeDebt: false,
     currentRoomId: null,
+    // Turn Clock & Anti-AFK Protection State
+    turnClock: {
+      turnStartedAt: 0,
+      graceMs: 2e4,
+      bankMs: 6e4,
+      grantedMs: 0,
+      turnExpiresAt: 0,
+      clockRequestedThisTurn: false
+    },
+    activeOutgoingTradeId: null,
+    activeOutgoingTradeTime: 0,
+    updateTurnClock(clockData) {
+      if (!clockData) return;
+      const cfg = clockData.config || {};
+      const turn = clockData.turn || {};
+      if (cfg.graceMs) this.turnClock.graceMs = cfg.graceMs;
+      if (turn.turnStartedAt) {
+        if (this.turnClock.turnStartedAt !== turn.turnStartedAt) {
+          this.turnClock.turnStartedAt = turn.turnStartedAt;
+          this.turnClock.clockRequestedThisTurn = false;
+        }
+      }
+      this.turnClock.grantedMs = turn.grantedMs || 0;
+      const totalBudget = (this.turnClock.graceMs || 2e4) + (this.turnClock.grantedMs || 0) + (this.turnClock.bankMs || 6e4);
+      this.turnClock.turnExpiresAt = (this.turnClock.turnStartedAt || Date.now()) + totalBudget;
+    },
+    getTurnClockRemainingMs() {
+      if (!this.turnClock.turnExpiresAt) return 6e4;
+      return Math.max(0, this.turnClock.turnExpiresAt - Date.now());
+    },
     checkRoomTransition() {
       const match = typeof window !== "undefined" && window.location ? window.location.pathname.match(/\/room\/([a-zA-Z0-9_-]+)/i) : null;
       const newRoomId = match ? match[1] : null;
@@ -366,6 +400,9 @@
     wsActive: false,
     wsLastMessageTime: 0,
     wsMessages: [],
+    wsOutgoing: [],
+    socketPrefix: "42/api/game,",
+    activeSocket: null,
     lastPurchasedBlock: null,
     lastDangerEV: 0,
     lastDynamicReserve: CONFIG.BASE_MIN_RESERVE,
@@ -407,9 +444,11 @@
     },
     isMe(playerName) {
       if (!playerName) return false;
-      if (this.myName && playerName.toLowerCase() === this.myName.toLowerCase()) return true;
       if (playerName === "__ME__") return true;
-      return false;
+      if (!this.myName) return false;
+      const cleanA = playerName.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[->\]\[→←\|👑:]/g, "").replace(/[^\w\s-]/g, "").trim().toLowerCase();
+      const cleanB = this.myName.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[->\]\[→←\|👑:]/g, "").replace(/[^\w\s-]/g, "").trim().toLowerCase();
+      return cleanA === cleanB;
     },
     reset() {
       this.myCash = 1500;
@@ -419,9 +458,22 @@
       this.jailTurns = 0;
       this.turnCount = 0;
       this.isMyTurn = false;
+      this.hasRolled = false;
+      this.doublesInARow = 0;
+      this.canPerformTurnActions = false;
       this.players = {};
       this.ownership = {};
       this.declinedTrades = {};
+      this.activeOutgoingTradeId = null;
+      this.activeOutgoingTradeTime = 0;
+      this.turnClock = {
+        turnStartedAt: 0,
+        graceMs: 2e4,
+        bankMs: 6e4,
+        grantedMs: 0,
+        turnExpiresAt: 0,
+        clockRequestedThisTurn: false
+      };
       BOARD_TILES.forEach((t) => {
         if (t.group) {
           this.ownership[t.id] = { owner: null, houses: 0, mortgaged: false };
@@ -477,518 +529,6 @@
     }
   };
   GameMemory.reset();
-
-  // src/dom/elementFinder.js
-  function isVisibleAndEnabled(el) {
-    if (!el || el.disabled) return false;
-    const hud = document.getElementById("rubot-hud-panel");
-    if (hud && hud.contains(el)) return false;
-    if (el.getAttribute("aria-disabled") === "true") return false;
-    if (el.classList && (el.classList.contains("disabled") || el.classList.contains("btn-disabled"))) return false;
-    const style = window.getComputedStyle(el);
-    if (style.display === "none" || style.visibility === "hidden" || parseFloat(style.opacity) === 0 || style.pointerEvents === "none") {
-      return false;
-    }
-    const rect = el.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
-  }
-  function normalizeText(el) {
-    return String(el.textContent || el.getAttribute("aria-label") || "").replace(/\s+/g, " ").trim().toLowerCase();
-  }
-  function createDOMSnapshot() {
-    const hud = document.getElementById("rubot-hud-panel");
-    const rawElements = document.querySelectorAll('button, [role="button"], [class*="button" i], [class*="btn" i]');
-    const allButtons = [];
-    for (let i = 0; i < rawElements.length; i++) {
-      const btn = rawElements[i];
-      if (hud && hud.contains(btn)) continue;
-      if (!isVisibleAndEnabled(btn)) continue;
-      allButtons.push({
-        el: btn,
-        text: normalizeText(btn)
-      });
-    }
-    return {
-      allButtons,
-      findExactOrIncludes(patterns) {
-        for (const p of patterns) {
-          const lower = p.toLowerCase();
-          for (const b of allButtons) {
-            if (b.text === lower || b.text.includes(lower)) return b.el;
-          }
-        }
-        return null;
-      },
-      findBuyPropertyButton(targetTile = null) {
-        for (const b of allButtons) {
-          const txt = b.text;
-          if ((txt.includes("buy") || txt.includes("purchase")) && !txt.includes("don't") && !txt.includes("dont") && !txt.includes("house") && !txt.includes("hotel") && !txt.includes("back") && !txt.includes("cancel")) {
-            return b.el;
-          }
-        }
-        const searchContainers = [];
-        const openCard = this.getOpenPropertyCard ? this.getOpenPropertyCard() : null;
-        if (openCard && openCard.el) searchContainers.push(openCard.el);
-        const modals = document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="prompt" i], [class*="popup" i], [class*="action" i], [class*="drawer" i]');
-        for (let i = 0; i < modals.length; i++) {
-          if (!hud || !hud.contains(modals[i])) searchContainers.push(modals[i]);
-        }
-        for (const container of searchContainers) {
-          const modalBtns = container.querySelectorAll('button, [role="button"], [class*="btn" i], [class*="button" i], div[tabindex]');
-          for (let i = 0; i < modalBtns.length; i++) {
-            const btn = modalBtns[i];
-            if (!isVisibleAndEnabled(btn)) continue;
-            const txt = normalizeText(btn);
-            if (txt.length <= 40 && (txt.includes("buy") || txt.includes("purchase") || targetTile && (txt.includes(`$${targetTile.price}`) || txt === `${targetTile.price}`)) && !txt.includes("don't") && !txt.includes("dont") && !txt.includes("house") && !txt.includes("hotel") && !txt.includes("back") && !txt.includes("cancel")) {
-              return btn;
-            }
-          }
-        }
-        const allClickables = Array.from(document.querySelectorAll('button, [role="button"], [class*="btn" i], [class*="button" i], div[role="button"], div[tabindex], a, div')).filter((el) => (!hud || !hud.contains(el)) && el.childElementCount <= 2);
-        for (const el of allClickables) {
-          if (!isVisibleAndEnabled(el)) continue;
-          const txt = normalizeText(el);
-          if (txt.length <= 40 && (txt.includes("buy") || txt.includes("purchase")) && !txt.includes("don't") && !txt.includes("dont") && !txt.includes("house") && !txt.includes("hotel") && !txt.includes("back") && !txt.includes("cancel")) {
-            return el;
-          }
-        }
-        return null;
-      },
-      findAuctionBidButton(preferredIncrement = 10) {
-        if (preferredIncrement >= 50) {
-          for (const b of allButtons) {
-            if (b.text.includes("+50") || b.text.includes("+ 50") || b.text.includes("+$50") || b.text.includes("+ $50")) {
-              return b.el;
-            }
-          }
-        }
-        for (const b of allButtons) {
-          if (b.text.includes("+$") || b.text.includes("+ $") || b.text.includes("+10") || b.text.includes("bid") && !b.text.includes("history")) {
-            return b.el;
-          }
-        }
-        return null;
-      },
-      findAuctionPassButton() {
-        return this.findExactOrIncludes(["pass", "withdraw", "don't bid", "skip bid"]);
-      },
-      /**
-       * Finds "+ Create" button under Trades panel in the sidebar
-       */
-      findCreateTradeButton() {
-        for (const b of allButtons) {
-          if ((b.text === "+ create" || b.text === "create" || b.text.includes("create trade")) && !b.text.includes("game") && !b.text.includes("room")) {
-            return b.el;
-          }
-        }
-        const elements = document.querySelectorAll("div, span, button, a");
-        for (let i = 0; i < elements.length; i++) {
-          const el = elements[i];
-          if (hud && hud.contains(el)) continue;
-          if (!isVisibleAndEnabled(el)) continue;
-          const text = normalizeText(el);
-          if ((text === "+ create" || text === "create") && !text.includes("game") && !text.includes("room")) {
-            return el;
-          }
-        }
-        return null;
-      },
-      /**
-       * Finds player selection button inside "Create a trade" modal
-       */
-      findPlayerSelectButton(targetPlayerName) {
-        if (!targetPlayerName) return null;
-        const targetLower = targetPlayerName.toLowerCase();
-        for (const b of allButtons) {
-          if (b.text === targetLower || b.text.includes(targetLower)) {
-            return b.el;
-          }
-        }
-        const modal = document.querySelector('[role="dialog"], [class*="modal" i], [class*="trade" i]');
-        const searchRoot = modal || document.body;
-        const candidates = searchRoot.querySelectorAll('button, div, [role="button"], li, a, span');
-        for (let i = 0; i < candidates.length; i++) {
-          const el = candidates[i];
-          if (hud && hud.contains(el)) continue;
-          if (!isVisibleAndEnabled(el)) continue;
-          const text = normalizeText(el);
-          if (text === targetLower || text.includes(targetLower) && text.length < targetLower.length + 20) {
-            return el;
-          }
-        }
-        return null;
-      },
-      /**
-       * Finds the "Send trade" submission button
-       */
-      findSendTradeButton() {
-        for (const b of allButtons) {
-          if (b.text.includes("send trade") || b.text.includes("propose trade") || b.text === "send") {
-            return b.el;
-          }
-        }
-        const modal = document.querySelector('[role="dialog"], [class*="modal" i], [class*="trade" i]');
-        const searchRoot = modal || document.body;
-        const btns = searchRoot.querySelectorAll('button, [role="button"], div, span');
-        for (let i = 0; i < btns.length; i++) {
-          const el = btns[i];
-          if (hud && hud.contains(el)) continue;
-          if (!isVisibleAndEnabled(el)) continue;
-          const text = normalizeText(el);
-          if (text.includes("send trade") || text.includes("propose trade") || text === "send") {
-            return el;
-          }
-        }
-        return null;
-      },
-      /**
-       * Finds incoming trade rows under the "Trades" sidebar (e.g. "Round Guest ↔ Lokesh")
-       */
-      findSidebarIncomingTradeItem() {
-        const allItems = document.querySelectorAll('div, li, button, [class*="trade"], p, span');
-        const hud2 = document.getElementById("rubot-hud-panel");
-        for (let i = 0; i < allItems.length; i++) {
-          const el = allItems[i];
-          if (hud2 && hud2.contains(el)) continue;
-          if (!isVisibleAndEnabled(el)) continue;
-          const text = normalizeText(el);
-          if ((text.includes("\u2194") || text.includes("<->")) && text.length < 50) {
-            return el;
-          }
-        }
-        return null;
-      },
-      findTradeConfirmButton() {
-        return this.findExactOrIncludes(["confirm", "accept", "agree"]);
-      },
-      findTradeDeclineButton() {
-        return this.findExactOrIncludes(["decline", "reject", "refuse"]);
-      },
-      findTradeNegotiateButton() {
-        return this.findExactOrIncludes(["negotiate", "counter"]);
-      },
-      /**
-       * Detects secondary confirmation modal dialogs (e.g. "Are you sure you want to mortgage?", "Confirm action")
-       */
-      findConfirmationModalButton() {
-        const modals = document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="confirm" i], [class*="alert" i], [class*="dialog" i]');
-        for (let i = 0; i < modals.length; i++) {
-          const m = modals[i];
-          if (hud && hud.contains(m)) continue;
-          if (!isVisibleAndEnabled(m)) continue;
-          if (m.querySelector('input[type="range"], [class*="trade" i]') || (m.className || "").toString().toLowerCase().includes("trade")) {
-            continue;
-          }
-          const text = (m.innerText || "").toLowerCase();
-          if (text.includes("trade") || text.includes("propose") || text.includes("counter")) {
-            continue;
-          }
-          if (text.includes("are you sure") || text.includes("confirm action") || text.includes("confirm mortgage") || text.includes("confirm bankruptcy")) {
-            const btns = m.querySelectorAll('button, [role="button"], [class*="btn" i]');
-            for (let j = 0; j < btns.length; j++) {
-              const b = btns[j];
-              if (!isVisibleAndEnabled(b)) continue;
-              const bText = normalizeText(b);
-              if (bText === "yes" || bText === "confirm" || bText === "mortgage" || bText === "unmortgage" || bText === "ok" || bText === "proceed" || bText.includes("confirm")) {
-                return b;
-              }
-            }
-          }
-        }
-        return null;
-      },
-      /**
-       * Detects if a property card popover/modal is currently open and returns its DOM element & tile info
-       */
-      /**
-       * Detects if a property card popover/modal is currently open and returns its DOM element & tile info
-       */
-      getOpenPropertyCard() {
-        const containers = document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], [class*="popover" i], div');
-        for (let i = 0; i < containers.length; i++) {
-          const c = containers[i];
-          if (hud && hud.contains(c)) continue;
-          if (!isVisibleAndEnabled(c)) continue;
-          const rect = c.getBoundingClientRect();
-          if (rect.width < 160 || rect.height < 160) continue;
-          if (rect.left > window.innerWidth * 0.65 && rect.width < 320) continue;
-          const text = c.innerText || "";
-          const lower = text.toLowerCase();
-          if (lower.includes("i'm bidding") || lower.includes("current bid") || lower.includes("highest bid") || lower.includes("sold in") || lower.includes("trades") || lower.includes("select your player")) {
-            continue;
-          }
-          if (text.includes("Owner") || text.includes("Price") || text.includes("with rent") || text.includes("when")) {
-            for (const t of BOARD_TILES) {
-              if (t.group && new RegExp(`\\b${t.name}\\b`, "i").test(text)) {
-                const lowerText = text.toLowerCase();
-                if (lowerText.includes("mortgaged") || lowerText.includes("get back for")) {
-                  if (GameMemory.ownership[t.id]) {
-                    GameMemory.ownership[t.id].mortgaged = true;
-                  }
-                } else if (lowerText.includes("mortgage for")) {
-                  if (GameMemory.ownership[t.id]) {
-                    GameMemory.ownership[t.id].mortgaged = false;
-                  }
-                }
-                return { el: c, tile: t };
-              }
-            }
-          }
-        }
-        return null;
-      },
-      /**
-       * Helper to get the action buttons row inside the open property card:
-       * Button 0: Upgrade [↑]
-       * Button 1: Sell / Downgrade [↓]
-       * Button 2: Mortgage [🗑️]
-       */
-      getPropertyCardActionButtons() {
-        const card = this.getOpenPropertyCard();
-        if (!card) return [];
-        const allCardBtns = Array.from(card.el.querySelectorAll('button, [role="button"], [class*="button" i]')).filter((b) => {
-          if (hud && hud.contains(b)) return false;
-          if (!isVisibleAndEnabled(b)) return false;
-          const txt = (b.innerText || "").trim().toLowerCase();
-          if (txt.includes("end turn") || txt.includes("roll") || txt.includes("bankrupt") || txt === "x") return false;
-          return true;
-        });
-        return allCardBtns;
-      },
-      /**
-       * Finds the UP-ARROW [↑] button to build a house inside the property card popover
-       */
-      findModalUpgradeButton() {
-        const actionBtns = this.getPropertyCardActionButtons();
-        for (const btn of actionBtns) {
-          const inner = btn.innerHTML || "";
-          const text = normalizeText(btn);
-          if (inner.includes("\u2191") || inner.includes("\u2B61") || inner.includes("arrow-up") || text.includes("upgrade") || text.includes("build")) {
-            return btn;
-          }
-        }
-        if (actionBtns.length >= 2) {
-          return actionBtns[0];
-        }
-        for (const b of allButtons) {
-          const inner = b.el.innerHTML || "";
-          if (inner.includes("\u2191") || inner.includes("\u2B61") || b.text === "\u2191" || b.text.includes("upgrade") || b.text.includes("build")) {
-            return b.el;
-          }
-        }
-        return null;
-      },
-      /**
-       * Finds the DOWN-ARROW [↓] button to sell a house inside the property card popover
-       */
-      findModalSellHouseButton() {
-        const actionBtns = this.getPropertyCardActionButtons();
-        for (const btn of actionBtns) {
-          const inner = btn.innerHTML || "";
-          const text = normalizeText(btn);
-          if (inner.includes("\u2193") || inner.includes("\u2B63") || inner.includes("arrow-down") || text.includes("sell") || text.includes("downgrade")) {
-            return btn;
-          }
-        }
-        if (actionBtns.length >= 3) {
-          return actionBtns[1];
-        }
-        for (const b of allButtons) {
-          const inner = b.el.innerHTML || "";
-          if (inner.includes("\u2193") || inner.includes("\u2B63") || b.text === "\u2193" || b.text.includes("sell") || b.text.includes("downgrade")) {
-            return b.el;
-          }
-        }
-        return null;
-      },
-      /**
-       * Finds the Mortgage [🗑️] button inside the property card popover/modal
-       */
-      findModalMortgageButton() {
-        const card = this.getOpenPropertyCard();
-        if (!card) return null;
-        const cardText = (card.el.innerText || "").toLowerCase();
-        if (cardText.includes("mortgaged") || cardText.includes("get back for") || GameMemory.ownership[card.tile.id]?.mortgaged) {
-          return null;
-        }
-        const actionBtns = this.getPropertyCardActionButtons();
-        if (actionBtns.length === 1) {
-          return actionBtns[0];
-        }
-        for (const btn of actionBtns) {
-          const inner = (btn.innerHTML || "").toLowerCase();
-          const text = normalizeText(btn);
-          if (text.includes("mortgage") || inner.includes("mortgage") || inner.includes("trash") || inner.includes("bin") || inner.includes("m19 7")) {
-            if (!text.includes("unmortgage") && !inner.includes("unmortgage")) return btn;
-          }
-        }
-        if (actionBtns.length >= 3) {
-          return actionBtns[2];
-        }
-        const cardBtns = card.el.querySelectorAll('button, [role="button"], div[role="button"]');
-        for (let i = 0; i < cardBtns.length; i++) {
-          const btn = cardBtns[i];
-          if (!isVisibleAndEnabled(btn)) continue;
-          const text = normalizeText(btn);
-          if (text.includes("mortgage") && !text.includes("unmortgage")) {
-            return btn;
-          }
-        }
-        for (const b of allButtons) {
-          const text = b.text || "";
-          const inner = (b.el.innerHTML || "").toLowerCase();
-          if ((text.includes("mortgage") || inner.includes("mortgage")) && !text.includes("unmortgage") && !inner.includes("unmortgage")) {
-            return b.el;
-          }
-        }
-        return null;
-      },
-      /**
-       * Finds the Unmortgage button inside the property card popover/modal
-       */
-      findModalUnmortgageButton() {
-        const card = this.getOpenPropertyCard();
-        if (!card) return null;
-        const cardBtns = Array.from(card.el.querySelectorAll('button, [role="button"], [class*="button" i]')).filter((b) => {
-          if (hud && hud.contains(b)) return false;
-          if (!isVisibleAndEnabled(b)) return false;
-          return true;
-        });
-        for (const btn of cardBtns) {
-          const text = normalizeText(btn);
-          const inner = (btn.innerHTML || "").toLowerCase();
-          if (text.includes("unmortgage") || inner.includes("unmortgage") || text.includes("un-mortgage") || text.includes("get back for") || inner.includes("get back for") || /get back for|\$?\d+.*get back/i.test(text)) {
-            return btn;
-          }
-        }
-        const cardText = (card.el.innerText || "").toLowerCase();
-        if (cardText.includes("mortgaged") || cardText.includes("get back for") || GameMemory.ownership[card.tile.id]?.mortgaged) {
-          for (const btn of cardBtns) {
-            const txt = (btn.innerText || "").toLowerCase();
-            if (txt.includes("$") && (txt.includes("get back") || !txt.includes("mortgage for"))) {
-              return btn;
-            }
-          }
-          const actionBtns = this.getPropertyCardActionButtons();
-          if (actionBtns.length > 0) return actionBtns[0];
-        }
-        return null;
-      },
-      /**
-       * Finds the close button ([X]) inside the open property card popover/modal
-       */
-      findModalCloseButton() {
-        const card = this.getOpenPropertyCard();
-        if (!card) return null;
-        const allClose = card.el.querySelectorAll('button, [role="button"], span, div');
-        for (let i = 0; i < allClose.length; i++) {
-          const el = allClose[i];
-          if (hud && hud.contains(el)) continue;
-          if (!isVisibleAndEnabled(el)) continue;
-          const txt = normalizeText(el);
-          const aria = (el.getAttribute("aria-label") || "").toLowerCase();
-          const inner = (el.innerHTML || "").toLowerCase();
-          if (txt === "x" || txt === "\u2715" || txt === "\u2716" || txt === "close" || aria.includes("close") || inner.includes("close") || el.tagName === "BUTTON" && el.querySelector("svg") && el.getBoundingClientRect().width < 38) {
-            return el;
-          }
-        }
-        return null;
-      },
-      /**
-       * Finds a property item specifically in the right-side "My properties" sidebar
-       */
-      findSidebarPropertyItem(propertyName) {
-        if (!propertyName) return null;
-        const lowerTarget = propertyName.toLowerCase().trim();
-        const allItems = document.querySelectorAll('div, li, button, [class*="property" i], [class*="item" i], p, span');
-        for (let i = 0; i < allItems.length; i++) {
-          const el = allItems[i];
-          if (hud && hud.contains(el)) continue;
-          if (!isVisibleAndEnabled(el)) continue;
-          const rect = el.getBoundingClientRect();
-          if (rect.left < window.innerWidth * 0.5) continue;
-          if (rect.height < 18 || rect.height > 95 || rect.width < 70) continue;
-          const rawText = normalizeText(el);
-          if (rawText.includes("my properties") || rawText.includes("trades") || rawText.includes("bankrupt")) continue;
-          const cleanText = rawText.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, " ").replace(/\s+/g, " ").trim();
-          if (cleanText === lowerTarget || cleanText.startsWith(lowerTarget) || rawText.includes(lowerTarget) || cleanText.includes(lowerTarget) && cleanText.length < lowerTarget.length + 18) {
-            const clickable = el.closest('button, [role="button"], li, div[class*="item" i], div[class*="property" i]') || el;
-            return clickable;
-          }
-        }
-        return null;
-      },
-      /**
-       * Finds a property element inside the trade modal, with column-awareness:
-       * column: 'mine' / 'left' (left side) vs 'theirs' / 'right' (right side)
-       */
-      findTradePropertyCard(propertyName, column = null) {
-        if (!propertyName) return null;
-        const lowerName = propertyName.toLowerCase();
-        const modal = document.querySelector('[role="dialog"], [class*="modal" i], [class*="trade" i]');
-        const searchRoot = modal || document.body;
-        const modalRect = searchRoot.getBoundingClientRect();
-        const modalCenter = modalRect.left + modalRect.width / 2;
-        const candidates = searchRoot.querySelectorAll('button, [role="button"], div, li, span, p');
-        for (let i = 0; i < candidates.length; i++) {
-          const el = candidates[i];
-          if (!isVisibleAndEnabled(el)) continue;
-          if (column && modal) {
-            const rect = el.getBoundingClientRect();
-            const elCenter = rect.left + rect.width / 2;
-            if ((column === "mine" || column === "left") && elCenter > modalCenter) continue;
-            if ((column === "theirs" || column === "right") && elCenter < modalCenter) continue;
-          }
-          const rawText = normalizeText(el);
-          const cleanText = rawText.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, " ").replace(/\s+/g, " ").trim();
-          if (cleanText === lowerName || cleanText.startsWith(lowerName) || cleanText.endsWith(lowerName) || rawText.includes(lowerName) || cleanText.includes(lowerName) && cleanText.length < lowerName.length + 35) {
-            const clickable = el.closest('button, [role="button"], li, div[class*="card" i], div[class*="property" i]') || el;
-            return clickable;
-          }
-        }
-        return null;
-      },
-      /**
-       * Detects the red/orange [Bankrupt] button that appears when the player is in debt
-       */
-      findBankruptButton() {
-        for (const b of allButtons) {
-          const txt = (b.text || "").toLowerCase();
-          if (txt === "bankrupt" || txt.includes("bankrupt")) {
-            return b.el;
-          }
-        }
-        const candidates = document.querySelectorAll('button, [role="button"], a, div');
-        for (let i = 0; i < candidates.length; i++) {
-          const el = candidates[i];
-          if (hud && hud.contains(el)) continue;
-          if (!isVisibleAndEnabled(el)) continue;
-          const txt = normalizeText(el);
-          if (txt === "bankrupt" || txt.includes("bankrupt") && txt.length <= 20) {
-            return el;
-          }
-        }
-        return null;
-      },
-      /**
-       * Finds a board tile element on the screen so the bot can click it
-       */
-      findBoardTileElement(tileName) {
-        if (!tileName) return null;
-        const lowerName = tileName.toLowerCase();
-        const allElements = document.querySelectorAll('[class*="block"], [class*="tile"], [class*="property"], div');
-        for (let i = 0; i < allElements.length; i++) {
-          const el = allElements[i];
-          if (!isVisibleAndEnabled(el)) continue;
-          const text = normalizeText(el);
-          if (text === lowerName || el.getAttribute("title")?.toLowerCase() === lowerName) {
-            return el;
-          }
-        }
-        return null;
-      }
-    };
-  }
 
   // src/data/diceProb.js
   var DICE_PROB = Object.freeze({
@@ -2669,11 +2209,14 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       if (this.lastSentText && message.toLowerCase() === this.lastSentText.toLowerCase() && now - this.lastSentTime < 25e3) {
         return false;
       }
-      const input = document.querySelector('input[placeholder*="say" i], input[placeholder*="something" i], input[placeholder*="chat" i], input[placeholder*="message" i], textarea');
-      if (!input) return false;
       this.lastSentTime = now;
       this.lastSentText = message;
       logToBot(`[CHAT SEND] "${message}"`);
+      if (sendSocketAction("chat:send-message", { content: message })) {
+        return true;
+      }
+      const input = document.querySelector('input[placeholder*="say" i], input[placeholder*="something" i], input[placeholder*="chat" i], input[placeholder*="message" i], textarea');
+      if (!input) return false;
       setTimeout(() => {
         try {
           input.focus();
@@ -2723,322 +2266,71 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     recordSkipped(summary) {
       this.skippedSwaps.set(summary, Date.now());
     },
+    cancelPendingTrade() {
+      const trId = GameMemory.activeOutgoingTradeId;
+      if (trId) {
+        logToBot(`[TRADE] \u{1F5D1}\uFE0F Cancelling open outgoing trade offer (ID: ${trId}) to release assets.`);
+        sendSocketAction("delete-trade", { tradeId: trId });
+        GameMemory.activeOutgoingTradeId = null;
+        GameMemory.activeOutgoingTradeTime = 0;
+        return true;
+      }
+      return false;
+    },
+    cancelStaleProposal() {
+      if (GameMemory.activeOutgoingTradeId) {
+        const age = Date.now() - (GameMemory.activeOutgoingTradeTime || 0);
+        if (age > 35e3) {
+          return this.cancelPendingTrade();
+        }
+      }
+      return false;
+    },
     async executeProposal(swap, onComplete) {
       if (this.isExecuting) return;
       this.isExecuting = true;
-      logToBot(`[TRADE CREATOR] Starting automated proposal for ${swap.targetOwner}...`);
-      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-      const safetyTimer = setTimeout(() => {
-        if (this.isExecuting) {
-          logToBot("[TRADE CREATOR] Safety timeout triggered. Closing modal and resetting lock.");
-          this.closeTradeModal();
-          this.isExecuting = false;
-          if (onComplete) onComplete(false);
-        }
-      }, 12e3);
-      try {
-        const snap1 = createDOMSnapshot();
-        const createBtn = snap1.findCreateTradeButton();
-        if (!createBtn) {
-          logToBot("[TRADE CREATOR] Could not find [+ Create] trade button.");
-          return;
-        }
-        createBtn.click();
-        await sleep(600);
-        let playerBtn = null;
-        for (let i = 0; i < 6; i++) {
-          const snap2 = createDOMSnapshot();
-          playerBtn = snap2.findPlayerSelectButton(swap.targetOwner);
-          if (playerBtn) break;
-          await sleep(350);
-        }
-        if (!playerBtn) {
-          logToBot(`[TRADE CREATOR] Could not find player button for "${swap.targetOwner}".`);
-          this.closeTradeModal();
-          return;
-        }
-        playerBtn.click();
-        await sleep(700);
-        const tradeModal = document.querySelector('[role="dialog"], [class*="modal" i], [class*="trade" i]');
-        if (tradeModal) {
-          const modalRect = tradeModal.getBoundingClientRect();
-          const modalCenter = modalRect.left + modalRect.width / 2;
-          const modalCards = Array.from(tradeModal.querySelectorAll("button, div, li, span, p"));
-          for (const card of modalCards) {
-            const txt = (card.innerText || "").trim().toLowerCase();
-            if (!txt || txt.length > 35) continue;
-            const r = card.getBoundingClientRect();
-            const isRight = r.left + r.width / 2 >= modalCenter;
-            for (const t of BOARD_TILES) {
-              if (t.group && (txt === t.name.toLowerCase() || txt.startsWith(t.name.toLowerCase()))) {
-                if (GameMemory.ownership[t.id]) {
-                  GameMemory.ownership[t.id].owner = isRight ? swap.targetOwner : GameMemory.myName || "__ME__";
-                }
-              }
-            }
-          }
-        }
-        const givenTiles = Array.isArray(swap.myGivenTiles) ? swap.myGivenTiles : swap.myGivenTile ? [swap.myGivenTile] : [];
-        for (const tile of givenTiles) {
-          const snap3 = createDOMSnapshot();
-          const myPropCard = snap3.findTradePropertyCard(tile.name, "mine");
-          if (myPropCard) {
-            myPropCard.click();
-            logToBot(`[TRADE CREATOR] Selected offer property: ${tile.name}`);
-            await sleep(350);
-          } else {
-            logToBot(`[TRADE CREATOR] Could not find offer property: ${tile.name}`);
-          }
-        }
-        const receivedTiles = Array.isArray(swap.myReceivedTiles) ? swap.myReceivedTiles : swap.myReceivedTile ? [swap.myReceivedTile] : [];
-        let allRequestedFound = true;
-        for (const tile of receivedTiles) {
-          const snap4 = createDOMSnapshot();
-          const theirPropCard = snap4.findTradePropertyCard(tile.name, "theirs");
-          if (theirPropCard) {
-            theirPropCard.click();
-            logToBot(`[TRADE CREATOR] Selected request property: ${tile.name}`);
-            if (GameMemory.ownership[tile.id]) GameMemory.ownership[tile.id].owner = swap.targetOwner;
-            await sleep(350);
-          } else {
-            logToBot(`[TRADE CREATOR] ${swap.targetOwner} does not hold ${tile.name}. Closing modal.`);
-            allRequestedFound = false;
-            break;
-          }
-        }
-        if (!allRequestedFound) {
-          this.closeTradeModal();
-          if (onComplete) onComplete(false);
-          return;
-        }
-        this.adjustCashInTradeModal(swap);
-        await sleep(400);
-        const snap5 = createDOMSnapshot();
-        const sendBtn = snap5.findSendTradeButton();
-        if (sendBtn) {
-          sendBtn.click();
-          logToBot(`[TRADE CREATOR] Trade proposal sent to ${swap.targetOwner}!`);
+      logToBot(`[ZERO-UI TRADE] Starting automated proposal for ${swap.targetOwner}...`);
+      const targetId = getPlayerIdByName(swap.targetOwner);
+      const givenTiles = Array.isArray(swap.myGivenTiles) ? swap.myGivenTiles : swap.myGivenTile ? [swap.myGivenTile] : [];
+      const receivedTiles = Array.isArray(swap.myReceivedTiles) ? swap.myReceivedTiles : swap.myReceivedTile ? [swap.myReceivedTile] : [];
+      const cashOffer = swap.cashOffer || 0;
+      const cashDemand = swap.cashDemand || 0;
+      if (targetId !== null && targetId !== void 0 && GameMemory.activeSocket?.readyState === 1) {
+        const payload = {
+          recipientId: targetId,
+          initiatorOffer: {
+            money: cashOffer,
+            properties: givenTiles.map((t) => t.id)
+          },
+          recipientOffer: {
+            money: cashDemand,
+            properties: receivedTiles.map((t) => t.id)
+          },
+          note: swap.pitch || ""
+        };
+        const success = sendSocketAction("create-trade", { trade: payload });
+        if (success) {
+          logToBot(`[ZERO-UI TRADE] \u{1F91D} Propose trade emitted via WebSocket to ${swap.targetOwner}!`);
           this.lastProposedTimes.set(swap.targetOwner, Date.now());
           this.lastSentProposal = {
             targetOwner: swap.targetOwner,
             givenTiles,
             receivedTiles,
-            cashOffer: swap.cashOffer || 0,
-            cashDemand: swap.cashDemand || 0,
+            cashOffer,
+            cashDemand,
             timestamp: Date.now()
           };
           if (CONFIG.CHAT_ENABLED && swap.pitch) {
-            await sleep(400);
-            ChatEngine.sendChatMessage("tradeOffer", swap.pitch);
+            setTimeout(() => ChatEngine.sendChatMessage("tradeOffer", swap.pitch), 400);
           }
+          this.isExecuting = false;
           if (onComplete) onComplete(true);
-        } else {
-          logToBot("[TRADE CREATOR] Could not find [Send trade] button.");
-          this.closeTradeModal();
-          if (onComplete) onComplete(false);
-        }
-      } catch (err) {
-        logToBot(`[TRADE CREATOR Error] ${err}`);
-        this.closeTradeModal();
-        if (onComplete) onComplete(false);
-      } finally {
-        clearTimeout(safetyTimer);
-        this.isExecuting = false;
-      }
-    },
-    adjustCashInTradeModal(swap) {
-      try {
-        const modal = document.querySelector('[role="dialog"], [class*="modal" i], [class*="trade" i]');
-        if (!modal) return;
-        const modalRect = modal.getBoundingClientRect();
-        const modalCenter = modalRect.left + modalRect.width / 2;
-        const inputs = Array.from(modal.querySelectorAll('input[type="range"], input[type="number"], input'));
-        let ourSlider = null;
-        let theirSlider = null;
-        for (const input of inputs) {
-          const rect = input.getBoundingClientRect();
-          const center = rect.left + rect.width / 2;
-          if (center < modalCenter && !ourSlider) ourSlider = input;
-          else if (center >= modalCenter && !theirSlider) theirSlider = input;
-        }
-        if (swap.cashOffer > 0 && ourSlider) {
-          this.setReactInputValue(ourSlider, swap.cashOffer);
-        }
-        if (swap.cashDemand > 0 && theirSlider) {
-          this.setReactInputValue(theirSlider, swap.cashDemand);
-        }
-        if (!ourSlider && !theirSlider) {
-          const buttons = Array.from(modal.querySelectorAll('button, [role="button"], span, div')).filter((el) => {
-            const t = (el.innerText || "").trim();
-            return t === "+" || t === "+10" || t === "+$10" || t.includes("+") || t.includes("add");
-          });
-          for (const btn of buttons) {
-            const rect = btn.getBoundingClientRect();
-            const center = rect.left + rect.width / 2;
-            if (swap.cashOffer > 0 && center < modalCenter) {
-              const clicks = Math.min(10, Math.max(1, Math.round(swap.cashOffer / 20)));
-              for (let c = 0; c < clicks; c++) {
-                try {
-                  btn.click();
-                } catch (_) {
-                }
-              }
-            } else if (swap.cashDemand > 0 && center >= modalCenter) {
-              const clicks = Math.min(10, Math.max(1, Math.round(swap.cashDemand / 20)));
-              for (let c = 0; c < clicks; c++) {
-                try {
-                  btn.click();
-                } catch (_) {
-                }
-              }
-            }
-          }
-        }
-      } catch (err) {
-        logToBot(`Cash adjust note: ${err}`);
-      }
-    },
-    setReactInputValue(input, val) {
-      try {
-        const maxVal = input.max ? Number(input.max) : 99999;
-        const minVal = input.min ? Number(input.min) : 0;
-        const clamped = Math.max(minVal, Math.min(Number(val), maxVal));
-        input.focus();
-        const prev = input.value;
-        input.value = String(clamped);
-        if (input._valueTracker) {
-          input._valueTracker.setValue(prev);
-        }
-        const nativeSetter = Object.getOwnPropertyDescriptor(
-          window.HTMLInputElement.prototype,
-          "value"
-        )?.set || typeof unsafeWindow !== "undefined" && Object.getOwnPropertyDescriptor(
-          unsafeWindow.HTMLInputElement.prototype,
-          "value"
-        )?.set;
-        if (nativeSetter) {
-          nativeSetter.call(input, String(clamped));
-        }
-        input.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
-        input.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-        input.dispatchEvent(new Event("change", { bubbles: true }));
-        input.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-        input.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
-      } catch (_) {
-      }
-    },
-    closeTradeModal() {
-      try {
-        const modal = document.querySelector('[role="dialog"], [class*="modal" i], [class*="trade" i]');
-        if (!modal) return;
-        const elements = Array.from(modal.querySelectorAll('button, [role="button"], span, div, svg'));
-        const closeBtn = elements.find((b) => {
-          const t = (b.innerText || "").trim().toLowerCase();
-          const aria = (b.getAttribute("aria-label") || "").toLowerCase();
-          const title = (b.getAttribute("title") || "").toLowerCase();
-          const cls = (b.className?.baseVal || b.className || "").toString().toLowerCase();
-          return t === "\u2715" || t === "x" || t === "cancel" || t === "close" || aria.includes("close") || aria.includes("cancel") || title.includes("close") || title.includes("cancel") || cls.includes("close") || cls.includes("cancel");
-        });
-        if (closeBtn) {
-          closeBtn.click();
-        }
-      } catch (_) {
-      }
-    }
-  };
-
-  // src/engine/houseBuilder.js
-  var HouseBuilder = {
-    /**
-     * Checks if we are currently standing within 2 to 12 tiles of any opponent
-     * property that has 3+ houses or a hotel.
-     */
-    isPlayerInEnemyHotelZone() {
-      const myPos = GameMemory.myPos || 0;
-      for (let roll = 2; roll <= 12; roll++) {
-        const targetTileId = (myPos + roll) % 40;
-        const tile = BOARD_TILES[targetTileId];
-        if (!tile || !tile.group) continue;
-        const info = GameMemory.ownership[targetTileId];
-        if (info && !GameMemory.isMe(info.owner) && info.houses >= 3 && !info.mortgaged) {
-          const rent = tile.rent[info.houses] || 0;
-          if (rent > 250) {
-            return { inDanger: true, tile, rent, distance: roll };
-          }
+          return;
         }
       }
-      return { inDanger: false };
-    },
-    /**
-     * Checks if any active opponent is currently 2 to 12 tiles away
-     * from any tile in the given color group.
-     */
-    areOpponentsInStrikeZone(groupTiles) {
-      const tileIds = new Set(groupTiles.map((t) => t.id));
-      for (const [pName, pData] of Object.entries(GameMemory.players)) {
-        if (GameMemory.isMe(pName) || pData.bankrupt || pData.inJail) continue;
-        const oppPos = pData.pos || 0;
-        for (const tileId of tileIds) {
-          const dist = (tileId - oppPos + 40) % 40;
-          if (dist >= 2 && dist <= 12) {
-            return { oppApproaching: true, opponentName: pName, distance: dist };
-          }
-        }
-      }
-      return { oppApproaching: false };
-    },
-    rankHouseUpgrades(myCash) {
-      const reserve = MarkovRisk.computeDynamicReserve(GameMemory.myPos);
-      const candidates = [];
-      if (myCash <= reserve) return candidates;
-      if (CONFIG.AMBUSH_BUILD_ONLY) {
-        const dangerCheck = this.isPlayerInEnemyHotelZone();
-        if (dangerCheck.inDanger) {
-          return candidates;
-        }
-      }
-      for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
-        if (tiles[0].type !== "property") continue;
-        const { owned, total } = GameMemory.getGroupCount(groupName, "__ME__");
-        if (owned !== total) continue;
-        const anyMortgaged = tiles.some((t) => GameMemory.ownership[t.id]?.mortgaged);
-        if (anyMortgaged) continue;
-        const houseCounts = tiles.map((t) => GameMemory.ownership[t.id]?.houses || 0);
-        const minHouses = Math.min(...houseCounts);
-        const strikeCheck = this.areOpponentsInStrikeZone(tiles);
-        const isAmbushWindow = strikeCheck.oppApproaching;
-        const isRushingTo3Houses = minHouses < 3;
-        const hasSufficientSurplus = isRushingTo3Houses ? myCash >= reserve + tiles[0].houseCost * 1.2 : myCash >= reserve + 300;
-        if (CONFIG.AMBUSH_BUILD_ONLY && !isAmbushWindow && !hasSufficientSurplus) {
-          continue;
-        }
-        for (const tile of tiles) {
-          const info = GameMemory.ownership[tile.id];
-          if (!info || info.houses >= 5) continue;
-          if (info.houses > minHouses) continue;
-          const cost = tile.houseCost;
-          if (myCash - cost < reserve) continue;
-          const currentRent = tile.rent[info.houses];
-          const nextRent = tile.rent[info.houses + 1] || currentRent;
-          const rentDelta = nextRent - currentRent;
-          const sweetSpotBoost = info.houses === 2 ? 2.6 : info.houses === 1 ? 1.5 : 1;
-          const ambushBoost = isAmbushWindow ? 1.8 : 1;
-          const roi = (rentDelta / cost * tile.markov * sweetSpotBoost * ambushBoost).toFixed(4);
-          candidates.push({
-            tile,
-            currentHouses: info.houses,
-            nextHouses: info.houses + 1,
-            cost,
-            rentDelta,
-            roi: parseFloat(roi),
-            isAmbush: isAmbushWindow,
-            targetOpp: strikeCheck.opponentName || null
-          });
-        }
-      }
-      candidates.sort((a, b) => b.roi - a.roi);
-      return candidates;
+      logToBot(`[ZERO-UI TRADE] Could not emit trade: targetId=${targetId}, wsReady=${GameMemory.activeSocket?.readyState === 1}`);
+      this.isExecuting = false;
+      if (onComplete) onComplete(false);
     }
   };
 
@@ -3131,1437 +2423,6 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     }
   };
 
-  // src/dom/boardScanner.js
-  function parseColor(str) {
-    if (!str || typeof str !== "string") return null;
-    str = str.trim().toLowerCase();
-    if (str === "transparent" || str === "inherit" || str === "none") return null;
-    const rgbMatch = /^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/i.exec(str);
-    if (rgbMatch) {
-      const a = rgbMatch[4] !== void 0 ? parseFloat(rgbMatch[4]) : 1;
-      if (a < 0.15) return null;
-      return {
-        r: parseInt(rgbMatch[1], 10),
-        g: parseInt(rgbMatch[2], 10),
-        b: parseInt(rgbMatch[3], 10),
-        a
-      };
-    }
-    const hexMatch = /^#([0-9a-f]{3,8})$/i.exec(str);
-    if (hexMatch) {
-      let hex = hexMatch[1];
-      if (hex.length === 3 || hex.length === 4) {
-        hex = hex.split("").map((c) => c + c).join("");
-      }
-      if (hex.length >= 6) {
-        return {
-          r: parseInt(hex.slice(0, 2), 16),
-          g: parseInt(hex.slice(2, 4), 16),
-          b: parseInt(hex.slice(4, 6), 16),
-          a: hex.length === 8 ? parseInt(hex.slice(6, 8), 16) / 255 : 1
-        };
-      }
-    }
-    return null;
-  }
-  function isVibrantPlayerColor(c) {
-    if (!c) return false;
-    const max = Math.max(c.r, c.g, c.b);
-    const min = Math.min(c.r, c.g, c.b);
-    const delta = max - min;
-    if (max < 40) return false;
-    if (min > 225 && delta < 25) return false;
-    if (delta < 25) return false;
-    return true;
-  }
-  function colorDistance(c1, c2) {
-    if (!c1 || !c2) return Infinity;
-    const dr = c1.r - c2.r;
-    const dg = c1.g - c2.g;
-    const db = c1.b - c2.b;
-    return Math.sqrt(0.3 * dr * dr + 0.59 * dg * dg + 0.11 * db * db);
-  }
-  function syncBoardStateFromDOM() {
-    if (!document.body) return;
-    if (GameMemory.checkRoomTransition()) {
-      logToBot(`[ROOM SWITCH] Joined room '${GameMemory.currentRoomId || "Lobby/Menu"}'. Cleared previous game state.`);
-    }
-    const hud = document.getElementById("rubot-hud-panel");
-    const pageText = document.body.innerText || "";
-    const hasCashOnScreen = /\$\s*\d+|\d+\s*\$/.test(pageText);
-    const hasGameElements = Boolean(
-      hasCashOnScreen || document.querySelector('[class*="board" i], [class*="tile" i], [class*="dice" i]') || Array.from(document.querySelectorAll('button, [role="button"]')).some((b) => {
-        if (hud && hud.contains(b)) return false;
-        const t = (b.innerText || "").trim().toLowerCase();
-        return t.includes("roll") || t.includes("end turn") || t.includes("bankrupt") || t.includes("create") || t.includes("trades");
-      }) || /roll.*dice|end turn|is playing|bankrupt|my properties|trades/i.test(pageText)
-    );
-    if (!hasGameElements && !hasCashOnScreen && GameMemory.turnCount === 0) {
-      const isLobby = Boolean(
-        Array.from(document.querySelectorAll('button, [role="button"]')).some((el) => {
-          if (hud && hud.contains(el)) return false;
-          const t = (el.innerText || "").trim().toLowerCase();
-          return t === "ready up" || t === "join game" || t === "change color" || t === "start game";
-        })
-      );
-      if (isLobby) {
-        syncLobbyStateAndPlayers();
-      }
-      return;
-    }
-    try {
-      detectLocalPlayerFromPlayerList();
-    } catch (e) {
-      logToBot(`[Scoreboard Sync Err] ${e}`);
-    }
-    try {
-      syncMyPropertiesFromSidebar();
-    } catch (e) {
-      logToBot(`[Sidebar Sync Err] ${e}`);
-    }
-    try {
-      syncBoardTileOwnershipAndPricesFromDOM();
-    } catch (e) {
-      logToBot(`[Board Tiles Sync Err] ${e}`);
-    }
-    try {
-      syncPropertyCardModalFromDOM();
-    } catch (e) {
-      logToBot(`[Card Modal Sync Err] ${e}`);
-    }
-    try {
-      syncTradeModalInventoriesFromDOM();
-    } catch (e) {
-      logToBot(`[Trade Modal Sync Err] ${e}`);
-    }
-    try {
-      scanPlayerTokenPositionsFromDOM();
-    } catch (e) {
-      logToBot(`[Token Scraper Err] ${e}`);
-    }
-    try {
-      scanActivityLogsOnly();
-    } catch (e) {
-      logToBot(`[Activity Log Err] ${e}`);
-    }
-  }
-  function syncLobbyStateAndPlayers() {
-    const pageText = document.body ? document.body.innerText : "";
-    const hasCashBalances = /\$\s*\d+|\d+\s*\$/.test(pageText);
-    const hasActiveTurnControls = Boolean(
-      document.querySelector('[class*="board" i], [class*="tile" i], [class*="dice" i]') || Array.from(document.querySelectorAll('button, [role="button"]')).some((b) => {
-        const t = (b.innerText || "").trim().toLowerCase();
-        return t.includes("roll") || t.includes("end turn") || t.includes("bankrupt") || t.includes("trades");
-      })
-    );
-    if (GameMemory.turnCount > 0 || hasCashBalances || hasActiveTurnControls) {
-      return;
-    }
-    const hud = document.getElementById("rubot-hud-panel");
-    for (const tileId of Object.keys(GameMemory.ownership)) {
-      if (GameMemory.ownership[tileId]?.owner) {
-        GameMemory.ownership[tileId].owner = null;
-        GameMemory.ownership[tileId].houses = 0;
-        GameMemory.ownership[tileId].mortgaged = false;
-      }
-    }
-    GameMemory.myPos = 0;
-    GameMemory.inJail = false;
-    GameMemory.isMyTurn = false;
-    GameMemory.turnCount = 0;
-    const startingCashRow = Array.from(document.querySelectorAll("div, li, p, section, tr")).find((el) => {
-      if (hud && hud.contains(el)) return false;
-      const t = (el.innerText || "").toLowerCase();
-      return t.includes("starting cash") && (t.includes("adjust how much money") || t.includes("$"));
-    });
-    let detectedStartCash = null;
-    if (startingCashRow) {
-      const trigger = startingCashRow.querySelector('button, [role="button"], [class*="select" i], [class*="dropdown" i]');
-      const targetText = trigger ? trigger.innerText : startingCashRow.innerText;
-      const cashMatch = /\$\s*(\d{2,5})|(\d{2,5})\s*\$/.exec(targetText);
-      if (cashMatch) {
-        detectedStartCash = parseInt(cashMatch[1] || cashMatch[2], 10);
-      }
-    }
-    if (!detectedStartCash) {
-      const fallbackMatch = /Starting cash[\s\S]*?\$(\d{2,5})/i.exec(pageText);
-      if (fallbackMatch) {
-        detectedStartCash = parseInt(fallbackMatch[1], 10);
-      }
-    }
-    if (detectedStartCash && !isNaN(detectedStartCash) && detectedStartCash >= 100 && detectedStartCash <= 1e4) {
-      GameMemory.roomSettings.startingCash = detectedStartCash;
-    }
-    const startCash = GameMemory.roomSettings.startingCash || 1500;
-    GameMemory.myCash = startCash;
-    try {
-      const candidateRows = Array.from(document.querySelectorAll("div, li, p, section, tr")).filter((el) => {
-        if (hud && hud.contains(el)) return false;
-        const text = (el.innerText || "").toLowerCase();
-        return text.includes("don't collect rent while in prison") || text.includes("x2 rent on full-set") || text.includes("vacation cash") || text.includes("even build") || text.includes("auction") && text.includes("skips purchasing");
-      });
-      for (const row of candidateRows) {
-        const text = (row.innerText || "").toLowerCase();
-        const toggle = row.querySelector('input[type="checkbox"], [role="switch"], [class*="toggle" i], [class*="switch" i]');
-        if (!toggle) continue;
-        let isChecked = false;
-        if (toggle.tagName === "INPUT") {
-          isChecked = toggle.checked;
-        } else if (toggle.getAttribute("aria-checked") != null) {
-          isChecked = toggle.getAttribute("aria-checked") === "true";
-        } else {
-          const cls = (toggle.className || "").toLowerCase();
-          isChecked = cls.includes("active") || cls.includes("checked") || cls.includes("on") || cls.includes("enabled");
-        }
-        if (text.includes("don't collect rent while in prison")) {
-          GameMemory.roomSettings.collectRentInJail = !isChecked;
-        } else if (text.includes("auction") && text.includes("skips purchasing")) {
-          GameMemory.roomSettings.auctionsEnabled = isChecked;
-        } else if (text.includes("x2 rent on full-set")) {
-          GameMemory.roomSettings.doubleRentOnFullSet = isChecked;
-        } else if (text.includes("even build")) {
-          GameMemory.roomSettings.evenBuild = isChecked;
-        }
-      }
-    } catch (_) {
-    }
-    const changeApp = Array.from(document.querySelectorAll("button, a, div, span")).find((b) => {
-      if (hud && hud.contains(b)) return false;
-      return (b.innerText || "").trim().toLowerCase() === "change appearance";
-    });
-    let playerRows = [];
-    if (changeApp) {
-      let parent = changeApp.parentElement;
-      for (let depth = 0; depth < 5 && parent && parent !== document.body; depth++) {
-        const children = Array.from(parent.children).filter((c) => {
-          if (c.contains(changeApp)) return true;
-          const t = (c.innerText || "").trim().toLowerCase();
-          return t.length > 0 && !t.includes("game settings") && !t.includes("maximum players") && !t.includes("chat");
-        });
-        const pText = (parent.innerText || "").toLowerCase();
-        if (children.length >= 2 || children.length >= 1 && (pText.includes("host") || children[0].contains(changeApp))) {
-          playerRows = children;
-          break;
-        }
-        parent = parent.parentElement;
-      }
-    }
-    if (playerRows.length === 0) {
-      const candidateContainers = document.querySelectorAll("div, ul, section");
-      for (const c of candidateContainers) {
-        if (hud && hud.contains(c)) continue;
-        const rect = c.getBoundingClientRect();
-        if (rect.left < window.innerWidth * 0.55 || rect.top > window.innerHeight * 0.45) continue;
-        if (rect.width < 90 || rect.height < 35 || rect.height > 350) continue;
-        const txt = (c.innerText || "").toLowerCase();
-        if (txt.includes("game settings") || txt.includes("maximum players")) continue;
-        if (txt.includes("host") || txt.includes("change appearance")) {
-          const kids = Array.from(c.children).filter((k) => {
-            const kt = (k.innerText || "").trim().toLowerCase();
-            return kt.length > 0 && !kt.includes("game settings");
-          });
-          if (kids.length >= 1 && kids.length <= 8) {
-            playerRows = kids;
-            break;
-          }
-        }
-      }
-    }
-    const currentLobbyPlayers = /* @__PURE__ */ new Set();
-    for (const row of playerRows) {
-      const rawText = row.innerText || "";
-      if (rawText.toLowerCase().includes("game settings")) continue;
-      const lines = rawText.split("\n").map((l) => l.trim()).filter(Boolean);
-      let detectedName = null;
-      for (const line of lines) {
-        const clean = line.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/change appearance/gi, "").replace(/\bhost\b/gi, "").replace(/[->\]\[→←\|👑]/g, "").trim();
-        if (clean.length >= 2 && clean.length <= 24 && !BOARD_LABELS_BLACKLIST.has(clean.toLowerCase()) && !clean.toLowerCase().includes("rules") && !clean.toLowerCase().includes("settings") && !clean.toLowerCase().includes("players")) {
-          detectedName = clean;
-          break;
-        }
-      }
-      if (!detectedName) continue;
-      currentLobbyPlayers.add(detectedName);
-      const isMeRow = rawText.toLowerCase().includes("change appearance") || GameMemory.myName && detectedName.toLowerCase() === GameMemory.myName.toLowerCase();
-      if (isMeRow) {
-        GameMemory.setMyName(detectedName);
-        GameMemory.players[detectedName] = {
-          cash: startCash,
-          pos: 0,
-          isMe: true,
-          bankrupt: false
-        };
-      } else {
-        GameMemory.players[detectedName] = {
-          cash: startCash,
-          pos: 0,
-          isMe: false,
-          bankrupt: false
-        };
-      }
-    }
-    if (!GameMemory.myName) {
-      try {
-        const saved = localStorage.getItem("richup_bot_my_name");
-        if (saved && !BOARD_LABELS_BLACKLIST.has(saved.toLowerCase())) {
-          GameMemory.setMyName(saved);
-          if (!GameMemory.players[saved]) {
-            GameMemory.players[saved] = { cash: startCash, pos: 0, isMe: true, bankrupt: false };
-          }
-        }
-      } catch (_) {
-      }
-    }
-    if (currentLobbyPlayers.size > 0) {
-      for (const existingName of Object.keys(GameMemory.players)) {
-        if (GameMemory.isMe(existingName)) continue;
-        if (!currentLobbyPlayers.has(existingName)) {
-          logToBot(`[LOBBY PRUNE] Removed stale opponent '${existingName}' from previous match.`);
-          delete GameMemory.players[existingName];
-        }
-      }
-    } else {
-      for (const existingName of Object.keys(GameMemory.players)) {
-        if (!GameMemory.isMe(existingName)) {
-          delete GameMemory.players[existingName];
-        }
-      }
-    }
-  }
-  function detectLocalPlayerFromPlayerList() {
-    const hud = document.getElementById("rubot-hud-panel");
-    const hasJailUI = Boolean(
-      Array.from(document.querySelectorAll('button, [role="button"], div, span')).some((b) => {
-        if (hud && hud.contains(b)) return false;
-        const t = (b.innerText || "").toLowerCase();
-        return t.includes("get free for") || t.includes("pay $50") || t.includes("pardon card");
-      })
-    );
-    if (hasJailUI) {
-      GameMemory.myPos = 10;
-      GameMemory.inJail = true;
-    }
-    if (GameMemory.myName && (GameMemory.myName.toLowerCase().includes("share") || GameMemory.myName.toLowerCase().includes("copy") || BOARD_LABELS_BLACKLIST.has(GameMemory.myName.toLowerCase()))) {
-      GameMemory.myName = null;
-      try {
-        localStorage.removeItem("richup_bot_my_name");
-      } catch (_) {
-      }
-    }
-    if (!GameMemory.myName) {
-      const rollOrEndBtn = Array.from(document.querySelectorAll('button, [role="button"]')).some((b) => {
-        const t = (b.innerText || "").trim().toLowerCase();
-        return t === "roll the dice" || t === "roll again" || t === "end turn";
-      });
-      if (rollOrEndBtn) {
-        const pText = document.body ? document.body.innerText : "";
-        const playingMatch = /([a-zA-Z0-9_-]{2,24})\s+is playing/i.exec(pText);
-        if (playingMatch && !BOARD_LABELS_BLACKLIST.has(playingMatch[1].toLowerCase())) {
-          GameMemory.setMyName(playingMatch[1]);
-          logToBot(`[IDENTITY SELF-HEAL] Identified local player '${playingMatch[1]}' from active turn state!`);
-        }
-      }
-    }
-    if (!GameMemory.myName) {
-      try {
-        const saved = localStorage.getItem("richup_bot_my_name");
-        if (saved && !BOARD_LABELS_BLACKLIST.has(saved.toLowerCase())) {
-          GameMemory.setMyName(saved);
-        }
-      } catch (_) {
-      }
-    }
-    const currentName = GameMemory.myName;
-    const directCards = Array.from(document.querySelectorAll("div, section, li, tr, button")).filter((el) => {
-      if (hud && hud.contains(el)) return false;
-      if (el.closest('[class*="chat" i], [class*="modal" i], [role="dialog"]')) return false;
-      const rect = el.getBoundingClientRect();
-      if (rect.left < window.innerWidth * 0.48) return false;
-      if (rect.top > window.innerHeight * 0.65) return false;
-      if (rect.height < 18 || rect.height > 95 || rect.width < 90) return false;
-      const text = (el.innerText || "").trim();
-      if (text.length > 120 || text.length < 2) return false;
-      if (/my properties|trades\b|create|bankrupt button|dice|rules/i.test(text)) return false;
-      const hasCashOrBankrupt = /\$|\b(?:bankrupt)\b/i.test(text);
-      if (!hasCashOrBankrupt) return false;
-      const innerWithDollar = Array.from(el.children).filter((c) => (c.innerText || "").includes("$"));
-      return innerWithDollar.length <= 1;
-    });
-    let rows = directCards;
-    if (rows.length === 0) {
-      const allContainers = document.querySelectorAll("div, section, aside, ul");
-      for (let i = 0; i < allContainers.length; i++) {
-        const el = allContainers[i];
-        if (hud && hud.contains(el)) continue;
-        const rect = el.getBoundingClientRect();
-        if (rect.left < window.innerWidth * 0.45 || rect.top > window.innerHeight * 0.65) continue;
-        const kids = Array.from(el.children).filter((k) => (k.innerText || "").includes("$") || /bankrupt/i.test(k.innerText || ""));
-        if (kids.length >= 2 && kids.length <= 8) {
-          rows = kids;
-          break;
-        }
-      }
-    }
-    let foundLocalPlayerInScoreboard = false;
-    const activeScoreboardPlayers = /* @__PURE__ */ new Set();
-    if (rows.length > 0) {
-      for (const row of rows) {
-        const rowText = row.innerText || "";
-        if (!rowText.includes("$") || rowText.length > 160) continue;
-        if (/\b(?:paid|bought|buy|buying|rolled|landed|rent|tax|joined|left|game started|is playing)\b/i.test(rowText)) continue;
-        const normalizedRow = rowText.replace(/[−–—]/g, "-");
-        const negCashMatch = /(?:-\s*\$\s*(\d{1,6})|\$\s*-\s*(\d{1,6}))/.exec(normalizedRow);
-        let parsedCash;
-        let cashToken = "";
-        if (negCashMatch) {
-          parsedCash = -parseInt(negCashMatch[1] || negCashMatch[2], 10);
-          cashToken = negCashMatch[0];
-        } else {
-          const posCashMatch = /(?:\$\s*(\d{1,6})|(\d{1,6})\s*\$)/.exec(normalizedRow);
-          if (!posCashMatch) continue;
-          parsedCash = parseInt(posCashMatch[1] || posCashMatch[2], 10);
-          cashToken = posCashMatch[0];
-        }
-        if (isNaN(parsedCash)) continue;
-        let textWithoutCash = normalizedRow.replace(cashToken, " ");
-        textWithoutCash = textWithoutCash.replace(/[+-]\s*\$?\s*\d+/g, " ");
-        const candidateLines = textWithoutCash.split("\n").map((l) => l.trim()).filter(Boolean);
-        let candidateName = null;
-        for (const line of candidateLines) {
-          const clean = line.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[->\]\[→←\|👑:]/g, "").replace(/\b-?\d+\b/g, "").trim();
-          const lower = clean.toLowerCase();
-          if (clean.length >= 2 && clean.length <= 24 && !BOARD_LABELS_BLACKLIST.has(lower) && !lower.startsWith("buy") && !lower.startsWith("pay") && !lower.startsWith("bid") && !lower.includes("share") && !lower.includes("copy")) {
-            candidateName = clean;
-            break;
-          }
-        }
-        if (!candidateName) continue;
-        activeScoreboardPlayers.add(candidateName);
-        const innerHtml = (row.innerHTML || "").toString();
-        const hasLeaveIcon = Boolean(
-          row.querySelector('[class*="leave" i], [class*="exit" i], [title*="leave" i], [aria-label*="leave" i], button[aria-label*="leave" i]') || innerHtml.includes("->") || innerHtml.includes("M17 16l4") || innerHtml.includes("M11 16l-4-4") || innerHtml.includes("M15 3h4a2") || innerHtml.includes("M9 21H5a2") || innerHtml.includes("M16 17l5-5-5-5") || innerHtml.includes("logout")
-        );
-        const isKnownMe = currentName && candidateName.toLowerCase() === currentName.toLowerCase() || GameMemory.myName && candidateName.toLowerCase() === GameMemory.myName.toLowerCase();
-        const isBankrupt = rowText.toLowerCase().includes("bankrupt") || row.classList.contains("bankrupt");
-        const avEl = row.querySelector('svg, img, [class*="avatar" i], [class*="face" i], [class*="token" i], [class*="user" i], div[style*="border-radius"], div[style*="background"]');
-        let playerColor = null;
-        let playerFill = null;
-        if (avEl) {
-          const style = window.getComputedStyle(avEl);
-          let parsed = parseColor(style.backgroundColor);
-          if (!parsed || !isVibrantPlayerColor(parsed)) {
-            const svgShape = avEl.querySelector('path[fill]:not([fill="none"]):not([fill="#fff"]):not([fill="#ffffff"]), circle[fill]:not([fill="none"]), rect[fill]:not([fill="none"])') || (avEl.tagName.toLowerCase() === "svg" ? avEl : null);
-            if (svgShape) {
-              const fillVal = svgShape.getAttribute("fill") || window.getComputedStyle(svgShape).fill;
-              parsed = parseColor(fillVal);
-              if (parsed && isVibrantPlayerColor(parsed)) playerFill = fillVal;
-            }
-          }
-          if (!parsed || !isVibrantPlayerColor(parsed)) {
-            parsed = parseColor(style.color);
-          }
-          if (parsed && isVibrantPlayerColor(parsed)) {
-            playerColor = parsed;
-          }
-        }
-        if (!playerColor) {
-          const innerShapes = Array.from(row.querySelectorAll("svg, path, circle, rect, div, span, img"));
-          for (const shape of innerShapes) {
-            const sStyle = window.getComputedStyle(shape);
-            let p = parseColor(sStyle.backgroundColor);
-            if (p && isVibrantPlayerColor(p)) {
-              playerColor = p;
-              break;
-            }
-            const fillAttr = shape.getAttribute ? shape.getAttribute("fill") : null;
-            if (fillAttr) {
-              let pf = parseColor(fillAttr);
-              if (pf && isVibrantPlayerColor(pf)) {
-                playerColor = pf;
-                playerFill = fillAttr;
-                break;
-              }
-            }
-            if (sStyle.fill) {
-              let pf = parseColor(sStyle.fill);
-              if (pf && isVibrantPlayerColor(pf)) {
-                playerColor = pf;
-                playerFill = sStyle.fill;
-                break;
-              }
-            }
-          }
-        }
-        const existingColor = GameMemory.players[candidateName]?.color || null;
-        const existingFill = GameMemory.players[candidateName]?.fill || null;
-        const finalColor = playerColor || existingColor;
-        const finalFill = playerFill || existingFill;
-        if (hasLeaveIcon || isKnownMe) {
-          foundLocalPlayerInScoreboard = true;
-          GameMemory.setMyName(candidateName);
-          GameMemory.myCash = parsedCash;
-          GameMemory.cashVerified = true;
-          GameMemory.isNegativeDebt = parsedCash < 0;
-          GameMemory.players[candidateName] = {
-            cash: parsedCash,
-            pos: GameMemory.myPos,
-            isMe: true,
-            bankrupt: isBankrupt,
-            color: finalColor,
-            fill: finalFill
-          };
-        } else {
-          GameMemory.players[candidateName] = {
-            cash: parsedCash,
-            pos: GameMemory.players[candidateName]?.pos || 0,
-            isMe: false,
-            bankrupt: isBankrupt,
-            color: finalColor,
-            fill: finalFill
-          };
-        }
-      }
-      if (!foundLocalPlayerInScoreboard && GameMemory.myName && GameMemory.players[GameMemory.myName]) {
-        const sbCash = GameMemory.players[GameMemory.myName].cash;
-        if (typeof sbCash === "number") {
-          GameMemory.myCash = sbCash;
-          GameMemory.cashVerified = true;
-          GameMemory.isNegativeDebt = sbCash < 0;
-          foundLocalPlayerInScoreboard = true;
-        }
-      }
-      if (activeScoreboardPlayers.size >= 2) {
-        for (const pName of Object.keys(GameMemory.players)) {
-          if (!activeScoreboardPlayers.has(pName) && !GameMemory.isMe(pName)) {
-            delete GameMemory.players[pName];
-          }
-        }
-      }
-    }
-  }
-  function syncBoardTileOwnershipAndPricesFromDOM() {
-    const hud = document.getElementById("rubot-hud-panel");
-    const boardEl = document.querySelector('[class*="board" i], main, section') || document.body;
-    if (!boardEl) return;
-    const boardRect = boardEl.getBoundingClientRect();
-    if (boardRect.width < 150 || boardRect.height < 150) return;
-    const activePlayersWithColors = [];
-    for (const [pName, pData] of Object.entries(GameMemory.players)) {
-      if (pData && pData.color && !pData.bankrupt) {
-        activePlayersWithColors.push({
-          name: pName,
-          isMe: GameMemory.isMe(pName),
-          color: pData.color
-        });
-      }
-    }
-    const candidateEls = Array.from(boardEl.querySelectorAll('div, [class*="tile" i], [class*="cell" i], [class*="block" i]')).filter((el) => {
-      if (hud && hud.contains(el)) return false;
-      if (el.closest('[class*="chat" i], [class*="scoreboard" i], [class*="modal" i], [class*="sidebar" i]')) return false;
-      const r = el.getBoundingClientRect();
-      return r.width >= 25 && r.width <= 190 && r.height >= 25 && r.height <= 190;
-    });
-    const tileElements = /* @__PURE__ */ new Map();
-    for (const tile of BOARD_TILES) {
-      if (!tile.group) continue;
-      const nameRegex = new RegExp(`\\b${tile.name}\\b`, "i");
-      let bestEl = null;
-      let smallestArea = Infinity;
-      for (const el of candidateEls) {
-        const text = (el.innerText || "").trim();
-        if (text.length > 70) continue;
-        if (nameRegex.test(text)) {
-          const r = el.getBoundingClientRect();
-          const area = r.width * r.height;
-          if (area < smallestArea) {
-            smallestArea = area;
-            bestEl = el;
-          }
-        }
-      }
-      if (bestEl) {
-        tileElements.set(tile.id, bestEl);
-      }
-    }
-    for (const [tileId, tileEl] of tileElements.entries()) {
-      const tile = BOARD_TILES[tileId];
-      if (!tile) continue;
-      const text = (tileEl.innerText || "").trim();
-      const priceMatch = /(?:^|[^\d])(\d{2,4})\s*\$|\$\s*(\d{2,4})/.exec(text);
-      let tileHasPriceTag = false;
-      if (priceMatch) {
-        const p = parseInt(priceMatch[1] || priceMatch[2], 10);
-        if (!isNaN(p) && p >= 50 && p <= 500) {
-          tile.price = p;
-          tileHasPriceTag = true;
-        }
-      }
-      let houseCount = 0;
-      const houseMatch = /(?:🏠\s*x?\s*|x\s*)(\d)/i.exec(text);
-      if (houseMatch) {
-        houseCount = Math.min(5, parseInt(houseMatch[1], 10));
-      } else if (/hotel|🏨/i.test(text)) {
-        houseCount = 5;
-      } else {
-        const houseSvg = tileEl.querySelector?.('svg[class*="house" i], [class*="house" i], [class*="hotel" i]');
-        if (houseSvg) houseCount = 1;
-      }
-      const tileCls = (tileEl.className?.baseVal !== void 0 ? tileEl.className.baseVal : tileEl.className || "").toString().toLowerCase();
-      const tileStyle = window.getComputedStyle(tileEl);
-      const isMortgagedTile = /mortgaged/i.test(text) || tileCls.includes("mortgage") || Boolean(tileEl.querySelector?.('[class*="mortgage" i]')) || tileStyle.opacity && parseFloat(tileStyle.opacity) < 0.65;
-      if (GameMemory.isMe(GameMemory.ownership[tileId]?.owner)) {
-        if (houseCount > 0) GameMemory.ownership[tileId].houses = houseCount;
-        if (isMortgagedTile) GameMemory.ownership[tileId].mortgaged = true;
-        continue;
-      }
-      const childEls = Array.from(tileEl.querySelectorAll('div, span, [class*="owner" i], [class*="bar" i], [class*="ribbon" i], [class*="strip" i], [class*="cell" i]'));
-      childEls.push(tileEl);
-      const colorMatches = [];
-      for (const child of childEls) {
-        const style = window.getComputedStyle(child);
-        const bgParsed = parseColor(style.backgroundColor);
-        const fillParsed = parseColor(style.fill) || (child.getAttribute ? parseColor(child.getAttribute("fill")) : null);
-        const colParsed = parseColor(style.color);
-        const testColors = [bgParsed, fillParsed, colParsed].filter(Boolean);
-        for (const c of testColors) {
-          if (!isVibrantPlayerColor(c)) continue;
-          for (const p of activePlayersWithColors) {
-            const dist = colorDistance(c, p.color);
-            if (dist < 42) {
-              colorMatches.push({
-                player: p.name,
-                dist,
-                isMe: p.isMe
-              });
-            }
-          }
-        }
-      }
-      if (colorMatches.length > 0) {
-        colorMatches.sort((a, b) => a.dist - b.dist);
-        const best = colorMatches[0];
-        if (best.isMe) {
-          GameMemory.ownership[tileId].owner = GameMemory.myName || "__ME__";
-        } else {
-          GameMemory.ownership[tileId].owner = best.player;
-        }
-        GameMemory.ownership[tileId].houses = houseCount;
-        GameMemory.ownership[tileId].mortgaged = Boolean(isMortgagedTile);
-      } else if (tileHasPriceTag && houseCount === 0) {
-        GameMemory.ownership[tileId].owner = null;
-        GameMemory.ownership[tileId].houses = 0;
-        GameMemory.ownership[tileId].mortgaged = false;
-      }
-    }
-    const bodyText = document.body ? document.body.innerText : "";
-    if (bodyText.includes("negative amount of money") || bodyText.includes("Sell properties or trade")) {
-      GameMemory.isNegativeDebt = true;
-      if (GameMemory.myCash >= 0) {
-        GameMemory.myCash = -50;
-      }
-    } else {
-      GameMemory.isNegativeDebt = GameMemory.myCash < 0;
-    }
-  }
-  function scanPlayerTokenPositionsFromDOM() {
-    const hud = document.getElementById("rubot-hud-panel");
-    if (!document.body) return;
-    const boardEl = document.querySelector('[class*="board" i], main, section') || document.body;
-    const boardRect = boardEl.getBoundingClientRect();
-    if (boardRect.width < 200 || boardRect.height < 200) return;
-    const tileRects = /* @__PURE__ */ new Map();
-    const allEls = boardEl.querySelectorAll('div, [class*="tile" i], [class*="cell" i]');
-    for (let i = 0; i < allEls.length; i++) {
-      const el = allEls[i];
-      if (hud && hud.contains(el)) continue;
-      const text = (el.innerText || "").trim();
-      if (text.length > 80) continue;
-      for (const tile of BOARD_TILES) {
-        if (tileRects.has(tile.id)) continue;
-        let match = false;
-        if (tile.id === 0 && /^start/i.test(text)) match = true;
-        else if (tile.id === 10 && (/in prison/i.test(text) || /passing by/i.test(text))) match = true;
-        else if (tile.id === 20 && /vacation/i.test(text)) match = true;
-        else if (tile.id === 30 && /go to prison/i.test(text)) match = true;
-        else if (tile.name && new RegExp(`\\b${tile.name}\\b`, "i").test(text)) match = true;
-        if (match) {
-          const r = el.getBoundingClientRect();
-          if (r.width >= 25 && r.height >= 25) {
-            tileRects.set(tile.id, {
-              id: tile.id,
-              name: tile.name,
-              el,
-              rect: r,
-              cx: r.left + r.width / 2,
-              cy: r.top + r.height / 2
-            });
-          }
-        }
-      }
-    }
-    const playerAvatars = [];
-    const playerEntries = Object.keys(GameMemory.players);
-    for (const pName of playerEntries) {
-      const rows = Array.from(document.querySelectorAll("div, section, li, tr")).filter((el) => {
-        if (hud && hud.contains(el)) return false;
-        const t = el.innerText || "";
-        return t.includes(pName) && t.includes("$") && t.length < 150;
-      });
-      const pRow = rows.find((r) => r.children.length >= 2) || rows[0];
-      if (!pRow) continue;
-      const avEl = pRow.querySelector('svg, img, [class*="avatar" i], [class*="face" i], [class*="token" i], div[style*="border-radius"]');
-      let color = "";
-      let fill = "";
-      let src = "";
-      let classSnippet = "";
-      if (avEl) {
-        const style = window.getComputedStyle(avEl);
-        color = style.backgroundColor || style.color || "";
-        classSnippet = (avEl.className || "").toString();
-        if (avEl.tagName.toLowerCase() === "img") {
-          src = avEl.src || avEl.getAttribute("data-src") || "";
-        }
-        const coloredShape = avEl.querySelector('path[fill]:not([fill="none"]):not([fill="#fff"]):not([fill="#ffffff"]), circle[fill]:not([fill="none"]), rect[fill]:not([fill="none"])') || (avEl.tagName.toLowerCase() === "svg" ? avEl : avEl.querySelector("svg, circle, path"));
-        if (coloredShape) {
-          fill = coloredShape.getAttribute("fill") || window.getComputedStyle(coloredShape).fill || "";
-        }
-      }
-      playerAvatars.push({
-        name: pName,
-        isMe: GameMemory.isMe(pName),
-        color,
-        fill,
-        src,
-        classSnippet
-      });
-    }
-    const candidates = Array.from(boardEl.querySelectorAll("svg, img, div, span")).filter((el) => {
-      if (hud && hud.contains(el)) return false;
-      if (el.closest('[class*="chat" i], [class*="scoreboard" i], [class*="modal" i]')) return false;
-      const r = el.getBoundingClientRect();
-      if (r.width < 18 || r.width > 65 || r.height < 18 || r.height > 65) return false;
-      if (r.left < boardRect.left || r.right > boardRect.right || r.top < boardRect.top || r.bottom > boardRect.bottom) return false;
-      const style = window.getComputedStyle(el);
-      const isRound = style.borderRadius && (parseInt(style.borderRadius) >= 10 || style.borderRadius.includes("%"));
-      const isSvg = el.tagName.toLowerCase() === "svg";
-      const isImg = el.tagName.toLowerCase() === "img";
-      const clsName = (el.className?.baseVal !== void 0 ? el.className.baseVal : el.className || "").toString().toLowerCase();
-      const hasAvatarClass = clsName.includes("avatar") || clsName.includes("token");
-      return isRound || isSvg || isImg || hasAvatarClass;
-    });
-    for (const tokenEl of candidates) {
-      const tr = tokenEl.getBoundingClientRect();
-      const tcx = tr.left + tr.width / 2;
-      const tcy = tr.top + tr.height / 2;
-      const style = window.getComputedStyle(tokenEl);
-      const tColor = style.backgroundColor || style.color || "";
-      const tSrc = tokenEl.tagName.toLowerCase() === "img" ? tokenEl.src || "" : "";
-      const tColoredShape = tokenEl.querySelector('path[fill]:not([fill="none"]):not([fill="#fff"]):not([fill="#ffffff"]), circle[fill]:not([fill="none"]), rect[fill]:not([fill="none"])') || (tokenEl.tagName.toLowerCase() === "svg" ? tokenEl : tokenEl.querySelector("svg, circle, path"));
-      const tFill = tColoredShape ? tColoredShape.getAttribute("fill") || window.getComputedStyle(tColoredShape).fill || "" : "";
-      const tClass = (tokenEl.className || "").toString();
-      let matchedPlayer = null;
-      for (const p of playerAvatars) {
-        let score = 0;
-        if (p.src && tSrc && p.src === tSrc) score += 10;
-        if (p.fill && tFill && p.fill === tFill && p.fill !== "none") score += 5;
-        if (p.color && tColor && p.color === tColor && !tColor.includes("rgba(0, 0, 0, 0)")) score += 3;
-        if (p.classSnippet && tClass && p.classSnippet === tClass) score += 2;
-        if (score >= 3) {
-          matchedPlayer = p;
-          break;
-        }
-      }
-      if (!matchedPlayer && playerAvatars.length === 1) {
-        matchedPlayer = playerAvatars[0];
-      }
-      if (!matchedPlayer) continue;
-      let bestTile = null;
-      let minDistance = Infinity;
-      for (const [id, t] of tileRects.entries()) {
-        if (tcx >= t.rect.left && tcx <= t.rect.right && tcy >= t.rect.top && tcy <= t.rect.bottom) {
-          bestTile = t;
-          minDistance = 0;
-          break;
-        }
-        if (t.el && typeof t.el.contains === "function" && t.el.contains(tokenEl)) {
-          bestTile = t;
-          minDistance = 0;
-          break;
-        }
-        const dist = Math.hypot(tcx - t.cx, tcy - t.cy);
-        if (dist < minDistance) {
-          minDistance = dist;
-          bestTile = t;
-        }
-      }
-      if (bestTile && minDistance < 85) {
-        if (matchedPlayer.isMe) {
-          if (GameMemory.myPos !== bestTile.id && !GameMemory.inJail) {
-            GameMemory.myPos = bestTile.id;
-            logToBot(`[DOM COORDINATE SCRAPER] \u{1F3AF} Verified local position at Tile #${bestTile.id} (${bestTile.name}) [Pixel: (${Math.round(tcx)}, ${Math.round(tcy)})]`);
-          }
-        } else if (GameMemory.players[matchedPlayer.name]) {
-          const curPos = GameMemory.players[matchedPlayer.name].pos;
-          if (curPos !== bestTile.id) {
-            GameMemory.players[matchedPlayer.name].pos = bestTile.id;
-            logToBot(`[DOM COORDINATE SCRAPER] \u{1F3AF} Verified ${matchedPlayer.name} at Tile #${bestTile.id} (${bestTile.name}) [Pixel: (${Math.round(tcx)}, ${Math.round(tcy)})] (was #${curPos})`);
-          }
-        }
-      }
-    }
-  }
-  function syncPropertyCardModalFromDOM() {
-    const hud = document.getElementById("rubot-hud-panel");
-    const modals = document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="card" i], div[style*="z-index"]');
-    for (const modal of modals) {
-      if (hud && hud.contains(modal)) continue;
-      const text = modal.innerText || "";
-      if (!text.includes("with rent") && !text.includes("with one house") && !text.includes("with a hotel")) continue;
-      let matchedTile = null;
-      for (const t of BOARD_TILES) {
-        if (t.group && new RegExp(`\\b${t.name}\\b`, "i").test(text)) {
-          matchedTile = t;
-          break;
-        }
-      }
-      if (!matchedTile) continue;
-      const rBase = /with rent\s*\$?(\d+)/i.exec(text);
-      const r1 = /with one house\s*\$?(\d+)/i.exec(text);
-      const r2 = /with two houses\s*\$?(\d+)/i.exec(text);
-      const r3 = /with three houses\s*\$?(\d+)/i.exec(text);
-      const r4 = /with four houses\s*\$?(\d+)/i.exec(text);
-      const rHotel = /with a hotel\s*\$?(\d+)/i.exec(text);
-      if (rBase && r1 && r2 && r3 && r4 && rHotel) {
-        matchedTile.rent = [
-          parseInt(rBase[1], 10),
-          parseInt(r1[1], 10),
-          parseInt(r2[1], 10),
-          parseInt(r3[1], 10),
-          parseInt(r4[1], 10),
-          parseInt(rHotel[1], 10)
-        ];
-      }
-      const houseCostMatch = /🏠\s*\$?(\d+)|house\s*\$?(\d+)/i.exec(text);
-      if (houseCostMatch) {
-        const hc = parseInt(houseCostMatch[1] || houseCostMatch[2], 10);
-        if (!isNaN(hc) && hc >= 20 && hc <= 500) {
-          matchedTile.houseCost = hc;
-        }
-      }
-      const priceMatch = /Price\s*\$?(\d+)/i.exec(text);
-      if (priceMatch) {
-        const p = parseInt(priceMatch[1], 10);
-        if (!isNaN(p) && p >= 30 && p <= 1e3) {
-          matchedTile.price = p;
-        }
-      }
-      const ownerMatch = /Owner\s*([A-Za-z0-9_-]+)/i.exec(text);
-      if (ownerMatch && GameMemory.ownership[matchedTile.id]) {
-        const ownerName = ownerMatch[1].trim();
-        if (ownerName && !ownerName.toLowerCase().includes("price")) {
-          GameMemory.ownership[matchedTile.id].owner = ownerName;
-        }
-      }
-      break;
-    }
-  }
-  function syncMyPropertiesFromSidebar() {
-    const hud = document.getElementById("rubot-hud-panel");
-    const allEls = document.querySelectorAll("h1, h2, h3, h4, h5, div, span, p");
-    let headerEl = null;
-    for (let i = 0; i < allEls.length; i++) {
-      const el = allEls[i];
-      if (hud && hud.contains(el)) continue;
-      const text2 = (el.innerText || "").trim();
-      if (/^My properties\s*\(\d+\)/i.test(text2)) {
-        if (!headerEl || text2.length < (headerEl.innerText || "").length) {
-          headerEl = el;
-        }
-      }
-    }
-    if (!headerEl) return;
-    const countMatch = /My properties\s*\((\d+)\)/i.exec(headerEl.innerText);
-    const ownedCount = countMatch ? parseInt(countMatch[1], 10) : 0;
-    const myName = GameMemory.myName || "__ME__";
-    if (ownedCount === 0) {
-      for (const tileId of Object.keys(GameMemory.ownership)) {
-        if (GameMemory.isMe(GameMemory.ownership[tileId]?.owner)) {
-          GameMemory.ownership[tileId].owner = null;
-          GameMemory.ownership[tileId].houses = 0;
-        }
-      }
-      return;
-    }
-    const sidebarContainer = headerEl.parentElement;
-    if (!sidebarContainer) return;
-    const text = sidebarContainer.innerText || "";
-    const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
-    const foundTileIds = /* @__PURE__ */ new Set();
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const lower = line.toLowerCase();
-      let matchedTile = null;
-      for (const tile of BOARD_TILES) {
-        if (tile.group && (lower === tile.name.toLowerCase() || new RegExp(`^${tile.name}\\b`, "i").test(line))) {
-          matchedTile = tile;
-          break;
-        }
-      }
-      if (matchedTile && GameMemory.ownership[matchedTile.id]) {
-        foundTileIds.add(matchedTile.id);
-        GameMemory.ownership[matchedTile.id].owner = myName;
-        const houseMatch = /(?:x\s*|houses?\s*)(\d)/i.exec(line) || (i + 1 < lines.length ? /(?:x\s*|houses?\s*)(\d)/i.exec(lines[i + 1]) : null);
-        if (houseMatch) {
-          GameMemory.ownership[matchedTile.id].houses = parseInt(houseMatch[1], 10);
-        } else if (lower.includes("hotel") || i + 1 < lines.length && lines[i + 1].toLowerCase().includes("hotel")) {
-          GameMemory.ownership[matchedTile.id].houses = 5;
-        }
-      }
-    }
-    const propertyRows = sidebarContainer.querySelectorAll('div, li, button, [class*="property" i], [class*="item" i]');
-    for (const row of propertyRows) {
-      if (row.children.length > 5) continue;
-      const rowText = (row.innerText || "").trim();
-      if (!rowText || rowText.length > 80) continue;
-      for (const tile of BOARD_TILES) {
-        if (tile.group && new RegExp(`^${tile.name}\\b`, "i").test(rowText)) {
-          const inner = (row.innerHTML || "").toLowerCase();
-          const rowCls = (row.className?.baseVal !== void 0 ? row.className.baseVal : row.className || "").toString().toLowerCase();
-          const rowStyle = window.getComputedStyle(row);
-          const isMortgagedRow = inner.includes("mortgage") || rowCls.includes("mortgage") || rowStyle.opacity && parseFloat(rowStyle.opacity) < 0.7;
-          if (isMortgagedRow && GameMemory.ownership[tile.id]) {
-            GameMemory.ownership[tile.id].mortgaged = true;
-          }
-          if (GameMemory.ownership[tile.id]) {
-            if (inner.includes("hotel") || /hotel/i.test(rowText)) {
-              GameMemory.ownership[tile.id].houses = 5;
-            } else {
-              const numMatch = /(?:x\s*|houses?\s*)(\d)/i.exec(rowText);
-              if (numMatch) {
-                GameMemory.ownership[tile.id].houses = parseInt(numMatch[1], 10);
-              } else if (row.querySelector('svg, [class*="house" i], [class*="building" i]')) {
-                if (!GameMemory.ownership[tile.id].houses) {
-                  GameMemory.ownership[tile.id].houses = 1;
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-    for (const tileId of Object.keys(GameMemory.ownership)) {
-      if (GameMemory.isMe(GameMemory.ownership[tileId]?.owner) && !foundTileIds.has(Number(tileId))) {
-        GameMemory.ownership[tileId].owner = null;
-        GameMemory.ownership[tileId].houses = 0;
-      }
-    }
-  }
-  function matchPlayerName(rawName) {
-    if (!rawName) return null;
-    const clean = rawName.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, "").trim();
-    if (!clean) return null;
-    const lower = clean.toLowerCase();
-    for (const key of Object.keys(GameMemory.players)) {
-      if (key.toLowerCase() === lower) return key;
-    }
-    return clean;
-  }
-  function scanActivityLogsOnly() {
-    const hud = document.getElementById("rubot-hud-panel");
-    const processedLines = /* @__PURE__ */ new Set();
-    const chatInput = document.querySelector('input[placeholder*="Say something" i], textarea[placeholder*="Say something" i]');
-    const chatBox = chatInput ? chatInput.closest('[class*="chat" i]') || chatInput.parentElement?.parentElement : null;
-    const isExcluded = (el) => {
-      if (!el) return true;
-      if (hud && hud.contains(el)) return true;
-      if (chatBox && chatBox.contains(el)) return true;
-      return false;
-    };
-    const candidateEls = document.querySelectorAll(
-      '[class*="board" i] p, [class*="board" i] div, [class*="feed" i] *, [class*="activity" i] *, [class*="log" i] *, [class*="history" i] *, p, li, div[class*="item" i]'
-    );
-    for (let i = 0; i < candidateEls.length; i++) {
-      const el = candidateEls[i];
-      if (isExcluded(el)) continue;
-      if ((el.children?.length ?? 0) > 5) continue;
-      const line = (el.innerText || "").replace(/\s+/g, " ").trim();
-      if (line.length >= 6 && line.length <= 220 && !processedLines.has(line)) {
-        if (/bought|paid|rolled|landed on|passed through|prison|jail|pardon|bankrupt|won.*auction|trade|treasure card|tax/i.test(line)) {
-          processedLines.add(line);
-          if (!GameMemory.isLogProcessed(line)) {
-            parseActivityLogLine(line);
-          }
-        }
-      }
-    }
-  }
-  function parseActivityLogLine(line) {
-    if (/created a trade with/i.test(line)) {
-      const parts = line.split(/created a trade with/i);
-      const p1 = matchPlayerName(parts[0]);
-      const p2 = matchPlayerName(parts[1]);
-      logToBot(`[TRADE INTEL] Negotiation initiated: ${p1} \u2194\uFE0F ${p2}`);
-      GameMemory.markLogProcessed(line);
-      return;
-    }
-    if (/is looking at a trade/i.test(line)) {
-      const p = matchPlayerName(line.split(/is looking at a trade/i)[0]);
-      logToBot(`[TRADE INTEL] ${p} is reviewing trade proposal...`);
-      GameMemory.markLogProcessed(line);
-      return;
-    }
-    if (/declined.*trade/i.test(line)) {
-      const parts = line.split(/declined/i);
-      const decliner = matchPlayerName(parts[0]);
-      const createdByPart = /created by (.+)/i.exec(line);
-      const creator = createdByPart ? matchPlayerName(createdByPart[1]) : null;
-      if (TradeProposalExecutor.lastSentProposal && (GameMemory.isMe(creator) || !creator)) {
-        const proposal = TradeProposalExecutor.lastSentProposal;
-        if (!decliner || decliner.toLowerCase() === proposal.targetOwner.toLowerCase() || !creator) {
-          GameMemory.recordDeclinedTrade(proposal.targetOwner, proposal);
-          const givenNames = (proposal.givenTiles || []).map((t) => t.name).join(", ") || "cash";
-          const recNames = (proposal.receivedTiles || []).map((t) => t.name).join(", ");
-          logToBot(`[TRADE MEMORY] \u{1F4DC} Archival rejection recorded for ${proposal.targetOwner}: Offered [${givenNames}] for [${recNames}] (+$${proposal.cashOffer || 0})`);
-        }
-      } else if (decliner) {
-        GameMemory.recordDeclinedTrade(decliner, { givenTiles: [], receivedTiles: [], cashOffer: 0 });
-        logToBot(`[TRADE INTEL] Trade declined by ${decliner}`);
-      }
-      GameMemory.markLogProcessed(line);
-      return;
-    }
-    if (/traded/i.test(line) || /accepted trade/i.test(line)) {
-      logToBot(`[TRADE INTEL] Deal executed: ${line}`);
-      GameMemory.markLogProcessed(line);
-      return;
-    }
-    const payMatch = /(.+?)\s+paid\s+\$?(\d+)\s+to\s+(.+)/i.exec(line);
-    if (payMatch) {
-      const payer = matchPlayerName(payMatch[1]);
-      const amount = parseInt(payMatch[2], 10);
-      const recipient = matchPlayerName(payMatch[3]);
-      if (payer && GameMemory.players[payer] && typeof GameMemory.players[payer].cash === "number") {
-        GameMemory.players[payer].cash -= amount;
-      }
-      if (recipient && GameMemory.players[recipient] && typeof GameMemory.players[recipient].cash === "number") {
-        GameMemory.players[recipient].cash += amount;
-      }
-      logToBot(`[CASH FLOW] ${payer} paid $${amount} to ${recipient}`);
-      GameMemory.markLogProcessed(line);
-      return;
-    }
-    const taxMatch = /(.+?)\s+paid\s+(?:a\s+)?\$?(\d+)\s+tax/i.exec(line);
-    if (taxMatch) {
-      const player = matchPlayerName(taxMatch[1]);
-      const taxAmount = parseInt(taxMatch[2], 10);
-      const isMe = GameMemory.isMe(player);
-      const taxTileId = taxAmount >= 150 ? 4 : 38;
-      if (isMe) {
-        GameMemory.myPos = taxTileId;
-        logToBot(`[TAX] Paid $${taxAmount} tax (Tile #${taxTileId})`);
-      } else if (player && GameMemory.players[player]) {
-        GameMemory.players[player].pos = taxTileId;
-        if (typeof GameMemory.players[player].cash === "number") {
-          GameMemory.players[player].cash -= taxAmount;
-        }
-        logToBot(`[TAX] ${player} paid $${taxAmount} tax (Tile #${taxTileId})`);
-      }
-      GameMemory.markLogProcessed(line);
-      return;
-    }
-    if (line.includes("passed through Start")) {
-      const playerPart = line.split(/passed through Start/i)[0].trim();
-      const player = matchPlayerName(playerPart);
-      const isMe = GameMemory.isMe(player);
-      if (isMe) {
-        logToBot(`[START PASS] I passed through Start and received $200`);
-      } else if (player && GameMemory.players[player]) {
-        if (typeof GameMemory.players[player].cash === "number") {
-          GameMemory.players[player].cash += 200;
-        }
-        logToBot(`[START PASS] ${player} passed through Start and received $200`);
-      }
-      GameMemory.markLogProcessed(line);
-      return;
-    }
-    if (/won.*in auction|bought.*in auction/i.test(line)) {
-      for (const tile of BOARD_TILES) {
-        if (tile.group && new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
-          const buyerPart = line.split(/won|bought/i)[0].trim();
-          const cleanBuyer = matchPlayerName(buyerPart);
-          if (cleanBuyer && GameMemory.ownership[tile.id]) {
-            GameMemory.ownership[tile.id].owner = cleanBuyer;
-            if (!GameMemory.isMe(cleanBuyer) && GameMemory.players[cleanBuyer]) {
-              GameMemory.players[cleanBuyer].pos = tile.id;
-            }
-            logToBot(`[MARKET INTEL] ${cleanBuyer} won ${tile.name} at auction!`);
-            GameMemory.markLogProcessed(line);
-            return;
-          }
-        }
-      }
-    }
-    if (/got into prison|went to prison|sent to prison/i.test(line)) {
-      const playerPart = line.split(/got into prison|went to prison|sent to prison/i)[0].trim();
-      const cleanPlayer = matchPlayerName(playerPart);
-      const isMe = GameMemory.isMe(cleanPlayer);
-      logToBot(`[PRISON EVENT] \u{1F694} ${isMe ? "I was" : cleanPlayer + " was"} sent to prison!`);
-      if (isMe) {
-        GameMemory.myPos = 10;
-        GameMemory.inJail = true;
-      } else if (cleanPlayer && GameMemory.players[cleanPlayer]) {
-        GameMemory.players[cleanPlayer].pos = 10;
-        GameMemory.players[cleanPlayer].inJail = true;
-      }
-      GameMemory.markLogProcessed(line);
-      return;
-    }
-    if (/got free|left prison|paid.*jail|paid.*bail|used a Pardon/i.test(line)) {
-      const playerPart = line.split(/got free|left prison|paid|used a Pardon/i)[0].trim();
-      const cleanPlayer = matchPlayerName(playerPart);
-      const isMe = GameMemory.isMe(cleanPlayer);
-      logToBot(`[PRISON EVENT] \u{1F513} ${isMe ? "I got" : cleanPlayer + " got"} released from prison.`);
-      if (isMe) {
-        GameMemory.inJail = false;
-      } else if (cleanPlayer && GameMemory.players[cleanPlayer]) {
-        GameMemory.players[cleanPlayer].inJail = false;
-      }
-      GameMemory.markLogProcessed(line);
-      return;
-    }
-    const rollMatch = /^(.+?)\s+rolled\s+(\d+)/i.exec(line);
-    if (rollMatch) {
-      const player = matchPlayerName(rollMatch[1]);
-      const rollVal = parseInt(rollMatch[2], 10);
-      if (!isNaN(rollVal) && rollVal >= 2 && rollVal <= 12) {
-        const isMe = GameMemory.isMe(player);
-        logToBot(`[DICE EVENT] \u{1F3B2} ${isMe ? "I" : player} rolled ${rollVal}`);
-        if (isMe) {
-          if (!GameMemory.inJail) {
-            GameMemory.myPos = (GameMemory.myPos + rollVal) % 40;
-          }
-        } else if (player && GameMemory.players[player]) {
-          if (!GameMemory.players[player].inJail) {
-            GameMemory.players[player].pos = ((GameMemory.players[player].pos || 0) + rollVal) % 40;
-          }
-        }
-      }
-      GameMemory.markLogProcessed(line);
-      return;
-    }
-    if (line.includes("landed on")) {
-      for (const tile of BOARD_TILES) {
-        if (new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
-          const playerPart = line.split(/landed on/i)[0].trim();
-          const cleanPlayer = matchPlayerName(playerPart);
-          const isMe = GameMemory.isMe(cleanPlayer);
-          const priceStr = tile.price ? ` ($${tile.price})` : "";
-          if (isMe) {
-            GameMemory.myPos = tile.id;
-            logToBot(`[LANDING] \u{1F4CD} I landed on ${tile.name} (Tile #${tile.id}, ${tile.group || tile.type}${priceStr})`);
-          } else if (cleanPlayer && GameMemory.players[cleanPlayer]) {
-            GameMemory.players[cleanPlayer].pos = tile.id;
-            logToBot(`[LANDING] \u{1F4CD} ${cleanPlayer} landed on ${tile.name} (Tile #${tile.id})`);
-          } else if (cleanPlayer) {
-            logToBot(`[LANDING] \u{1F4CD} ${cleanPlayer} landed on ${tile.name} (Tile #${tile.id})`);
-          }
-          GameMemory.markLogProcessed(line);
-          return;
-        }
-      }
-    }
-    if (line.includes("bought a house in")) {
-      for (const tile of BOARD_TILES) {
-        if (tile.group && new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
-          const buyerPart = line.split(/bought a house in/i)[0].trim();
-          const cleanBuyer = matchPlayerName(buyerPart);
-          if (cleanBuyer && GameMemory.ownership[tile.id]) {
-            GameMemory.ownership[tile.id].owner = cleanBuyer;
-            GameMemory.ownership[tile.id].houses = Math.min(5, (GameMemory.ownership[tile.id].houses || 0) + 1);
-            const isMe = GameMemory.isMe(cleanBuyer);
-            if (isMe) GameMemory.myPos = tile.id;
-            else if (GameMemory.players[cleanBuyer]) GameMemory.players[cleanBuyer].pos = tile.id;
-            logToBot(`[BUILD EVENT] \u{1F3E0} ${isMe ? "I" : cleanBuyer} bought a house in ${tile.name} (${GameMemory.ownership[tile.id].houses}/5)`);
-            GameMemory.markLogProcessed(line);
-            return;
-          }
-        }
-      }
-    }
-    if (line.includes("bought a hotel in")) {
-      for (const tile of BOARD_TILES) {
-        if (tile.group && new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
-          const buyerPart = line.split(/bought a hotel in/i)[0].trim();
-          const cleanBuyer = matchPlayerName(buyerPart);
-          if (cleanBuyer && GameMemory.ownership[tile.id]) {
-            GameMemory.ownership[tile.id].owner = cleanBuyer;
-            GameMemory.ownership[tile.id].houses = 5;
-            const isMe = GameMemory.isMe(cleanBuyer);
-            if (isMe) GameMemory.myPos = tile.id;
-            else if (GameMemory.players[cleanBuyer]) GameMemory.players[cleanBuyer].pos = tile.id;
-            logToBot(`[BUILD EVENT] \u{1F3E8} ${isMe ? "I" : cleanBuyer} bought a HOTEL in ${tile.name}!`);
-            GameMemory.markLogProcessed(line);
-            return;
-          }
-        }
-      }
-    }
-    if (line.includes("bought") && !line.includes("house") && !line.includes("hotel")) {
-      for (const tile of BOARD_TILES) {
-        if (tile.group && new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
-          const buyerPart = line.split(/bought/i)[0].trim();
-          const cleanBuyer = matchPlayerName(buyerPart);
-          if (cleanBuyer && GameMemory.ownership[tile.id]) {
-            GameMemory.ownership[tile.id].owner = cleanBuyer;
-            const isMe = GameMemory.isMe(cleanBuyer);
-            if (isMe) {
-              GameMemory.myPos = tile.id;
-              logToBot(`[PURCHASE EVENT] \u{1F3F7}\uFE0F I purchased ${tile.name} (${tile.group}, $${tile.price})!`);
-            } else {
-              GameMemory.players[cleanBuyer] = GameMemory.players[cleanBuyer] || { name: cleanBuyer, cash: 1500, pos: tile.id, isMe: false };
-              GameMemory.players[cleanBuyer].pos = tile.id;
-              logToBot(`[PURCHASE EVENT] \u{1F3F7}\uFE0F ${cleanBuyer} bought ${tile.name} (${tile.group}, $${tile.price}) -> Tile #${tile.id}`);
-            }
-            GameMemory.markLogProcessed(line);
-            return;
-          }
-        }
-      }
-    }
-    let m = /^(.+?)\s+bankrupted/i.exec(line);
-    if (m) {
-      const bankruptPlayer = m[1].replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, "").trim();
-      logToBot(`[BANKRUPTCY] \u26A0\uFE0F ${bankruptPlayer} went bankrupt! Assets returned to bank.`);
-      for (const id of Object.keys(GameMemory.ownership)) {
-        if (GameMemory.ownership[id].owner === bankruptPlayer) {
-          GameMemory.ownership[id].owner = null;
-          GameMemory.ownership[id].houses = 0;
-          GameMemory.ownership[id].mortgaged = false;
-        }
-      }
-      GameMemory.markLogProcessed(line);
-      return;
-    }
-    if (line.includes("mortgaged")) {
-      for (const tile of BOARD_TILES) {
-        if (tile.group && new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
-          if (GameMemory.ownership[tile.id]) {
-            const isUn = line.includes("unmortgaged");
-            GameMemory.ownership[tile.id].mortgaged = !isUn;
-            logToBot(`[MORTGAGE EVENT] \u{1F3E6} ${tile.name} was ${isUn ? "unmortgaged" : "mortgaged"}.`);
-            GameMemory.markLogProcessed(line);
-            return;
-          }
-        }
-      }
-    }
-    if (line.includes("traded")) {
-      for (const tile of BOARD_TILES) {
-        if (tile.group && new RegExp(`\\b${tile.name}\\b`, "i").test(line)) {
-          const matchTo = /to\s+([A-Za-z0-9_-]+)/i.exec(line);
-          if (matchTo && GameMemory.ownership[tile.id]) {
-            GameMemory.ownership[tile.id].owner = matchTo[1].trim();
-            logToBot(`[TRADE EVENT] \u{1F91D} ${tile.name} transferred to ${matchTo[1].trim()}`);
-            GameMemory.markLogProcessed(line);
-            return;
-          }
-        }
-      }
-    }
-    if (/drew a card|got a card|surprise|treasure|chance/i.test(line)) {
-      logToBot(`[CARD EVENT] \u{1F0CF} ${line}`);
-      GameMemory.markLogProcessed(line);
-      return;
-    }
-    if (/tax|salary|bonus|reward|passed start|passed go/i.test(line)) {
-      logToBot(`[GAME EVENT] \u{1F514} ${line}`);
-      GameMemory.markLogProcessed(line);
-      return;
-    }
-  }
-  function syncTradeModalInventoriesFromDOM() {
-    const modal = document.querySelector('[role="dialog"], [class*="modal" i], [class*="trade" i]');
-    if (!modal) return;
-    const modalRect = modal.getBoundingClientRect();
-    if (modalRect.width < 100 || modalRect.height < 100) return;
-    const modalMidX = modalRect.left + modalRect.width / 2;
-    let leftPlayerName = null;
-    let rightPlayerName = null;
-    const headerCandidates = Array.from(modal.querySelectorAll("h1, h2, h3, h4, h5, div, span, strong, b, p")).filter((el) => {
-      const rect = el.getBoundingClientRect();
-      return rect.top < modalRect.top + modalRect.height * 0.4 && rect.height > 10;
-    });
-    for (const el of headerCandidates) {
-      const t = (el.innerText || "").trim();
-      if (t.length >= 2 && t.length <= 25 && !t.includes("$") && !t.toLowerCase().includes("trade") && !t.toLowerCase().includes("create") && !BOARD_LABELS_BLACKLIST.has(t.toLowerCase())) {
-        const rect = el.getBoundingClientRect();
-        const center = rect.left + rect.width / 2;
-        for (const pName of Object.keys(GameMemory.players)) {
-          if (t.toLowerCase().includes(pName.toLowerCase()) || pName.toLowerCase().includes(t.toLowerCase())) {
-            if (center < modalMidX && !leftPlayerName) leftPlayerName = pName;
-            else if (center >= modalMidX && !rightPlayerName) rightPlayerName = pName;
-          }
-        }
-        if (GameMemory.isMe(t)) {
-          if (center < modalMidX && !leftPlayerName) leftPlayerName = t;
-          else if (center >= modalMidX && !rightPlayerName) rightPlayerName = t;
-        }
-      }
-    }
-    if (!leftPlayerName && !rightPlayerName) return;
-    const cards = Array.from(modal.querySelectorAll('div, li, button, [class*="item" i], [class*="property" i], [class*="card" i]'));
-    for (const card of cards) {
-      const text = (card.innerText || "").trim();
-      if (!text || text.length > 60) continue;
-      for (const tile of BOARD_TILES) {
-        if (!tile.group) continue;
-        const tName = tile.name.toLowerCase();
-        if (text.toLowerCase().includes(tName)) {
-          const rect = card.getBoundingClientRect();
-          const center = rect.left + rect.width / 2;
-          const ownerName = center < modalMidX ? leftPlayerName : rightPlayerName;
-          if (ownerName && GameMemory.ownership[tile.id]) {
-            const isMe = GameMemory.isMe(ownerName);
-            GameMemory.ownership[tile.id].owner = isMe ? GameMemory.myName || "__ME__" : ownerName;
-            const houseMatch = /(?:x\s*|houses?\s*)(\d)/i.exec(text);
-            if (houseMatch) {
-              GameMemory.ownership[tile.id].houses = parseInt(houseMatch[1], 10);
-            } else if (/hotel/i.test(text)) {
-              GameMemory.ownership[tile.id].houses = 5;
-            }
-            const cardCls = (card.className?.baseVal !== void 0 ? card.className.baseVal : card.className || "").toString().toLowerCase();
-            const isMort = /mortgage/i.test(text) || cardCls.includes("mortgage");
-            if (isMort) {
-              GameMemory.ownership[tile.id].mortgaged = true;
-            }
-          }
-          break;
-        }
-      }
-    }
-  }
-  function scrapeTradeModalDOM() {
-    const modal = document.querySelector('[role="dialog"], [class*="modal" i], [class*="trade" i]');
-    if (!modal) {
-      return { partnerName: "Opponent", givenTiles: [], receivedTiles: [], givenCash: 0, receivedCash: 0 };
-    }
-    const modalRect = modal.getBoundingClientRect();
-    const modalMidX = modalRect.left + modalRect.width / 2;
-    let leftPlayerName = null;
-    let rightPlayerName = null;
-    const headerCandidates = Array.from(modal.querySelectorAll("h1, h2, h3, h4, h5, div, span, strong, b, p")).filter((el) => {
-      const rect = el.getBoundingClientRect();
-      return rect.top < modalRect.top + modalRect.height * 0.4 && rect.height > 10;
-    });
-    for (const el of headerCandidates) {
-      const t = (el.innerText || "").trim();
-      if (t.length >= 2 && t.length <= 25 && !t.includes("$") && !t.toLowerCase().includes("trade") && !t.toLowerCase().includes("create") && !BOARD_LABELS_BLACKLIST.has(t.toLowerCase())) {
-        const rect = el.getBoundingClientRect();
-        const center = rect.left + rect.width / 2;
-        for (const pName of Object.keys(GameMemory.players)) {
-          if (t.toLowerCase().includes(pName.toLowerCase()) || pName.toLowerCase().includes(t.toLowerCase())) {
-            if (center < modalMidX && !leftPlayerName) leftPlayerName = pName;
-            else if (center >= modalMidX && !rightPlayerName) rightPlayerName = pName;
-          }
-        }
-        if (GameMemory.isMe(t)) {
-          if (center < modalMidX && !leftPlayerName) leftPlayerName = t;
-          else if (center >= modalMidX && !rightPlayerName) rightPlayerName = t;
-        }
-      }
-    }
-    let meIsOnLeft = false;
-    let partnerName = "Opponent";
-    if (leftPlayerName && GameMemory.isMe(leftPlayerName)) {
-      meIsOnLeft = true;
-      partnerName = rightPlayerName || "Opponent";
-    } else if (rightPlayerName && GameMemory.isMe(rightPlayerName)) {
-      meIsOnLeft = false;
-      partnerName = leftPlayerName || "Opponent";
-    } else if (leftPlayerName && !GameMemory.isMe(leftPlayerName)) {
-      meIsOnLeft = false;
-      partnerName = leftPlayerName;
-    } else if (rightPlayerName && !GameMemory.isMe(rightPlayerName)) {
-      meIsOnLeft = true;
-      partnerName = rightPlayerName;
-    } else {
-      meIsOnLeft = false;
-      partnerName = "Opponent";
-    }
-    let givenCash = 0;
-    let receivedCash = 0;
-    const inputs = Array.from(modal.querySelectorAll('input[type="range"], input[type="number"], input'));
-    for (const input of inputs) {
-      const rect = input.getBoundingClientRect();
-      const center = rect.left + rect.width / 2;
-      const val = parseInt(input.value, 10) || 0;
-      if (center < modalMidX) {
-        if (meIsOnLeft) givenCash = val;
-        else receivedCash = val;
-      } else {
-        if (meIsOnLeft) receivedCash = val;
-        else givenCash = val;
-      }
-    }
-    if (givenCash === 0 && receivedCash === 0) {
-      const badges = Array.from(modal.querySelectorAll("div, span, button")).filter((el) => {
-        const t = (el.innerText || "").trim();
-        return /^\$?\d{1,5}\$?$/.test(t) && t.includes("$");
-      });
-      for (const badge of badges) {
-        const rect = badge.getBoundingClientRect();
-        const center = rect.left + rect.width / 2;
-        const val = parseInt((badge.innerText || "").replace(/\D/g, ""), 10) || 0;
-        if (center < modalMidX) {
-          if (meIsOnLeft && givenCash === 0) givenCash = val;
-          else if (!meIsOnLeft && receivedCash === 0) receivedCash = val;
-        } else {
-          if (meIsOnLeft && receivedCash === 0) receivedCash = val;
-          else if (!meIsOnLeft && givenCash === 0) givenCash = val;
-        }
-      }
-    }
-    const cards = Array.from(modal.querySelectorAll('div, li, button, [class*="item" i], [class*="property" i], [class*="card" i]'));
-    const matchedTileIds = /* @__PURE__ */ new Set();
-    const givenTiles = [];
-    const receivedTiles = [];
-    for (const card of cards) {
-      const cls = (card.className?.baseVal !== void 0 ? card.className.baseVal : card.className || "").toString().toLowerCase();
-      if (cls.includes("unselected") || cls.includes("inactive") || cls.includes("disabled")) continue;
-      const style = window.getComputedStyle(card);
-      if (parseFloat(style.opacity) < 0.65) continue;
-      const rawText = (card.innerText || "").trim();
-      if (!rawText || rawText.length > 50) continue;
-      const cleanText = rawText.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[^\w\s-]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
-      for (const tile of BOARD_TILES) {
-        if (!tile.group) continue;
-        if (matchedTileIds.has(tile.id)) continue;
-        const tName = tile.name.toLowerCase();
-        if (cleanText === tName || cleanText.startsWith(tName) || cleanText.endsWith(tName) || rawText.toLowerCase().includes(tName)) {
-          matchedTileIds.add(tile.id);
-          const cardRect = card.getBoundingClientRect();
-          const cardCenterX = cardRect.left + cardRect.width / 2;
-          const isLeftColumn = cardCenterX < modalMidX;
-          if (meIsOnLeft) {
-            if (isLeftColumn) givenTiles.push(tile);
-            else receivedTiles.push(tile);
-          } else {
-            if (isLeftColumn) receivedTiles.push(tile);
-            else givenTiles.push(tile);
-          }
-          break;
-        }
-      }
-    }
-    return {
-      partnerName,
-      givenTiles,
-      receivedTiles,
-      givenCash,
-      receivedCash
-    };
-  }
-
   // src/ui/hudPanel.js
   var HUDPanel = {
     elements: {},
@@ -4602,87 +2463,85 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
                 min-width: 310px; min-height: 380px;
                 max-width: 520px; max-height: 780px;
                 resize: both; overflow: hidden;
-                background: linear-gradient(165deg, rgba(13,10,26,0.96) 0%, rgba(20,13,40,0.98) 100%);
-                backdrop-filter: blur(20px) saturate(180%);
-                border: 1px solid rgba(139,92,246,0.3);
-                border-radius: 14px;
-                box-shadow: 0 10px 40px rgba(0,0,0,0.7), 0 0 50px rgba(109,40,217,0.15), inset 0 1px 0 rgba(255,255,255,0.06);
-                color: #f3e8ff;
-                font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+                background: linear-gradient(180deg, rgba(24, 19, 44, 0.96) 0%, rgba(18, 14, 33, 0.98) 100%);
+                backdrop-filter: blur(24px) saturate(180%);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 16px;
+                box-shadow: 0 16px 48px rgba(0, 0, 0, 0.7), 0 0 1px rgba(255, 255, 255, 0.12);
+                color: #f1f0f7;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
                 font-size: 11px; z-index: 9999999;
                 display: flex; flex-direction: column; user-select: none;
             }
             .rubot-header {
                 display: flex; justify-content: space-between; align-items: center;
-                padding: 10px 14px;
-                background: linear-gradient(90deg, rgba(109,40,217,0.5) 0%, rgba(76,29,149,0.4) 100%);
-                border-bottom: 1px solid rgba(139,92,246,0.2);
-                border-radius: 14px 14px 0 0; cursor: grab; flex-shrink: 0;
+                padding: 12px 16px;
+                background: rgba(30, 24, 54, 0.85);
+                border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 16px 16px 0 0; cursor: grab; flex-shrink: 0;
             }
             .rubot-title-wrap { display: flex; align-items: center; gap: 8px; }
             .rubot-logo {
-                width: 24px; height: 24px; border-radius: 6px;
-                background: linear-gradient(135deg, #8b5cf6, #6d28d9);
+                width: 24px; height: 24px; border-radius: 7px;
+                background: #7c3aed;
                 display: flex; align-items: center; justify-content: center;
-                font-size: 12px; flex-shrink: 0;
+                font-size: 12px; flex-shrink: 0; box-shadow: 0 2px 8px rgba(124,58,237,0.4);
             }
-            .rubot-title-main { font-size: 11.5px; font-weight: 800; color: #fff; letter-spacing: 1px; }
+            .rubot-title-main { font-size: 12px; font-weight: 800; color: #fff; letter-spacing: 0.8px; }
             .rubot-badge {
-                font-size: 8px; font-weight: 700; padding: 2px 7px;
-                border-radius: 12px; letter-spacing: 0.6px;
-                background: rgba(255,255,255,0.08); color: rgba(196,181,253,0.8);
-                border: 1px solid rgba(139,92,246,0.2); transition: all 0.3s ease;
+                font-size: 8.5px; font-weight: 700; padding: 3px 8px;
+                border-radius: 9999px; letter-spacing: 0.5px;
+                background: rgba(255,255,255,0.06); color: #9ca3af;
+                border: 1px solid rgba(255,255,255,0.08); transition: all 0.25s ease;
             }
             .rubot-badge.active {
-                background: #10b981; color: #fff; border-color: transparent;
-                box-shadow: 0 0 10px rgba(16,185,129,0.5);
+                background: rgba(16,185,129,0.18); color: #34d399;
+                border-color: rgba(16,185,129,0.35); box-shadow: 0 0 10px rgba(16,185,129,0.25);
             }
             .rubot-top-controls {
-                padding: 10px 12px 6px; display: flex; flex-direction: column; gap: 8px; flex-shrink: 0;
+                padding: 10px 14px 6px; display: flex; flex-direction: column; gap: 8px; flex-shrink: 0;
             }
             .rubot-master-btn {
-                background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%);
-                border: none; color: #fff; padding: 9px 14px;
-                font-family: 'Inter', sans-serif; font-weight: 800; font-size: 11px;
-                letter-spacing: 1px; border-radius: 8px; cursor: pointer;
-                box-shadow: 0 3px 12px rgba(109,40,217,0.4); transition: all 0.2s ease;
+                background: #7c3aed; border: none; color: #fff; padding: 10px 14px;
+                font-family: inherit; font-weight: 700; font-size: 11.5px;
+                letter-spacing: 0.5px; border-radius: 10px; cursor: pointer;
+                box-shadow: 0 4px 14px rgba(124,58,237,0.35); transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
             }
-            .rubot-master-btn:hover { box-shadow: 0 4px 16px rgba(109,40,217,0.6); transform: translateY(-1px); }
+            .rubot-master-btn:hover { background: #8b5cf6; box-shadow: 0 6px 20px rgba(124,58,237,0.5); transform: translateY(-1px); }
             .rubot-master-btn.active {
-                background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-                box-shadow: 0 3px 12px rgba(16,185,129,0.45);
+                background: #10b981; box-shadow: 0 4px 14px rgba(16,185,129,0.35);
             }
+            .rubot-master-btn.active:hover { background: #34d399; }
             .rubot-mode-wrap {
-                display: flex; background: rgba(0,0,0,0.3);
-                border-radius: 8px; padding: 2px;
-                border: 1px solid rgba(139,92,246,0.18); gap: 2px;
+                display: flex; background: rgba(0,0,0,0.35);
+                border-radius: 9999px; padding: 3px;
+                border: 1px solid rgba(255,255,255,0.05); gap: 2px;
             }
             .rubot-mode-btn {
                 flex: 1; background: transparent; border: none;
-                color: rgba(196,181,253,0.6); font-family: 'Inter', sans-serif;
-                font-weight: 700; font-size: 9.5px; padding: 5px 4px;
-                border-radius: 6px; cursor: pointer; transition: all 0.15s ease;
+                color: #9ca3af; font-family: inherit;
+                font-weight: 700; font-size: 9.5px; padding: 6px 6px;
+                border-radius: 9999px; cursor: pointer; transition: all 0.15s ease;
             }
             .rubot-mode-btn.active {
-                background: linear-gradient(135deg, #7c3aed, #6d28d9); color: #fff;
-                box-shadow: 0 1px 6px rgba(109,40,217,0.4);
+                background: #7c3aed; color: #fff;
+                box-shadow: 0 2px 8px rgba(124,58,237,0.35);
             }
             .rubot-tab-bar {
-                display: flex; background: rgba(0,0,0,0.25);
-                border-bottom: 1px solid rgba(139,92,246,0.18);
-                padding: 0 10px; gap: 4px; flex-shrink: 0;
+                display: flex; background: transparent;
+                border-bottom: 1px solid rgba(255,255,255,0.06);
+                padding: 0 12px; gap: 4px; flex-shrink: 0;
             }
             .rubot-tab-btn {
                 background: transparent; border: none;
-                color: rgba(196,181,253,0.6); font-family: 'Inter', sans-serif;
-                font-weight: 700; font-size: 10px; padding: 8px 10px;
+                color: #8b81a8; font-family: inherit;
+                font-weight: 700; font-size: 10.5px; padding: 9px 11px;
                 cursor: pointer; border-bottom: 2px solid transparent;
                 transition: all 0.2s; display: flex; align-items: center; gap: 5px;
             }
-            .rubot-tab-btn:hover { color: #e9d5ff; }
+            .rubot-tab-btn:hover { color: #fff; }
             .rubot-tab-btn.active {
                 color: #fff; border-bottom-color: #8b5cf6;
-                text-shadow: 0 0 10px rgba(167,139,250,0.5);
             }
             .rubot-tab-content {
                 padding: 10px 12px; display: flex; flex-direction: column;
@@ -4694,106 +2553,107 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
             /* Ollama Tab */
             .rubot-status-card {
                 display: flex; align-items: center; justify-content: space-between;
-                padding: 7px 10px; border-radius: 8px;
-                background: rgba(255,255,255,0.02); border: 1px solid rgba(139,92,246,0.15);
+                padding: 8px 11px; border-radius: 10px;
+                background: rgba(30, 24, 54, 0.55); border: 1px solid rgba(255,255,255,0.06);
             }
             .rubot-status-indicator { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 10px; }
             .rubot-status-dot { width: 7px; height: 7px; border-radius: 50%; background: #9ca3af; }
             .rubot-status-dot.online { background: #34d399; box-shadow: 0 0 8px rgba(52,211,153,0.8); }
             .rubot-status-dot.offline { background: #ef4444; }
             .rubot-field-group { display: flex; flex-direction: column; gap: 4px; }
-            .rubot-field-label { font-size: 9px; font-weight: 600; color: rgba(167,139,250,0.7); text-transform: uppercase; letter-spacing: 0.5px; }
+            .rubot-field-label { font-size: 9px; font-weight: 700; color: #a78bfa; text-transform: uppercase; letter-spacing: 0.5px; }
             .rubot-input {
-                background: rgba(0,0,0,0.35); border: 1px solid rgba(139,92,246,0.22);
-                border-radius: 6px; color: #fff; padding: 6px 8px;
-                font-family: 'JetBrains Mono', monospace; font-size: 10px; outline: none;
+                background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 8px; color: #fff; padding: 7px 10px;
+                font-family: inherit; font-size: 10px; outline: none;
             }
-            .rubot-input:focus { border-color: rgba(139,92,246,0.6); }
+            .rubot-input:focus { border-color: #8b5cf6; }
             .rubot-select {
-                background: #191230; border: 1px solid rgba(139,92,246,0.25);
-                border-radius: 6px; color: #fff; padding: 6px 8px;
-                font-family: 'Inter', sans-serif; font-size: 10px; outline: none;
+                background: #191428; border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 8px; color: #fff; padding: 7px 10px;
+                font-family: inherit; font-size: 10px; outline: none;
             }
             .rubot-btn-test {
-                background: linear-gradient(135deg, rgba(124,58,237,0.3) 0%, rgba(109,40,217,0.4) 100%);
-                border: 1px solid rgba(139,92,246,0.4); color: #e9d5ff;
-                padding: 7px; border-radius: 7px; font-weight: 700; font-size: 10px;
+                background: #7c3aed;
+                border: none; color: #fff;
+                padding: 8px; border-radius: 8px; font-weight: 700; font-size: 10.5px;
                 cursor: pointer; transition: all 0.2s; text-align: center; margin-top: 2px;
             }
-            .rubot-btn-test:hover { background: rgba(139,92,246,0.45); color: #fff; }
+            .rubot-btn-test:hover { background: #8b5cf6; }
             .rubot-info-box {
-                font-size: 9.5px; color: rgba(196,181,253,0.65); line-height: 1.4;
-                padding: 6px 8px; border-radius: 6px; background: rgba(139,92,246,0.06);
-                border: 1px dashed rgba(139,92,246,0.2);
+                font-size: 9.5px; color: #a5b4fc; line-height: 1.4;
+                padding: 7px 10px; border-radius: 8px; background: rgba(124,58,237,0.08);
+                border: 1px solid rgba(139,92,246,0.18);
             }
 
             /* Toggles Tab */
             .rubot-toggles-list { display: flex; flex-direction: column; gap: 5px; }
             .rubot-toggle-item {
                 display: flex; align-items: center; justify-content: space-between;
-                padding: 6px 9px; background: rgba(255,255,255,0.02);
-                border: 1px solid rgba(139,92,246,0.12); border-radius: 8px;
+                padding: 8px 11px; background: rgba(30, 24, 54, 0.55);
+                border: 1px solid rgba(255,255,255,0.06); border-radius: 10px;
                 cursor: pointer; transition: border-color 0.2s;
             }
-            .rubot-toggle-item:hover { border-color: rgba(139,92,246,0.3); }
-            .rubot-toggle-info { display: flex; flex-direction: column; gap: 1px; }
-            .rubot-toggle-name { font-size: 10px; font-weight: 700; color: #e9d5ff; }
-            .rubot-toggle-desc { font-size: 8.5px; color: rgba(196,181,253,0.55); }
-            .rubot-toggle-pill { position: relative; width: 30px; height: 16px; flex-shrink: 0; }
+            .rubot-toggle-item:hover { border-color: rgba(139,92,246,0.35); }
+            .rubot-toggle-info { display: flex; flex-direction: column; gap: 2px; }
+            .rubot-toggle-name { font-size: 10.5px; font-weight: 700; color: #fff; }
+            .rubot-toggle-desc { font-size: 9px; color: #8b81a8; }
+            .rubot-toggle-pill { position: relative; width: 32px; height: 18px; flex-shrink: 0; }
             .rubot-toggle-pill input { opacity: 0; width: 0; height: 0; position: absolute; }
             .rubot-pill-track {
                 position: absolute; inset: 0; background: rgba(255,255,255,0.1);
-                border-radius: 20px; border: 1px solid rgba(139,92,246,0.3);
+                border-radius: 20px; border: 1px solid rgba(255,255,255,0.12);
                 transition: all 0.2s ease;
             }
             .rubot-pill-track::after {
                 content: ''; position: absolute; left: 2px; top: 50%; transform: translateY(-50%);
-                width: 10px; height: 10px; border-radius: 50%;
-                background: rgba(196,181,253,0.5); transition: all 0.2s ease;
+                width: 12px; height: 12px; border-radius: 50%;
+                background: #9ca3af; transition: all 0.2s ease;
             }
             .rubot-toggle-pill input:checked + .rubot-pill-track {
-                background: #8b5cf6; border-color: #a78bfa;
+                background: #7c3aed; border-color: #8b5cf6;
             }
             .rubot-toggle-pill input:checked + .rubot-pill-track::after {
-                left: calc(100% - 12px); background: #fff;
+                left: calc(100% - 14px); background: #fff;
             }
 
             /* Intel / Memory Tab */
-            .rubot-intel-page { display: flex; flex-direction: column; gap: 6px; flex: 1; }
+            .rubot-intel-page { display: flex; flex-direction: column; gap: 7px; flex: 1; }
             .rubot-intel-card {
-                background: rgba(255,255,255,0.03); border: 1px solid rgba(139,92,246,0.18);
-                border-radius: 8px; padding: 7px 9px; display: flex; flex-direction: column; gap: 3px;
+                background: rgba(30, 24, 54, 0.55); border: 1px solid rgba(255,255,255,0.06);
+                border-radius: 12px; padding: 9px 12px; display: flex; flex-direction: column; gap: 4px;
             }
-            .rubot-intel-title { font-size: 9.5px; font-weight: 700; color: #c4b5fd; display: flex; justify-content: space-between; align-items: center; }
-            .rubot-intel-content { font-size: 8.5px; color: rgba(196,181,253,0.85); line-height: 1.35; word-break: break-word; }
-            .rubot-intel-badge { font-size: 8px; font-weight: 700; padding: 1px 5px; border-radius: 4px; display: inline-block; }
-            .rubot-intel-badge.green { background: rgba(16,185,129,0.2); color: #34d399; border: 1px solid rgba(16,185,129,0.4); }
-            .rubot-intel-badge.amber { background: rgba(245,158,11,0.2); color: #fbbf24; border: 1px solid rgba(245,158,11,0.4); }
-            .rubot-intel-badge.red { background: rgba(239,68,68,0.2); color: #f87171; border: 1px solid rgba(239,68,68,0.4); }
+            .rubot-intel-title { font-size: 10.5px; font-weight: 700; color: #e5e7eb; display: flex; justify-content: space-between; align-items: center; }
+            .rubot-intel-content { font-size: 9.5px; color: #d1d5db; line-height: 1.4; word-break: break-word; }
+            .rubot-intel-badge { font-size: 8.5px; font-weight: 700; padding: 2px 7px; border-radius: 6px; display: inline-block; }
+            .rubot-intel-badge.green { background: rgba(16,185,129,0.15); color: #34d399; border: 1px solid rgba(16,185,129,0.3); }
+            .rubot-intel-badge.amber { background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3); }
+            .rubot-intel-badge.red { background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); }
+            .rubot-intel-badge.violet { background: rgba(124,58,237,0.15); color: #c4b5fd; border: 1px solid rgba(124,58,237,0.3); }
 
             /* Activity Log Tab */
             .rubot-log-page { display: flex; flex-direction: column; height: 100%; flex: 1; }
             .rubot-log-toolbar {
                 display: flex; justify-content: space-between; align-items: center;
-                padding-bottom: 5px; border-bottom: 1px solid rgba(139,92,246,0.12); margin-bottom: 6px;
+                padding-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,0.06); margin-bottom: 6px;
             }
-            .rubot-log-title { font-size: 9px; font-weight: 700; color: rgba(167,139,250,0.7); text-transform: uppercase; }
+            .rubot-log-title { font-size: 9.5px; font-weight: 700; color: #8b81a8; text-transform: uppercase; }
             .rubot-btn-clear {
-                background: transparent; border: 1px solid rgba(139,92,246,0.25);
-                color: rgba(196,181,253,0.7); padding: 2px 7px; border-radius: 5px;
-                font-size: 8.5px; cursor: pointer; transition: all 0.15s;
+                background: transparent; border: 1px solid rgba(255,255,255,0.1);
+                color: #9ca3af; padding: 3px 8px; border-radius: 6px;
+                font-size: 9px; cursor: pointer; transition: all 0.15s;
             }
-            .rubot-btn-clear:hover { background: rgba(139,92,246,0.2); color: #fff; }
+            .rubot-btn-clear:hover { background: rgba(255,255,255,0.08); color: #fff; }
             .rubot-terminal {
-                flex: 1; overflow-y: auto; padding: 6px 8px;
-                background: rgba(0,0,0,0.4); border: 1px solid rgba(139,92,246,0.15);
-                border-radius: 8px; font-family: 'JetBrains Mono', Consolas, monospace;
-                font-size: 9.5px; color: rgba(196,181,253,0.8);
-                display: flex; flex-direction: column-reverse; gap: 2px;
+                flex: 1; overflow-y: auto; padding: 7px 9px;
+                background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.06);
+                border-radius: 10px; font-family: 'JetBrains Mono', Consolas, monospace;
+                font-size: 9.5px; color: #c4b5fd;
+                display: flex; flex-direction: column-reverse; gap: 3px;
                 scrollbar-width: thin; scrollbar-color: rgba(139,92,246,0.3) transparent;
             }
             .log-line { display: flex; gap: 6px; line-height: 1.35; word-break: break-word; }
-            .log-ts { color: rgba(139,92,246,0.6); flex-shrink: 0; font-size: 8.5px; }
+            .log-ts { color: #8b81a8; flex-shrink: 0; font-size: 8.5px; }
             .log-msg { flex: 1; }
             .log-line.green .log-msg { color: #34d399; }
             .log-line.violet .log-msg { color: #c084fc; }
@@ -4802,20 +2662,20 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
 
             /* Advisor Box Overlay */
             .rubot-advisor-box {
-                background: linear-gradient(135deg, rgba(124,58,237,0.2) 0%, rgba(76,29,149,0.25) 100%);
-                border: 1px solid rgba(167,139,250,0.5); border-radius: 8px;
-                padding: 9px 10px; display: none; flex-direction: column; gap: 7px; margin-bottom: 6px;
+                background: rgba(30, 24, 54, 0.85);
+                border: 1px solid rgba(139,92,246,0.4); border-radius: 10px;
+                padding: 10px 12px; display: none; flex-direction: column; gap: 7px; margin-bottom: 6px;
             }
-            .rubot-adv-title { font-weight: 700; font-size: 10px; color: #e9d5ff; }
-            .rubot-adv-desc { font-size: 9.5px; color: #ddd6fe; line-height: 1.35; }
+            .rubot-adv-title { font-weight: 700; font-size: 10.5px; color: #fff; }
+            .rubot-adv-desc { font-size: 9.5px; color: #d1d5db; line-height: 1.35; }
             .rubot-adv-btns { display: flex; gap: 6px; }
             .rubot-adv-btn {
-                flex: 1; padding: 6px; border: none; border-radius: 6px;
-                font-family: 'Inter', sans-serif; font-weight: 700; font-size: 10px;
+                flex: 1; padding: 7px; border: none; border-radius: 8px;
+                font-family: inherit; font-weight: 700; font-size: 10.5px;
                 cursor: pointer; transition: all 0.15s ease;
             }
             .rubot-adv-btn.exec { background: #10b981; color: #fff; }
-            .rubot-adv-btn.skip { background: rgba(255,255,255,0.08); color: #c4b5fd; border: 1px solid rgba(139,92,246,0.2); }
+            .rubot-adv-btn.skip { background: rgba(255,255,255,0.08); color: #c4b5fd; border: 1px solid rgba(255,255,255,0.1); }
         `;
       document.head.appendChild(style);
       const panel = document.createElement("div");
@@ -4823,7 +2683,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       panel.innerHTML = `
             <div class="rubot-header" id="rubot-hud-drag">
                 <div class="rubot-title-wrap">
-                    <div class="rubot-logo">\u{1F3B2}</div>
+                    <div class="rubot-logo" id="rubot-logo-btn" title="Click to force full state resync" style="cursor: pointer;">\u{1F3B2}</div>
                     <span class="rubot-title-main">RICHUP BOT</span>
                 </div>
                 <div class="rubot-badge" id="rubot-badge-status">STANDBY</div>
@@ -5013,8 +2873,15 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         hostInput: document.getElementById("rubot-host-ollama"),
         selectModel: document.getElementById("rubot-select-model"),
         customModel: document.getElementById("rubot-custom-model"),
-        btnPing: document.getElementById("rubot-btn-ping")
+        btnPing: document.getElementById("rubot-btn-ping"),
+        logoBtn: document.getElementById("rubot-logo-btn")
       };
+      if (this.elements.logoBtn) {
+        this.elements.logoBtn.addEventListener("click", () => {
+          requestFullStateResync();
+          this.logTerminal("\u{1F504} Requested full authoritative game state resync from server!");
+        });
+      }
       this.elements.masterBtn.addEventListener("click", onToggleMaster);
       this.elements.modeAuto.addEventListener("click", () => {
         CONFIG.ADVISOR_MODE = false;
@@ -5315,15 +3182,18 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
             <div class="rubot-intel-card">
                 <div class="rubot-intel-title">
                     <span>\u{1F451} ME (${myName})</span>
-                    <span class="rubot-intel-badge green">$${myCash}</span>
+                    <div style="display:flex;gap:4px;align-items:center;">
+                        <span class="rubot-intel-badge violet">Tile #${GameMemory.myPos || 0}</span>
+                        <span class="rubot-intel-badge green">$${myCash}</span>
+                    </div>
                 </div>
-                <div class="rubot-intel-content">
+                <div class="rubot-intel-content" style="margin-top:2px;">
                     <b>Properties (${myTiles.length}):</b> ${myTiles.length > 0 ? myTiles.map((t) => {
         const h = GameMemory.ownership[t.id]?.houses || 0;
         const hStr = h === 5 ? " [\u{1F3E8}]" : h > 0 ? ` [\u{1F3E0}x${h}]` : "";
         return `${t.name}${hStr}`;
-      }).join(", ") : "None yet"}<br>
-                    <b>Monopolies:</b> ${myMonopolies.length > 0 ? myMonopolies.map((m) => `<span class="rubot-intel-badge green">${m}</span>`).join(" ") : '<span style="color:rgba(196,181,253,0.5)">None</span>'}
+      }).join(", ") : '<span style="color:#6b7280">None yet</span>'}<br>
+                    <b>Monopolies:</b> ${myMonopolies.length > 0 ? myMonopolies.map((m) => `<span class="rubot-intel-badge green">${m}</span>`).join(" ") : '<span style="color:#6b7280">None</span>'}
                 </div>
             </div>
 
@@ -5336,19 +3206,27 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         `;
       const oppEntries = Object.entries(oppData);
       if (oppEntries.length === 0) {
-        html += `<span style="color:rgba(196,181,253,0.5)">Auto-scanning scoreboard...</span>`;
+        html += `<span style="color:#6b7280; font-style:italic;">Scanning scoreboard...</span>`;
       } else {
         for (const [pName, data] of oppEntries) {
           const hungryStr = data.hungrySets.length > 0 ? data.hungrySets.map((h) => `<span class="rubot-intel-badge red">${h.group} ${h.ownedCount}/${h.total}</span>`).join(" ") : "";
-          const propStr = data.ownedTiles.length > 0 ? data.ownedTiles.map((t) => t.name).join(", ") : "None yet";
+          const propStr = data.ownedTiles.length > 0 ? data.ownedTiles.map((t) => t.name).join(", ") : '<span style="color:#6b7280">None yet</span>';
           const declCount = typeof GameMemory.getDeclinedCountForPlayer === "function" ? GameMemory.getDeclinedCountForPlayer(pName) : 0;
           const declBadge = declCount > 0 ? `<span class="rubot-intel-badge red">${declCount} Declined</span>` : "";
           const pos = GameMemory.players[pName]?.pos;
           const posStr = typeof pos === "number" ? `Tile #${pos}` : "Tile #0";
           html += `
-                    <div style="margin-top: 4px; padding-top: 4px; border-top: 1px solid rgba(139,92,246,0.12);">
-                        <b>${pName}:</b> <span class="rubot-intel-badge green">$${data.cash}</span> <span class="rubot-intel-badge">${posStr}</span> ${hungryStr} ${declBadge}<br>
-                        <span style="color: rgba(196,181,253,0.7);">${propStr}</span>
+                    <div style="margin-top: 5px; padding-top: 5px; border-top: 1px solid rgba(255,255,255,0.06);">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <span style="font-weight:700; color:#fff;">${pName}</span>
+                            <div style="display:flex; gap:4px; align-items:center;">
+                                <span class="rubot-intel-badge violet">${posStr}</span>
+                                <span class="rubot-intel-badge green">$${data.cash}</span>
+                            </div>
+                        </div>
+                        <div style="margin-top: 2px; color: #9ca3af;">
+                            ${propStr} ${hungryStr} ${declBadge}
+                        </div>
                     </div>
                 `;
         }
@@ -5360,9 +3238,9 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
             <div class="rubot-intel-card">
                 <div class="rubot-intel-title">
                     <span>\u{1F5FA}\uFE0F BOARD & STRATEGY STATUS</span>
-                    <span class="rubot-intel-badge">${unownedCount} Unowned</span>
+                    <span class="rubot-intel-badge violet">${unownedCount} Unowned</span>
                 </div>
-                <div class="rubot-intel-content">
+                <div class="rubot-intel-content" style="margin-top:2px;">
                     <b>Chat Engagement:</b> ${CONFIG.CHAT_ENABLED ? '<span class="rubot-intel-badge green">ACTIVE (Smart/Casual)</span>' : '<span class="rubot-intel-badge red">SILENT (Off)</span>'}<br>
                     <b>Ollama Brain:</b> <span class="rubot-intel-badge green">${CONFIG.OLLAMA_MODEL}</span>
                 </div>
@@ -5372,10 +3250,9 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     }
   };
 
-  // src/dom/actionExecutor.js
+  // src/protocol/actionExecutor.js
   var isActing = false;
   var isEvaluatingTrade = false;
-  var isBuyingLand = false;
   var processedTradeSignatures = /* @__PURE__ */ new Map();
   function getIsActing() {
     return isActing;
@@ -5386,37 +3263,8 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       window.__richupLogTerminal(msg);
     }
   }
-  function delayClick(el, reason = "") {
-    if (!el || isActing) return false;
-    isActing = true;
-    const delay = Math.floor(Math.random() * (CONFIG.ACTION_DELAY_MAX - CONFIG.ACTION_DELAY_MIN + 1)) + CONFIG.ACTION_DELAY_MIN;
-    logToBot(`[ACTION] ${reason} (in ${delay}ms)`);
-    setTimeout(() => {
-      try {
-        if (typeof el.scrollIntoView === "function") {
-          el.scrollIntoView({ behavior: "smooth", block: "center" });
-        }
-        try {
-          if (typeof el.focus === "function") el.focus();
-          el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
-          el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
-          el.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true }));
-          el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
-        } catch (_) {
-        }
-        el.click();
-      } catch (err) {
-        logToBot(`Click error: ${err}`);
-      } finally {
-        setTimeout(() => {
-          isActing = false;
-        }, 400);
-      }
-    }, delay);
-    return true;
-  }
-  function executeOrAdvise({ el, title, reason, onExecute, onSkip }) {
-    if (!el || isActing) return false;
+  function executeOrAdvise({ title, reason, onExecute, onSkip }) {
+    if (isActing) return false;
     if (CONFIG.ADVISOR_MODE) {
       if (HUDPanel.isProposalActive(title)) {
         return true;
@@ -5427,7 +3275,6 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         () => {
           HUDPanel.hideAdvisorBox();
           if (onExecute) onExecute();
-          else delayClick(el, reason);
         },
         () => {
           HUDPanel.hideAdvisorBox();
@@ -5437,108 +3284,301 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       );
       return true;
     }
+    isActing = true;
+    setTimeout(() => {
+      isActing = false;
+    }, 250);
+    logToBot(`[PROTOCOL ACTION] ${title} - ${reason}`);
     if (onExecute) onExecute();
-    else delayClick(el, reason);
     return true;
   }
   var ActionExecutor = {
-    handleConfirmationModal(snapshot) {
-      const confirmBtn = snapshot.findConfirmationModalButton ? snapshot.findConfirmationModalButton() : null;
-      if (confirmBtn) {
-        logToBot("[MODAL ACTION] Secondary confirmation dialog detected. Confirming action...");
-        delayClick(confirmBtn, "Confirm secondary action prompt");
-        return true;
-      }
-      return false;
-    },
-    async handleTrade(snapshot) {
-      const sidebarTrade = snapshot.findSidebarIncomingTradeItem();
-      const confirmBtn = snapshot.findTradeConfirmButton();
-      const declineBtn = snapshot.findTradeDeclineButton();
-      const negotiateBtn = snapshot.findTradeNegotiateButton();
-      if (!confirmBtn && !declineBtn && sidebarTrade) {
-        logToBot("[TRADE] Incoming trade row detected in sidebar. Opening trade modal...");
-        delayClick(sidebarTrade, "Open incoming trade from sidebar");
-        return true;
-      }
-      if (!declineBtn && !confirmBtn) return false;
-      if (isEvaluatingTrade) return true;
-      const tradeData = scrapeTradeModalDOM();
-      const sig = `${tradeData.partnerName || "Unknown"}_give:${(tradeData.givenTiles || []).map((t) => t.id).sort().join(",")}_$${tradeData.givenCash || 0}_recv:${(tradeData.receivedTiles || []).map((t) => t.id).sort().join(",")}_$${tradeData.receivedCash || 0}`;
+    async handleTrade() {
+      if (!CONFIG.AUTO_TRADE_ENABLED || isEvaluatingTrade) return false;
+      const incomingTrades = (GameMemory.trades || []).filter(
+        (t) => t.recipientId === GameMemory.myId || GameMemory.myName && GameMemory.isMe(t.recipient?.name)
+      );
+      if (incomingTrades.length === 0) return false;
+      const trade = incomingTrades[0];
+      const tradeId = trade.id;
+      if (!tradeId) return false;
       const now = Date.now();
-      for (const [key, ts] of processedTradeSignatures.entries()) {
-        if (now - ts > 6e4) processedTradeSignatures.delete(key);
-      }
-      if (processedTradeSignatures.has(sig) && now - processedTradeSignatures.get(sig) < 15e3) {
+      if (processedTradeSignatures.has(tradeId) && now - processedTradeSignatures.get(tradeId) < 15e3) {
         return true;
-      }
-      if (!CONFIG.AUTO_TRADE_ENABLED) {
-        if (declineBtn) {
-          processedTradeSignatures.set(sig, now);
-          delayClick(declineBtn, "Auto-declining trade (Auto-Trade disabled)");
-          return true;
-        }
-        return false;
       }
       isEvaluatingTrade = true;
-      processedTradeSignatures.set(sig, now);
+      processedTradeSignatures.set(tradeId, now);
       try {
-        logToBot("[TRADE] Evaluating incoming trade with Hybrid Brain...");
+        const givenTiles = (trade.recipientOffer?.properties || []).map((id) => BOARD_TILES[id]).filter(Boolean);
+        const receivedTiles = (trade.initiatorOffer?.properties || []).map((id) => BOARD_TILES[id]).filter(Boolean);
+        const givenCash = trade.recipientOffer?.money || 0;
+        const receivedCash = trade.initiatorOffer?.money || 0;
+        const tradeData = {
+          partnerName: trade.initiator?.name || "Opponent",
+          givenTiles,
+          givenCash,
+          receivedTiles,
+          receivedCash
+        };
+        logToBot(`[PROTOCOL TRADE] Evaluating incoming offer from ${tradeData.partnerName}...`);
         const verdict = await OllamaClient.evaluateTradeWithLLM(tradeData);
-        logToBot(`Trade Verdict: ${verdict.reason}`);
-        if (verdict.negotiate && negotiateBtn) {
+        logToBot(`[TRADE VERDICT] ${verdict.reason}`);
+        if (verdict.accept) {
           return executeOrAdvise({
-            el: negotiateBtn,
-            title: "NEGOTIATE INCOMING TRADE",
-            reason: verdict.reason,
-            onExecute: () => {
-              if (verdict.chatReply) ChatEngine.sendChatMessage("tradeNegotiate", verdict.chatReply);
-              delayClick(negotiateBtn, `Negotiating trade (${verdict.reason})`);
-            }
-          });
-        }
-        if (verdict.accept && confirmBtn) {
-          return executeOrAdvise({
-            el: confirmBtn,
-            title: "CONFIRM INCOMING TRADE",
+            title: `ACCEPT TRADE #${tradeId.slice(0, 6)}`,
             reason: verdict.reason,
             onExecute: () => {
               if (verdict.chatReply) ChatEngine.sendChatMessage("tradeAccept", verdict.chatReply);
-              delayClick(confirmBtn, `Confirming trade (${verdict.reason})`);
+              sendSocketAction("confirm-trade", { tradeId });
+              GameMemory.trades = (GameMemory.trades || []).filter((t) => t.id !== tradeId);
             }
           });
-        }
-        if (declineBtn) {
+        } else {
           return executeOrAdvise({
-            el: declineBtn,
-            title: "DECLINE INCOMING TRADE",
+            title: `DECLINE TRADE #${tradeId.slice(0, 6)}`,
             reason: verdict.reason,
             onExecute: () => {
               if (verdict.chatReply) ChatEngine.sendChatMessage("tradeReject", verdict.chatReply);
-              delayClick(declineBtn, `Declining trade (${verdict.reason})`);
+              sendSocketAction("decline-trade", { tradeId });
+              GameMemory.trades = (GameMemory.trades || []).filter((t) => t.id !== tradeId);
               if (verdict.counterSwap && CONFIG.AUTO_TRADE_ENABLED) {
-                logToBot(`[COUNTER TRADE] Scheduling counter-proposal for ${verdict.counterSwap.targetOwner}...`);
                 setTimeout(() => {
                   if (!TradeProposalExecutor.isExecuting) {
                     TradeProposalExecutor.executeProposal(verdict.counterSwap);
                   }
-                }, 1800);
+                }, 1200);
               }
             }
           });
         }
-        return false;
       } finally {
         isEvaluatingTrade = false;
       }
     },
-    /**
-     * Proactively opens the Trade UI and submits win-win trade proposals!
-     */
-    handleProactiveTrade(snapshot) {
-      if (!CONFIG.AUTO_TRADE_ENABLED || TradeProposalExecutor.isExecuting) return false;
-      const createBtn = snapshot.findCreateTradeButton();
-      if (!createBtn) return false;
+    insolventTicks: 0,
+    handleDebtRecovery() {
+      if (!CONFIG.AUTO_MORTGAGE_ENABLED) return false;
+      const myPlayerCash = GameMemory.players[GameMemory.myName]?.cash;
+      const isDebt = GameMemory.myCash < 0 || GameMemory.isNegativeDebt || typeof myPlayerCash === "number" && myPlayerCash < 0;
+      if (!isDebt) {
+        this.insolventTicks = 0;
+        return false;
+      }
+      logToBot(`[DEBT RECOVERY] Negative balance ($${GameMemory.myCash}). Liquidating assets via protocol...`);
+      const targets = DebtRecovery.rankLiquidationTargets();
+      const bestTarget = targets.length > 0 ? targets[0] : null;
+      if (bestTarget) {
+        this.insolventTicks = 0;
+        if (bestTarget.action === "sell_house") {
+          return executeOrAdvise({
+            title: `SELL HOUSE: ${bestTarget.tile.name.toUpperCase()}`,
+            reason: `Negative balance ($${GameMemory.myCash}). Liquidating house to survive.`,
+            onExecute: () => {
+              sendSocketAction("downgrade-city", { blockIndex: bestTarget.tile.id });
+              if (GameMemory.ownership[bestTarget.tile.id]) {
+                GameMemory.ownership[bestTarget.tile.id].houses = Math.max(0, (GameMemory.ownership[bestTarget.tile.id].houses || 1) - 1);
+              }
+            }
+          });
+        } else {
+          return executeOrAdvise({
+            title: `MORTGAGE: ${bestTarget.tile.name.toUpperCase()}`,
+            reason: `Negative balance ($${GameMemory.myCash}). Mortgaging asset to clear debt.`,
+            onExecute: () => {
+              sendSocketAction("mortgage-property", { propertyIndex: bestTarget.tile.id });
+              if (GameMemory.ownership[bestTarget.tile.id]) {
+                GameMemory.ownership[bestTarget.tile.id].mortgaged = true;
+              }
+            }
+          });
+        }
+      }
+      this.insolventTicks = (this.insolventTicks || 0) + 1;
+      if (this.insolventTicks >= 3) {
+        return executeOrAdvise({
+          title: "DECLARE BANKRUPTCY",
+          reason: `Insolvent balance ($${GameMemory.myCash}) with zero liquidatable assets. Conceding match gracefully.`,
+          onExecute: () => {
+            sendSocketAction("do-bankrupt");
+          }
+        });
+      }
+      return true;
+    },
+    handleJail() {
+      if (!GameMemory.inJail || !GameMemory.isMyTurn) return false;
+      GameMemory.myPos = 10;
+      const decision = JailStrategy.shouldPayToLeaveJail(GameMemory.myCash);
+      if (decision.exit) {
+        if (GameMemory.myCash >= 50) {
+          return executeOrAdvise({
+            title: "PAY $50 JAIL BAIL",
+            reason: decision.reason,
+            onExecute: () => {
+              GameMemory.inJail = false;
+              sendSocketAction("pay-out-of-prison");
+            }
+          });
+        } else {
+          return executeOrAdvise({
+            title: "USE PARDON CARD",
+            reason: decision.reason,
+            onExecute: () => {
+              GameMemory.inJail = false;
+              sendSocketAction("use-pardon-card");
+            }
+          });
+        }
+      }
+      if (!GameMemory.hasRolled) {
+        return executeOrAdvise({
+          title: "ROLL IN JAIL (Safe Stay)",
+          reason: "Rolling dice to stay safe in cell or leave on doubles.",
+          onExecute: () => {
+            GameMemory.hasRolled = true;
+            sendSocketAction("plz-roll-dices");
+          }
+        });
+      }
+      return false;
+    },
+    handleBuyOrAuction() {
+      if (!GameMemory.isMyTurn || !GameMemory.hasRolled) return false;
+      const tile = BOARD_TILES[GameMemory.myPos];
+      const isPurchasable = tile && tile.group && (tile.type === "property" || tile.type === "airport" || tile.type === "utility");
+      const isUnowned = isPurchasable && !GameMemory.ownership[tile.id]?.owner;
+      if (!isUnowned) return false;
+      const price = tile.price || 60;
+      const decision = MarkovRisk.shouldBuyProperty(tile, price, GameMemory.myCash);
+      logToBot(`[BUY EVAL] ${tile.name} ($${price}) | Cash: $${GameMemory.myCash} | Decision: ${decision.buy ? "BUY" : "AUCTION"} (${decision.reason})`);
+      if (decision.buy && GameMemory.myCash >= price) {
+        return executeOrAdvise({
+          title: `BUY ${tile.name.toUpperCase()} ($${price})`,
+          reason: decision.reason,
+          onExecute: () => {
+            sendSocketAction("purchase-property");
+            if (GameMemory.ownership[tile.id]) {
+              GameMemory.ownership[tile.id].owner = GameMemory.myName || "__ME__";
+            }
+            GameMemory.myCash -= price;
+          }
+        });
+      } else {
+        return executeOrAdvise({
+          title: `PASS / AUCTION ${tile.name.toUpperCase()}`,
+          reason: decision.reason || "Sending to auction to conserve cash reserve",
+          onExecute: () => {
+            sendSocketAction("start-auction");
+          }
+        });
+      }
+    },
+    handleRollDice() {
+      if (!GameMemory.isMyTurn || GameMemory.hasRolled || GameMemory.inJail) return false;
+      const standingTile = BOARD_TILES[GameMemory.myPos];
+      const isPurchasable = standingTile && standingTile.group && (standingTile.type === "property" || standingTile.type === "airport" || standingTile.type === "utility");
+      const isUnowned = isPurchasable && !GameMemory.ownership[standingTile.id]?.owner;
+      if (isUnowned && GameMemory.canPerformTurnActions) {
+        if (this.handleBuyOrAuction()) return true;
+      }
+      const isRollAgain = Boolean(GameMemory.doublesInARow && GameMemory.doublesInARow > 0);
+      return executeOrAdvise({
+        title: isRollAgain ? `ROLL AGAIN (Doubles! Roll #${GameMemory.doublesInARow + 1})` : `ROLL THE DICE (Turn #${GameMemory.turnCount + 1})`,
+        reason: isRollAgain ? `Doubles rolled! Extra roll granted.` : `My turn! Cash: $${GameMemory.myCash} | Pos: Tile #${GameMemory.myPos}`,
+        onExecute: () => {
+          GameMemory.hasRolled = true;
+          if (!isRollAgain) {
+            GameMemory.turnCount++;
+          }
+          sendSocketAction("plz-roll-dices");
+        }
+      });
+    },
+    handleAuction() {
+      if (!CONFIG.AUTO_AUCTION_ENABLED || !GameMemory.activeAuction) return false;
+      const auction = GameMemory.activeAuction;
+      const auctionedTile = BOARD_TILES[auction.blockIndex] || null;
+      const currentBid = auction.currentBid || auction.price || 0;
+      const decision = AuctionSniper.evaluateAuctionStep(auctionedTile, currentBid, GameMemory.myCash);
+      if (decision.shouldBid) {
+        const newBid = currentBid + decision.increment;
+        if (GameMemory.myCash >= newBid) {
+          return executeOrAdvise({
+            title: `AUCTION BID: $${newBid} [${auctionedTile ? auctionedTile.name : "Tile"}]`,
+            reason: decision.reason,
+            onExecute: () => {
+              sendSocketAction("auction-bid", { amount: newBid });
+            }
+          });
+        }
+      }
+      return false;
+    },
+    async handleHouseBuilding() {
+      if (!CONFIG.AUTO_BUILD_ENABLED || !GameMemory.isMyTurn || !GameMemory.hasRolled) return false;
+      const completeSets = [];
+      for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
+        if (tiles[0].type !== "property") continue;
+        const { owned, total } = GameMemory.getGroupCount(groupName, "__ME__");
+        if (owned === total) {
+          const unmortgaged = tiles.every((t) => !GameMemory.ownership[t.id]?.mortgaged);
+          if (unmortgaged) {
+            const houseCounts = tiles.map((t) => GameMemory.ownership[t.id]?.houses || 0);
+            const minHouses = Math.min(...houseCounts);
+            if (minHouses < 5) {
+              completeSets.push({
+                groupName,
+                tiles,
+                minHouses,
+                houseCost: tiles[0].houseCost
+              });
+            }
+          }
+        }
+      }
+      if (completeSets.length === 0) return false;
+      const dynamicReserve = MarkovRisk.computeDynamicReserve(GameMemory.myPos);
+      const reserve = Math.max(CONFIG.BASE_MIN_RESERVE || 250, dynamicReserve);
+      const affordableSets = completeSets.filter((s) => GameMemory.myCash - s.houseCost >= reserve);
+      if (affordableSets.length === 0) return false;
+      affordableSets.sort((a, b) => (GROUP_POWER[b.groupName] || 0) - (GROUP_POWER[a.groupName] || 0));
+      const targetSet = affordableSets[0];
+      const candidateTile = targetSet.tiles.find((t) => (GameMemory.ownership[t.id]?.houses || 0) === targetSet.minHouses);
+      if (candidateTile) {
+        return executeOrAdvise({
+          title: `UPGRADE ${candidateTile.name.toUpperCase()} (HOUSE #${targetSet.minHouses + 1})`,
+          reason: `Monopoly upgrade on ${targetSet.groupName}. Cash ($${GameMemory.myCash}) > Reserve ($${reserve}).`,
+          onExecute: () => {
+            sendSocketAction("upgrade-city", { blockIndex: candidateTile.id });
+            if (GameMemory.ownership[candidateTile.id]) {
+              GameMemory.ownership[candidateTile.id].houses = targetSet.minHouses + 1;
+            }
+            GameMemory.myCash -= targetSet.houseCost;
+          }
+        });
+      }
+      return false;
+    },
+    handleUnmortgage() {
+      if (!CONFIG.AUTO_MORTGAGE_ENABLED || !GameMemory.isMyTurn || !GameMemory.hasRolled) return false;
+      const dynamicReserve = MarkovRisk.computeDynamicReserve(GameMemory.myPos);
+      const reserve = Math.max(CONFIG.BASE_MIN_RESERVE || 250, dynamicReserve);
+      const candidates = DebtRecovery.rankUnmortgageCandidates(GameMemory.myCash, reserve);
+      if (candidates.length === 0) return false;
+      const target = candidates[0];
+      return executeOrAdvise({
+        title: `UNMORTGAGE ${target.tile.name.toUpperCase()}`,
+        reason: `Surplus funds available ($${GameMemory.myCash} > $${reserve + 200}). Restoring asset.`,
+        onExecute: () => {
+          sendSocketAction("lift-property-mortgage", { propertyIndex: target.tile.id });
+          if (GameMemory.ownership[target.tile.id]) {
+            GameMemory.ownership[target.tile.id].mortgaged = false;
+          }
+        }
+      });
+    },
+    handleProactiveTrade() {
+      if (!CONFIG.AUTO_TRADE_ENABLED || !GameMemory.isMyTurn || TradeProposalExecutor.isExecuting) return false;
       const swaps = TradeEngine.scanMutualMonopolySwaps();
       if (swaps.length === 0) return false;
       const validSwap = swaps.find(
@@ -5547,9 +3587,8 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       if (!validSwap) return false;
       const cashText = validSwap.cashDemand > 0 ? ` (+ ask $${validSwap.cashDemand})` : validSwap.cashOffer > 0 ? ` (+ offer $${validSwap.cashOffer})` : "";
       return executeOrAdvise({
-        el: createBtn,
-        title: `PROPOSE TRADE WITH ${validSwap.targetOwner.toUpperCase()}`,
-        reason: `${validSwap.summary}${cashText}. Both get monopolies!`,
+        title: `PROPOSE TRADE: ${validSwap.targetOwner.toUpperCase()}`,
+        reason: `${validSwap.summary}${cashText}. Mutual win-win.`,
         onExecute: () => {
           TradeProposalExecutor.executeProposal(validSwap);
         },
@@ -5558,738 +3597,139 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         }
       });
     },
-    handleJail(snapshot) {
-      const pardonBtn = snapshot.findExactOrIncludes(["use pardon", "pardon card", "use card", "get out of jail"]);
-      const payBailBtn = snapshot.findExactOrIncludes(["get free for", "pay $50", "pay 50"]);
-      const rollBtn = snapshot.findExactOrIncludes(["roll the dice", "roll again", "roll"]);
-      if (!pardonBtn && !payBailBtn) return false;
-      GameMemory.myPos = 10;
-      GameMemory.inJail = true;
-      const decision = JailStrategy.shouldPayToLeaveJail(GameMemory.myCash);
-      if (decision.exit) {
-        if (pardonBtn) {
-          return executeOrAdvise({
-            el: pardonBtn,
-            title: "USE PARDON CARD",
-            reason: decision.reason,
-            onExecute: () => {
-              GameMemory.inJail = false;
-              delayClick(pardonBtn, decision.reason);
-            }
-          });
-        }
-        if (payBailBtn) {
-          return executeOrAdvise({
-            el: payBailBtn,
-            title: "PAY $50 JAIL BAIL",
-            reason: decision.reason,
-            onExecute: () => {
-              if (GameMemory.myCash >= 50) GameMemory.myCash -= 50;
-              GameMemory.inJail = false;
-              delayClick(payBailBtn, decision.reason);
-            }
-          });
-        }
-      } else {
-        logToBot(`Jail: Staying safe in cell (${decision.reason})`);
-      }
-      if (rollBtn) {
-        return executeOrAdvise({
-          el: rollBtn,
-          title: "ROLL IN JAIL (Safe Stay)",
-          reason: "Rolling dice to stay safe in cell or leave on doubles.",
-          onExecute: () => delayClick(rollBtn, "Rolling in Jail")
-        });
-      }
-      return false;
-    },
-    handleBuyOrAuction(snapshot) {
-      let tile = BOARD_TILES[GameMemory.myPos] || null;
-      const buyBtn = snapshot.findBuyPropertyButton ? snapshot.findBuyPropertyButton(tile) : null;
-      const auctionBtn = snapshot.findExactOrIncludes(["auction", "pass", "don't buy"]);
-      if (isBuyingLand) return false;
-      if (!buyBtn && !auctionBtn && !GameMemory.isMyTurn) {
-        return false;
-      }
-      if (buyBtn) {
-        let container = buyBtn.parentElement;
-        for (let depth = 0; depth < 5 && container && container !== document.body; depth++) {
-          const cText = container.innerText || "";
-          for (const t of BOARD_TILES) {
-            if (t.group && new RegExp(`\\b${t.name}\\b`, "i").test(cText)) {
-              tile = t;
-              GameMemory.myPos = t.id;
-              break;
-            }
-          }
-          if (tile) break;
-          container = container.parentElement;
-        }
-      }
-      if (!tile && BOARD_TILES[GameMemory.myPos]?.group) {
-        tile = BOARD_TILES[GameMemory.myPos];
-      }
-      const isPurchasable = tile && tile.group && (tile.type === "property" || tile.type === "airport" || tile.type === "utility");
-      const owner = tile ? GameMemory.ownership[tile.id]?.owner : null;
-      if (GameMemory.isMyTurn && isPurchasable && !owner && !buyBtn && !auctionBtn) {
-        const now = Date.now();
-        if (!this._lastPendingBuyLog || now - this._lastPendingBuyLog > 2500) {
-          this._lastPendingBuyLog = now;
-          logToBot(`[BUY PENDING] Standing on unowned ${tile.name} (Tile #${tile.id}, $${tile.price || 0}), scanning DOM for Buy prompt...`);
-        }
-        return false;
-      }
-      if (!buyBtn && !auctionBtn) return false;
-      const effectiveCash = Math.max(GameMemory.myCash, GameMemory.players[GameMemory.myName]?.cash || 0);
-      if (buyBtn) {
-        const btnText = normalizeText(buyBtn);
-        const priceMatch = /\$?\s*(\d{2,4})|(\d{2,4})\s*\$/.exec(btnText);
-        const price = priceMatch ? parseInt(priceMatch[1] || priceMatch[2], 10) : tile?.price || 60;
-        if (GameMemory.myName && GameMemory.players[GameMemory.myName]?.cash !== void 0) {
-          const sbCash = GameMemory.players[GameMemory.myName].cash;
-          if (typeof sbCash === "number") {
-            GameMemory.myCash = sbCash;
-          }
-        }
-        const candidateCash = Math.max(effectiveCash, price);
-        const decision = MarkovRisk.shouldBuyProperty(tile, price, candidateCash);
-        logToBot(`[BUY EVAL] ${tile ? tile.name : "Property"} ($${price}) | My Cash: $${effectiveCash} | Decision: ${decision.buy ? "BUY" : "SKIP"} (${decision.reason})`);
-        if (decision.buy) {
-          isBuyingLand = true;
-          setTimeout(() => {
-            isBuyingLand = false;
-          }, 2e3);
-          return executeOrAdvise({
-            el: buyBtn,
-            title: `BUY ${tile ? tile.name.toUpperCase() : "PROPERTY"} ($${price})`,
-            reason: decision.reason,
-            onExecute: () => {
-              logToBot(`[BUY ACTION] Executing direct purchase for ${tile ? tile.name : "Property"} ($${price})`);
-              if (tile && GameMemory.ownership[tile.id]) {
-                GameMemory.ownership[tile.id].owner = GameMemory.myName || "__ME__";
-              }
-              if (price > 0 && GameMemory.myCash >= price) {
-                GameMemory.myCash -= price;
-              }
-              delayClick(buyBtn, decision.reason);
-            }
-          });
-        }
-        const auctionCheck = AuctionSniper.shouldSendToAuctionInsteadOfBuy(tile, price, candidateCash);
-        logToBot(`[AUCTION EVAL] ${tile ? tile.name : "Property"} ($${price}) -> Send to auction? ${auctionCheck.auction ? "YES" : "NO"} (${auctionCheck.reason})`);
-        if (auctionCheck.auction && auctionBtn) {
-          return executeOrAdvise({
-            el: auctionBtn,
-            title: "TRIGGER AUCTION",
-            reason: auctionCheck.reason,
-            onExecute: () => {
-              logToBot(`[AUCTION ACTION] Sending ${tile ? tile.name : "Property"} to auction`);
-              delayClick(auctionBtn, auctionCheck.reason);
-            }
-          });
-        }
-      }
-      if (auctionBtn) {
-        logToBot(`[AUCTION EVAL] Cannot afford direct purchase; sending property to auction.`);
-        return executeOrAdvise({
-          el: auctionBtn,
-          title: "PASS / AUCTION PROPERTY",
-          reason: "Cannot afford direct purchase; sending property to auction.",
-          onExecute: () => delayClick(auctionBtn, "Sending to Auction")
-        });
-      }
-      return false;
-    },
-    handleAuction(snapshot) {
-      if (!CONFIG.AUTO_AUCTION_ENABLED) return false;
-      let bidBtn = snapshot.findAuctionBidButton();
-      const passBtn = snapshot.findAuctionPassButton();
-      if (!bidBtn && !passBtn) return false;
-      const modal = document.querySelector('[role="dialog"], [class*="modal"], [class*="auction"]');
-      const modalText = modal ? modal.innerText : document.body ? document.body.innerText : "";
-      let auctionedTile = null;
-      for (const t of BOARD_TILES) {
-        if (t.group && new RegExp(`\\b${t.name}\\b`, "i").test(modalText)) {
-          auctionedTile = t;
-          break;
-        }
-      }
-      if (!auctionedTile) {
-        auctionedTile = BOARD_TILES[GameMemory.myPos] || null;
-      }
-      const bidMatch = /highest bid:?\s*\$?(\d+)|current bid:?\s*\$?(\d+)/i.exec(modalText);
-      const currentBid = bidMatch ? parseInt(bidMatch[1] || bidMatch[2], 10) : 50;
-      const decision = AuctionSniper.evaluateAuctionStep(auctionedTile, currentBid, GameMemory.myCash);
-      bidBtn = snapshot.findAuctionBidButton(decision.increment) || bidBtn;
-      if (decision.shouldBid && bidBtn) {
-        return executeOrAdvise({
-          el: bidBtn,
-          title: `AUCTION BID: +$${decision.increment} [${auctionedTile ? auctionedTile.name : "Tile"}]`,
-          reason: decision.reason,
-          onExecute: () => delayClick(bidBtn, decision.reason)
-        });
-      }
-      if (passBtn) {
-        return executeOrAdvise({
-          el: passBtn,
-          title: `AUCTION PASS [${auctionedTile ? auctionedTile.name : "Tile"}]`,
-          reason: decision.reason,
-          onExecute: () => delayClick(passBtn, decision.reason)
-        });
-      }
-      if (modal) {
-        return true;
-      }
-      return false;
-    },
-    async handleHouseBuilding(snapshot) {
-      if (!CONFIG.AUTO_BUILD_ENABLED) return false;
-      const hasTurnControls = Boolean(snapshot.findExactOrIncludes(["roll the dice", "roll again", "end turn"]));
-      if (!hasTurnControls && !GameMemory.isMyTurn) {
-        return false;
-      }
-      const openCard = snapshot.getOpenPropertyCard ? snapshot.getOpenPropertyCard() : null;
-      const completeSets = [];
-      const mortgagedMonopolies = [];
-      for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
-        if (tiles[0].type !== "property") continue;
-        const { owned, total } = GameMemory.getGroupCount(groupName, "__ME__");
-        if (owned === total) {
-          const mortgagedTiles = tiles.filter((t) => GameMemory.ownership[t.id]?.mortgaged);
-          if (mortgagedTiles.length > 0) {
-            for (const mTile of mortgagedTiles) {
-              const unmortgageCost = Math.round(mTile.price * 0.55);
-              mortgagedMonopolies.push({
-                groupName,
-                tile: mTile,
-                unmortgageCost,
-                allTiles: tiles
-              });
-            }
-          } else {
-            const houseCounts = tiles.map((t) => GameMemory.ownership[t.id]?.houses || 0);
-            const minHouses = Math.min(...houseCounts);
-            const maxHouses = Math.max(...houseCounts);
-            const strikeCheck = HouseBuilder.areOpponentsInStrikeZone ? HouseBuilder.areOpponentsInStrikeZone(tiles) : { oppApproaching: false };
-            completeSets.push({
-              groupName,
-              tiles,
-              minHouses,
-              maxHouses,
-              houseCost: tiles[0].houseCost,
-              opponentsInStrikeZone: strikeCheck.oppApproaching ? `${strikeCheck.opponentName} (${strikeCheck.distance} steps)` : null
-            });
-          }
-        }
-      }
-      if (completeSets.length === 0 && mortgagedMonopolies.length === 0) {
-        if (openCard) {
-          const closeBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
-          if (closeBtn) delayClick(closeBtn, "Closing property card: No monopolies available");
-        }
-        return false;
-      }
-      const dynamicReserve = MarkovRisk.computeDynamicReserve(GameMemory.myPos);
-      const reserve = Math.max(CONFIG.BASE_MIN_RESERVE || 250, dynamicReserve);
-      if (GameMemory.myCash <= reserve) {
-        if (openCard) {
-          const closeBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
-          if (closeBtn) delayClick(closeBtn, "Closing property card: Preserving cash reserve");
-        }
-        return false;
-      }
-      let chosenAction = null;
-      let chosenGroup = null;
-      let chosenTile = null;
-      if (CONFIG.OLLAMA_ENABLED && OllamaClient.status !== "offline") {
-        const oppList = Object.entries(GameMemory.players).filter(([pName]) => !GameMemory.isMe(pName)).map(([pName, p]) => ({ name: pName, cash: p.cash, pos: p.pos || 0 }));
-        const aiVerdict = await OllamaClient.evaluateHouseBuildingWithLLM({
-          completeSets,
-          mortgagedMonopolies,
-          myCash: GameMemory.myCash,
-          reserve,
-          opponents: oppList,
-          myPos: GameMemory.myPos,
-          dangerEV: GameMemory.lastDangerEV || 0
-        });
-        if (aiVerdict) {
-          logToBot(`[AI UPGRADE] \u{1F9E0} Ollama [${aiVerdict.modelUsed || "AI"}]: ${aiVerdict.decision} - ${aiVerdict.rationale}`);
-          if (aiVerdict.decision === "WAIT") {
-            if (openCard) {
-              const closeBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
-              if (closeBtn) delayClick(closeBtn, "Closing property card: Ollama advised holding cash");
-            }
-            return false;
-          }
-          chosenAction = aiVerdict.decision;
-          chosenGroup = aiVerdict.targetGroup;
-          chosenTile = aiVerdict.targetTile;
-        }
-      }
-      const shouldUnmortgage = chosenAction === "UNMORTGAGE" || !chosenAction && mortgagedMonopolies.some((m) => GameMemory.myCash - m.unmortgageCost >= reserve);
-      if (shouldUnmortgage && mortgagedMonopolies.length > 0) {
-        let targetMortgage = mortgagedMonopolies.find(
-          (m) => chosenTile && m.tile.name.toLowerCase() === chosenTile.toLowerCase() || chosenGroup && m.groupName.toLowerCase() === chosenGroup.toLowerCase()
-        );
-        if (!targetMortgage) {
-          targetMortgage = mortgagedMonopolies.find((m) => GameMemory.myCash - m.unmortgageCost >= reserve);
-        }
-        if (targetMortgage && GameMemory.myCash - targetMortgage.unmortgageCost >= reserve) {
-          if (openCard && openCard.tile.id === targetMortgage.tile.id) {
-            const unmortgageBtn = snapshot.findModalUnmortgageButton ? snapshot.findModalUnmortgageButton() : null;
-            if (unmortgageBtn) {
-              return executeOrAdvise({
-                el: unmortgageBtn,
-                title: `UNMORTGAGE MONOPOLY: ${targetMortgage.tile.name.toUpperCase()}`,
-                reason: `Reclaiming ${targetMortgage.tile.name} ($${targetMortgage.unmortgageCost}) to unlock house building on ${targetMortgage.groupName}!`,
-                onExecute: () => {
-                  if (GameMemory.ownership[targetMortgage.tile.id]) {
-                    GameMemory.ownership[targetMortgage.tile.id].mortgaged = false;
-                  }
-                  GameMemory.myCash -= targetMortgage.unmortgageCost;
-                  delayClick(unmortgageBtn, `Unmortgaging ${targetMortgage.tile.name}`);
-                }
-              });
-            }
-          }
-          if (openCard && openCard.tile.id !== targetMortgage.tile.id) {
-            const sidebarItem2 = snapshot.findSidebarPropertyItem(targetMortgage.tile.name);
-            if (sidebarItem2) {
-              return executeOrAdvise({
-                el: sidebarItem2,
-                title: `SWITCH TO ${targetMortgage.tile.name.toUpperCase()} (RIGHT SIDEBAR)`,
-                reason: `Switching to mortgaged ${targetMortgage.tile.name} to unmortgage for ${targetMortgage.groupName} monopoly upgrades.`,
-                onExecute: () => delayClick(sidebarItem2, `Switching to ${targetMortgage.tile.name} from right sidebar`)
-              });
-            }
-            const closeBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
-            if (closeBtn) {
-              delayClick(closeBtn, `Closing card to select mortgaged ${targetMortgage.tile.name}`);
-              return true;
-            }
-          }
-          const sidebarItem = snapshot.findSidebarPropertyItem(targetMortgage.tile.name);
-          if (sidebarItem) {
-            return executeOrAdvise({
-              el: sidebarItem,
-              title: `SELECT ${targetMortgage.tile.name.toUpperCase()} (UNMORTGAGE)`,
-              reason: `Opening ${targetMortgage.tile.name} from right sidebar to unmortgage and unlock house building.`,
-              onExecute: () => delayClick(sidebarItem, `Opening ${targetMortgage.tile.name} from right sidebar to unmortgage`)
-            });
-          }
-        }
-      }
-      if (completeSets.length > 0) {
-        completeSets.sort((a, b) => {
-          const powerA = GROUP_POWER[a.groupName] || 50;
-          const powerB = GROUP_POWER[b.groupName] || 50;
-          return powerB - powerA;
-        });
-        const mathCandidates = HouseBuilder.rankHouseUpgrades(GameMemory.myCash);
-        let targetSet = null;
-        let candidateTile = null;
-        if (chosenTile || chosenGroup) {
-          targetSet = completeSets.find(
-            (s) => chosenGroup && s.groupName.toLowerCase() === chosenGroup.toLowerCase() && s.minHouses < 5 && GameMemory.myCash - s.houseCost >= reserve
-          );
-          if (targetSet) {
-            if (chosenTile) {
-              candidateTile = targetSet.tiles.find((t) => t.name.toLowerCase() === chosenTile.toLowerCase() && (GameMemory.ownership[t.id]?.houses || 0) === targetSet.minHouses);
-            }
-            if (!candidateTile) {
-              candidateTile = targetSet.tiles.find((t) => (GameMemory.ownership[t.id]?.houses || 0) === targetSet.minHouses);
-            }
-          }
-        }
-        if (!targetSet && mathCandidates.length > 0) {
-          const topMath = mathCandidates[0];
-          targetSet = completeSets.find((s) => s.tiles.some((t) => t.id === topMath.tile.id));
-          candidateTile = topMath.tile;
-        }
-        if (!targetSet) {
-          targetSet = completeSets.find((s) => s.minHouses < 5 && GameMemory.myCash - s.houseCost >= reserve);
-          if (targetSet) {
-            candidateTile = targetSet.tiles.find((t) => (GameMemory.ownership[t.id]?.houses || 0) === targetSet.minHouses);
-          }
-        }
-        if (targetSet && candidateTile) {
-          if (openCard && openCard.tile.id !== candidateTile.id) {
-            const sidebarItem2 = snapshot.findSidebarPropertyItem(candidateTile.name);
-            if (sidebarItem2) {
-              return executeOrAdvise({
-                el: sidebarItem2,
-                title: `SWITCH TO ${candidateTile.name.toUpperCase()} (RIGHT SIDEBAR)`,
-                reason: `Even building: Switching to ${candidateTile.name} from right sidebar (${targetSet.minHouses} houses).`,
-                onExecute: () => delayClick(sidebarItem2, `Switching to ${candidateTile.name} from right sidebar`)
-              });
-            }
-            const closeBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
-            if (closeBtn) {
-              delayClick(closeBtn, `Closing ${openCard.tile.name} to upgrade ${candidateTile.name} evenly`);
-              return true;
-            }
-          }
-          if (openCard && openCard.tile.id === candidateTile.id) {
-            const modalUpgradeBtn = snapshot.findModalUpgradeButton();
-            if (modalUpgradeBtn) {
-              return executeOrAdvise({
-                el: modalUpgradeBtn,
-                title: `UPGRADE ${candidateTile.name.toUpperCase()} [\u2191]`,
-                reason: `Even building on ${targetSet.groupName}: Upgrading to ${targetSet.minHouses + 1} houses (${targetSet.minHouses} -> ${targetSet.minHouses + 1}).`,
-                onExecute: () => {
-                  delayClick(modalUpgradeBtn, `Building house on ${candidateTile.name}`);
-                  if (GameMemory.ownership[candidateTile.id]) {
-                    GameMemory.ownership[candidateTile.id].houses = targetSet.minHouses + 1;
-                  }
-                  GameMemory.myCash -= targetSet.houseCost;
-                }
-              });
-            }
-          }
-          const sidebarItem = snapshot.findSidebarPropertyItem(candidateTile.name);
-          if (sidebarItem) {
-            return executeOrAdvise({
-              el: sidebarItem,
-              title: `SELECT ${candidateTile.name.toUpperCase()} (RIGHT SIDEBAR)`,
-              reason: `Even building: Opening ${candidateTile.name} from right sidebar to build house (${targetSet.minHouses} -> ${targetSet.minHouses + 1}).`,
-              onExecute: () => delayClick(sidebarItem, `Opening ${candidateTile.name} from right sidebar`)
-            });
-          }
-        }
-      }
-      if (openCard) {
-        const closeBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
-        if (closeBtn) delayClick(closeBtn, "Closing property card: Upgrades complete or budget limited");
-      }
-      return false;
-    },
-    /**
-     * Autonomous Unmortgaging: Reclaims mortgaged properties when player has cash surplus
-     */
-    handleUnmortgage(snapshot) {
-      if (!CONFIG.AUTO_MORTGAGE_ENABLED || GameMemory.myCash <= 0) return false;
-      if (!GameMemory.isMyTurn) return false;
-      const dynamicReserve = MarkovRisk.computeDynamicReserve(GameMemory.myPos);
-      const reserve = Math.max(CONFIG.BASE_MIN_RESERVE || 250, dynamicReserve);
-      const candidates = DebtRecovery.rankUnmortgageCandidates(GameMemory.myCash, reserve);
-      if (candidates.length === 0) return false;
-      const unmortgageBtn = snapshot.findModalUnmortgageButton ? snapshot.findModalUnmortgageButton() : null;
-      const openCard = snapshot.getOpenPropertyCard ? snapshot.getOpenPropertyCard() : null;
-      if (unmortgageBtn && openCard) {
-        const tileName = openCard.tile.name;
-        return executeOrAdvise({
-          el: unmortgageBtn,
-          title: `UNMORTGAGE: ${tileName.toUpperCase()}`,
-          reason: `Surplus cash ($${GameMemory.myCash} > $${reserve + 200}). Reclaiming ${tileName} to collect full rent!`,
-          onExecute: () => {
-            if (GameMemory.ownership[openCard.tile.id]) {
-              GameMemory.ownership[openCard.tile.id].mortgaged = false;
-            }
-            delayClick(unmortgageBtn, `Unmortgaging ${tileName}`);
-          }
-        });
-      }
-      const target = candidates[0];
-      const sidebarProp = snapshot.findSidebarPropertyItem(target.tile.name);
-      if (sidebarProp) {
-        return executeOrAdvise({
-          el: sidebarProp,
-          title: `OPEN ${target.tile.name.toUpperCase()} TO UNMORTGAGE`,
-          reason: `Surplus funds available ($${GameMemory.myCash}). Selecting mortgaged property to restore.`,
-          onExecute: () => delayClick(sidebarProp, `Opening ${target.tile.name} to unmortgage`)
-        });
-      }
-      return false;
-    },
-    insolventTicks: 0,
-    isLiquidating: false,
-    isRollingDice: false,
-    handleDebtRecovery(snapshot) {
-      if (!CONFIG.AUTO_MORTGAGE_ENABLED) return false;
-      if (this.isLiquidating) return true;
-      const myPlayerCash = GameMemory.players[GameMemory.myName]?.cash;
-      const isDebt = GameMemory.myCash < 0 || GameMemory.isNegativeDebt || typeof myPlayerCash === "number" && myPlayerCash < 0;
-      if (!isDebt) {
-        this.insolventTicks = 0;
-        return false;
-      }
-      logToBot(`[DEBT RECOVERY] Negative balance ($${GameMemory.myCash}). Liquidating assets to survive...`);
-      const openCard = snapshot.getOpenPropertyCard ? snapshot.getOpenPropertyCard() : null;
-      if (openCard && !GameMemory.isMe(GameMemory.ownership[openCard.tile.id]?.owner)) {
-        const closeBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
-        if (closeBtn) {
-          delayClick(closeBtn, `Closing opponent card ${openCard.tile.name} to select our asset for liquidation`);
-          return true;
-        }
-      }
-      if (openCard && (GameMemory.ownership[openCard.tile.id]?.houses || 0) > 0 && openCard.tile.group) {
-        const groupTiles = BOARD_TILES.filter((t) => t.group === openCard.tile.group);
-        const maxHousesInGroup = Math.max(...groupTiles.map((t) => GameMemory.ownership[t.id]?.houses || 0));
-        if ((GameMemory.ownership[openCard.tile.id]?.houses || 0) < maxHousesInGroup) {
-          const siblingWithMax = groupTiles.find((t) => (GameMemory.ownership[t.id]?.houses || 0) === maxHousesInGroup);
-          if (siblingWithMax) {
-            const sidebarProp = snapshot.findSidebarPropertyItem(siblingWithMax.name);
-            if (sidebarProp) {
-              return executeOrAdvise({
-                el: sidebarProp,
-                title: `SWITCH TO ${siblingWithMax.name.toUpperCase()} (EVEN BUILD)`,
-                reason: `Even Build requires selling from ${siblingWithMax.name} (${maxHousesInGroup} houses) before ${openCard.tile.name}.`,
-                onExecute: () => delayClick(sidebarProp, `Switching to ${siblingWithMax.name} for even build`)
-              });
-            }
-          }
-        }
-      }
-      const targets = DebtRecovery.rankLiquidationTargets();
-      const bestTarget = targets.length > 0 ? targets[0] : null;
-      const hasAnyLiquidatableAsset = BOARD_TILES.some((t) => {
-        const info = GameMemory.ownership[t.id];
-        return info && GameMemory.isMe(info.owner) && (!info.mortgaged || (info.houses || 0) > 0);
-      });
-      if (!hasAnyLiquidatableAsset && !openCard) {
-        this.insolventTicks = (this.insolventTicks || 0) + 1;
-        logToBot(`[INSOLVENCY CHECK] Negative balance ($${GameMemory.myCash}) with zero assets or houses left (Tick ${this.insolventTicks}/4)...`);
-        if (this.insolventTicks >= 4) {
-          const bankruptBtn = snapshot.findBankruptButton ? snapshot.findBankruptButton() : snapshot.findExactOrIncludes(["bankrupt"]);
-          if (bankruptBtn) {
-            return executeOrAdvise({
-              el: bankruptBtn,
-              title: "DECLARE BANKRUPTCY (INSOLVENT)",
-              reason: `Negative balance ($${GameMemory.myCash}) with zero remaining assets or houses. Conceding match gracefully.`,
-              onExecute: () => {
-                delayClick(bankruptBtn, "Declaring bankruptcy due to complete insolvency");
-              }
-            });
-          }
-        }
-        return false;
-      } else {
-        this.insolventTicks = 0;
-      }
-      if (openCard && GameMemory.ownership[openCard.tile.id]?.mortgaged) {
-        if (bestTarget) {
-          const sidebarProp = snapshot.findSidebarPropertyItem(bestTarget.tile.name);
-          if (sidebarProp) {
-            return executeOrAdvise({
-              el: sidebarProp,
-              title: `SWITCH TO ${bestTarget.tile.name.toUpperCase()} (RIGHT SIDEBAR) TO LIQUIDATE`,
-              reason: `In debt ($${GameMemory.myCash}). Current open card is already mortgaged; switching directly from right sidebar.`,
-              onExecute: () => delayClick(sidebarProp, `Switching to ${bestTarget.tile.name} from right sidebar`)
-            });
-          }
-        }
-        const closeBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
-        if (closeBtn) {
-          delayClick(closeBtn, `Closing already-mortgaged ${openCard.tile.name} to select unmortgaged asset`);
-          return true;
-        }
-      }
-      if (openCard && bestTarget && openCard.tile.id !== bestTarget.tile.id) {
-        const sidebarProp = snapshot.findSidebarPropertyItem(bestTarget.tile.name);
-        if (sidebarProp) {
-          return executeOrAdvise({
-            el: sidebarProp,
-            title: `SWITCH TO ${bestTarget.tile.name.toUpperCase()} (RIGHT SIDEBAR) TO LIQUIDATE`,
-            reason: `In debt ($${GameMemory.myCash}). Switching from ${openCard.tile.name} to lower sacrifice asset ${bestTarget.tile.name}.`,
-            onExecute: () => delayClick(sidebarProp, `Switching to ${bestTarget.tile.name} from right sidebar for debt recovery`)
-          });
-        }
-      }
-      if (openCard && !GameMemory.ownership[openCard.tile.id]?.mortgaged) {
-        const mortgageBtn = snapshot.findModalMortgageButton();
-        if (mortgageBtn && (GameMemory.ownership[openCard.tile.id]?.houses || 0) === 0) {
-          const tileName = openCard.tile.name;
-          return executeOrAdvise({
-            el: mortgageBtn,
-            title: `MORTGAGE: ${tileName.toUpperCase()}`,
-            reason: `In debt ($${GameMemory.myCash})! Mortgaging asset to clear debt immediately.`,
-            onExecute: () => {
-              this.isLiquidating = true;
-              setTimeout(() => {
-                this.isLiquidating = false;
-              }, 800);
-              if (GameMemory.ownership[openCard.tile.id]) {
-                GameMemory.ownership[openCard.tile.id].mortgaged = true;
-              }
-              delayClick(mortgageBtn, `Clicking Mortgage button to clear debt`);
-            }
-          });
-        }
-        const sellHouseBtn = snapshot.findModalSellHouseButton();
-        if (sellHouseBtn && (GameMemory.ownership[openCard.tile.id]?.houses || 0) > 0) {
-          return executeOrAdvise({
-            el: sellHouseBtn,
-            title: `SELL HOUSE: ${openCard.tile.name.toUpperCase()} [\u2193]`,
-            reason: `In debt ($${GameMemory.myCash})! Selling house to clear debt immediately.`,
-            onExecute: () => {
-              this.isLiquidating = true;
-              setTimeout(() => {
-                this.isLiquidating = false;
-              }, 800);
-              delayClick(sellHouseBtn, "Clicking [\u2193] to sell house");
-            }
-          });
-        }
-      }
-      if (bestTarget) {
-        const sidebarProp = snapshot.findSidebarPropertyItem(bestTarget.tile.name);
-        if (sidebarProp) {
-          return executeOrAdvise({
-            el: sidebarProp,
-            title: `OPEN ${bestTarget.tile.name.toUpperCase()} (RIGHT SIDEBAR) TO LIQUIDATE`,
-            reason: `In debt ($${GameMemory.myCash}). Selecting lowest sacrifice asset from right sidebar to mortgage.`,
-            onExecute: () => delayClick(sidebarProp, `Opening ${bestTarget.tile.name} from right sidebar for debt recovery`)
-          });
-        }
-      }
-      return false;
-    },
-    handleRollDice(snapshot) {
-      if (this.isRollingDice) return false;
-      const rollBtn = snapshot.findExactOrIncludes(["roll the dice", "roll again"]);
-      if (!rollBtn) return false;
-      const standingTile = BOARD_TILES[GameMemory.myPos];
-      const buyBtn = snapshot.findBuyPropertyButton ? snapshot.findBuyPropertyButton(standingTile) : null;
-      const auctionBtn = snapshot.findExactOrIncludes(["auction", "pass", "don't buy"]);
-      const isPurchasable = standingTile && standingTile.group && (standingTile.type === "property" || standingTile.type === "airport" || standingTile.type === "utility");
-      const isUnowned = isPurchasable && !GameMemory.ownership[standingTile.id]?.owner;
-      if (buyBtn || auctionBtn || isUnowned) {
-        logToBot(`[DICE GUARD] Buy/Auction pending for ${standingTile?.name || "tile"}. Prioritizing purchase before roll.`);
-        if (this.handleBuyOrAuction(snapshot)) {
-          return true;
-        }
-        if (isUnowned && !buyBtn && !auctionBtn) {
-          return false;
-        }
-      }
-      GameMemory.isMyTurn = true;
-      logToBot(`[DICE ACTION] It's my turn! Rolling dice (Turn #${GameMemory.turnCount + 1}) | Cash: $${GameMemory.myCash} | Pos: Tile #${GameMemory.myPos}`);
-      return executeOrAdvise({
-        el: rollBtn,
-        title: `ROLL THE DICE (Turn #${GameMemory.turnCount + 1})`,
-        reason: `My turn! Cash: $${GameMemory.myCash} | Pos: Tile #${GameMemory.myPos}`,
-        onExecute: () => {
-          this.isRollingDice = true;
-          setTimeout(() => {
-            this.isRollingDice = false;
-          }, 2200);
-          GameMemory.turnCount++;
-          delayClick(rollBtn, `Rolling dice`);
-        }
-      });
-    },
     lastDeliberatedTurn: -1,
-    isEndingTurn: false,
-    unownedTileWaitCount: 0,
-    lastGuardedTileId: -1,
-    _lastPendingBuyLog: 0,
-    async deliberateBeforeEndTurn(snapshot) {
-      const endTurnBtn = snapshot.findExactOrIncludes(["end turn", "done", "continue"]);
-      if (!endTurnBtn) return false;
-      const myPlayerCash = GameMemory.players[GameMemory.myName]?.cash;
-      const isDebt = GameMemory.myCash < 0 || GameMemory.isNegativeDebt || typeof myPlayerCash === "number" && myPlayerCash < 0;
-      if (isDebt) {
-        logToBot(`[DEBT GUARD] Cannot end turn while in debt ($${GameMemory.myCash}). Liquidating assets to survive...`);
-        if (this.handleDebtRecovery(snapshot)) {
-          return true;
-        }
-        return false;
-      }
-      const standingTile = BOARD_TILES[GameMemory.myPos];
-      const isPurchasable = standingTile && standingTile.group && (standingTile.type === "property" || standingTile.type === "airport" || standingTile.type === "utility");
-      const currentOwner = standingTile ? GameMemory.ownership[standingTile.id]?.owner : null;
-      const isUnowned = isPurchasable && !currentOwner;
-      const effectiveCash = Math.max(GameMemory.myCash, GameMemory.players[GameMemory.myName]?.cash || 0);
-      const canAfford = standingTile ? effectiveCash >= (standingTile.price || 0) : false;
-      if (isUnowned && canAfford) {
-        if (this.lastGuardedTileId !== standingTile.id) {
-          this.lastGuardedTileId = standingTile.id;
-          this.unownedTileWaitCount = 0;
-        }
-        if (this.handleBuyOrAuction(snapshot)) {
-          return true;
-        }
-        if (this.unownedTileWaitCount < 4) {
-          this.unownedTileWaitCount++;
-          if (this.unownedTileWaitCount === 1) {
-            logToBot(`[TURN GUARD] Holding 'End Turn' on ${standingTile.name} ($${standingTile.price}) to allow Buy prompt to render...`);
-          }
-          return false;
-        } else {
-          logToBot(`[TURN GUARD TIMEOUT] Prompt did not appear for ${standingTile.name} ($${standingTile.price}). Proceeding.`);
-        }
-      } else {
-        this.unownedTileWaitCount = 0;
-        this.lastGuardedTileId = -1;
-      }
-      if (CONFIG.AUTO_TRADE_ENABLED && !TradeProposalExecutor.isExecuting) {
-        try {
-          if (this.handleProactiveTrade(snapshot)) {
-            return true;
-          }
-        } catch (_) {
-        }
-      }
+    async deliberateBeforeEndTurn() {
       if (CONFIG.DELIBERATE_BEFORE_END_TURN && CONFIG.OLLAMA_ENABLED && this.lastDeliberatedTurn !== GameMemory.turnCount) {
         this.lastDeliberatedTurn = GameMemory.turnCount;
-        logToBot("[STRATEGY] Ollama turn review before ending...");
         const verdict = await OllamaClient.deliberateEndTurnStrategy();
-        logToBot(`[STRATEGY] Deliberation: ${verdict.action} - ${verdict.rationale}`);
         if (verdict.action === "UPGRADE") {
-          if (await this.handleHouseBuilding(snapshot)) {
-            return true;
-          }
+          if (await this.handleHouseBuilding()) return true;
         }
       }
-      return this.handleEndTurn(snapshot);
+      return this.handleEndTurn();
     },
-    handleEndTurn(snapshot) {
-      if (this.isEndingTurn) return false;
-      const myPlayerCash = GameMemory.players[GameMemory.myName]?.cash;
-      const isDebt = GameMemory.myCash < 0 || GameMemory.isNegativeDebt || typeof myPlayerCash === "number" && myPlayerCash < 0;
-      if (isDebt) {
-        logToBot(`[DEBT GUARD] Blocked End Turn click: current balance is negative ($${GameMemory.myCash}).`);
-        return false;
-      }
-      const bodyText = (document.body ? document.body.innerText : "").toLowerCase();
-      const myName = (GameMemory.myName || "").toLowerCase();
-      if (bodyText.includes("is playing...") && myName && !bodyText.includes(`${myName} is playing...`)) {
+    handleEndTurn() {
+      if (!GameMemory.isMyTurn || !GameMemory.hasRolled) return false;
+      if (GameMemory.myCash < 0 || GameMemory.isNegativeDebt) {
+        logToBot(`[DEBT GUARD] Cannot end turn while in debt ($${GameMemory.myCash}). Liquidating...`);
+        if (this.handleDebtRecovery()) return true;
         return false;
       }
       const standingTile = BOARD_TILES[GameMemory.myPos];
       const isPurchasable = standingTile && standingTile.group && (standingTile.type === "property" || standingTile.type === "airport" || standingTile.type === "utility");
-      const currentOwner = standingTile ? GameMemory.ownership[standingTile.id]?.owner : null;
-      const effectiveCash = Math.max(GameMemory.myCash, GameMemory.players[GameMemory.myName]?.cash || 0);
-      if (isPurchasable && !currentOwner && effectiveCash >= (standingTile.price || 0) && this.unownedTileWaitCount < 8) {
-        return false;
+      const isUnowned = isPurchasable && !GameMemory.ownership[standingTile.id]?.owner;
+      if (isUnowned && GameMemory.myCash >= (standingTile.price || 0)) {
+        if (this.handleBuyOrAuction()) return true;
       }
-      const endTurnBtn = snapshot.findExactOrIncludes(["end turn", "done", "continue"]);
-      if (endTurnBtn) {
-        const modalCloseBtn = snapshot.findModalCloseButton ? snapshot.findModalCloseButton() : null;
-        if (modalCloseBtn) {
-          try {
-            modalCloseBtn.click();
-          } catch (_) {
-          }
+      return executeOrAdvise({
+        title: "END TURN",
+        reason: `Turn actions complete. Passing priority to next player.`,
+        onExecute: () => {
+          TradeProposalExecutor.cancelPendingTrade();
+          sendSocketAction("end-turn");
+          GameMemory.isMyTurn = false;
+          GameMemory.hasRolled = false;
         }
-        this.isEndingTurn = true;
-        setTimeout(() => {
-          this.isEndingTurn = false;
-        }, 2500);
-        GameMemory.isMyTurn = false;
-        logToBot(`[TURN ACTION] Ending turn #${GameMemory.turnCount}. Passing turn priority to next player.`);
-        return executeOrAdvise({
-          el: endTurnBtn,
-          title: "END TURN",
-          reason: "Turn actions finished. Passing priority.",
-          onExecute: () => delayClick(endTurnBtn, "Ending turn")
-        });
+      });
+    },
+    handleTurnClockWatchdog() {
+      if (!GameMemory.isMyTurn) return false;
+      const leftMs = GameMemory.getTurnClockRemainingMs();
+      if (leftMs < 7e3 && !GameMemory.turnClock.clockRequestedThisTurn) {
+        GameMemory.turnClock.clockRequestedThisTurn = true;
+        logToBot(`[TURN CLOCK] \u26A0\uFE0F Turn timer low (${Math.round(leftMs / 1e3)}s)! Requesting +60s extension from table...`);
+        sendSocketAction("request-clock-time");
+        return true;
+      }
+      if (leftMs < 2500) {
+        logToBot(`[TURN CLOCK] \u{1F6A8} EMERGENCY FALLBACK (${Math.round(leftMs / 1e3)}s left)! Auto-acting to prevent kick.`);
+        if (!GameMemory.hasRolled && !GameMemory.inJail) {
+          GameMemory.hasRolled = true;
+          sendSocketAction("plz-roll-dices");
+          return true;
+        } else {
+          this.handleEndTurn();
+          return true;
+        }
       }
       return false;
     }
   };
 
-  // src/dom/socketHook.js
+  // src/protocol/socketHook.js
+  var onSocketMessageCallback = null;
+  function setSocketMessageCallback(fn) {
+    onSocketMessageCallback = fn;
+  }
+  function sendSocketAction(eventName, payload) {
+    const ws = GameMemory.activeSocket;
+    if (!ws || ws.readyState !== 1) {
+      return false;
+    }
+    const prefix = GameMemory.socketPrefix || "42/api/game,";
+    const packet = payload !== void 0 ? `${prefix}${JSON.stringify([eventName, payload])}` : `${prefix}${JSON.stringify([eventName])}`;
+    logToBot(`[ZERO-UI WS] \u{1F680} Sent: ${eventName}${payload !== void 0 ? " " + JSON.stringify(payload) : ""}`);
+    ws.send(packet);
+    return true;
+  }
+  function requestFullStateResync() {
+    logToBot(`[PROTOCOL] \u{1F504} Requesting authoritative game state resync from server...`);
+    return sendSocketAction("request-sync", { snapshot: "" });
+  }
+  function getPlayerIdByName(name) {
+    if (!name) return null;
+    const cleanTarget = String(name).replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[->\]\[→←\|👑:]/g, "").replace(/[^\w\s-]/g, "").trim().toLowerCase();
+    for (const [pName, pData] of Object.entries(GameMemory.players)) {
+      const cleanName = String(pName).replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, "").replace(/[->\]\[→←\|👑:]/g, "").replace(/[^\w\s-]/g, "").trim().toLowerCase();
+      if (cleanName === cleanTarget && pData?.id !== void 0) {
+        return pData.id;
+      }
+    }
+    return null;
+  }
+  function hookSocketInstance(ws) {
+    if (!ws || ws.__richupSendHooked) return;
+    ws.__richupSendHooked = true;
+    GameMemory.activeSocket = ws;
+    const origSend = ws.send;
+    ws.send = function(data) {
+      try {
+        const raw = typeof data === "string" ? data : "";
+        if (raw && raw !== "2" && raw !== "3") {
+          console.log("%c[OUTGOING WS FRAME]", "color: #38bdf8; font-weight: bold;", raw);
+          if (!GameMemory.wsOutgoing) GameMemory.wsOutgoing = [];
+          if (GameMemory.wsOutgoing.length >= 50) GameMemory.wsOutgoing.shift();
+          GameMemory.wsOutgoing.push({
+            ts: Date.now(),
+            raw
+          });
+          logToBot(`[WS OUTGOING] \u{1F4E4} ${raw.slice(0, 140)}`);
+          parseOutgoingSocketIOFrame(raw);
+        }
+      } catch (err) {
+        console.warn("[RichUpBot WS Hook] Error in ws.send hook:", err);
+      }
+      return origSend.apply(this, arguments);
+    };
+  }
+  function parseOutgoingSocketIOFrame(raw) {
+    if (!raw || typeof raw !== "string") return;
+    const bracketIdx = raw.indexOf("[");
+    if (bracketIdx === -1) return;
+    const prefix = raw.slice(0, bracketIdx);
+    if (prefix) {
+      GameMemory.socketPrefix = prefix;
+    }
+    try {
+      const arr = JSON.parse(raw.slice(bracketIdx));
+      if (!Array.isArray(arr) || arr.length === 0) return;
+      const eventName = arr[0];
+      const payload = arr[1];
+      logToBot(`[WS ACTION DETECTED] Event: "${eventName}" Payload: ${JSON.stringify(payload)}`);
+      console.log("[RICHUP OUTGOING ACTION]", { eventName, payload, prefix });
+    } catch (_) {
+    }
+  }
   function installWebSocketHook() {
     const targetWin = typeof unsafeWindow !== "undefined" && unsafeWindow ? unsafeWindow : window;
     if (targetWin.__richupWsHooked) return;
@@ -6298,7 +3738,7 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     if (!NativeWS) return;
     targetWin.WebSocket = function(...args) {
       const ws = new NativeWS(...args);
-      GameMemory.activeSocket = ws;
+      hookSocketInstance(ws);
       console.log("[RichUpBot WS Hook] Native WebSocket intercepted:", args[0]);
       ws.addEventListener("message", (event) => {
         try {
@@ -6315,6 +3755,25 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         }
       });
       return ws;
+    };
+    const origProtoSend = NativeWS.prototype.send;
+    NativeWS.prototype.send = function(data) {
+      try {
+        hookSocketInstance(this);
+        const raw = typeof data === "string" ? data : "";
+        if (raw && raw !== "2" && raw !== "3") {
+          console.log("%c[OUTGOING WS PROTO FRAME]", "color: #38bdf8; font-weight: bold;", raw);
+          if (!GameMemory.wsOutgoing) GameMemory.wsOutgoing = [];
+          if (GameMemory.wsOutgoing.length >= 50) GameMemory.wsOutgoing.shift();
+          GameMemory.wsOutgoing.push({
+            ts: Date.now(),
+            raw
+          });
+          parseOutgoingSocketIOFrame(raw);
+        }
+      } catch (_) {
+      }
+      return origProtoSend.apply(this, arguments);
     };
     targetWin.WebSocket.prototype = NativeWS.prototype;
     Object.assign(targetWin.WebSocket, NativeWS);
@@ -6334,54 +3793,93 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       GameMemory.wsActive = true;
       GameMemory.wsLastMessageTime = Date.now();
       if (eventName.includes("game") || eventName.includes("init") || eventName.includes("state") || eventName.includes("room")) {
-        if (payload.settings) {
-          if (typeof payload.settings.can_collect_rent_in_jail === "boolean") {
-            GameMemory.roomSettings.collectRentInJail = payload.settings.can_collect_rent_in_jail;
+        const gs = payload.gameState || payload.room || payload;
+        const settings = gs.settings || payload.settings;
+        if (settings) {
+          if (typeof settings.can_collect_rent_in_jail === "boolean") {
+            GameMemory.roomSettings.collectRentInJail = settings.can_collect_rent_in_jail;
           }
-          if (typeof payload.settings.double_on_start === "boolean") {
-            GameMemory.roomSettings.doubleOnStart = payload.settings.double_on_start;
+          if (typeof settings.double_on_start === "boolean") {
+            GameMemory.roomSettings.doubleOnStart = settings.double_on_start;
           }
-          if (typeof payload.settings.pass_start_bonus === "number") {
-            GameMemory.roomSettings.passStartBonus = payload.settings.pass_start_bonus;
+          if (typeof settings.pass_start_bonus === "number") {
+            GameMemory.roomSettings.passStartBonus = settings.pass_start_bonus;
           }
-          if (typeof payload.settings.starting_cash === "number") {
-            GameMemory.roomSettings.startingCash = payload.settings.starting_cash;
-            if (!GameMemory.cashVerified) {
-              GameMemory.myCash = payload.settings.starting_cash;
-            }
+          if (typeof settings.startingCash === "number") {
+            GameMemory.roomSettings.startingCash = settings.startingCash;
+          } else if (typeof settings.starting_cash === "number") {
+            GameMemory.roomSettings.startingCash = settings.starting_cash;
+          }
+          if (GameMemory.roomSettings.startingCash && !GameMemory.cashVerified) {
+            GameMemory.myCash = GameMemory.roomSettings.startingCash;
           }
         }
-        const myId = payload.myId || payload.my_id || payload.userId || payload.user_id || payload.playerId;
-        const playersList = Array.isArray(payload.players) ? payload.players : Array.isArray(payload.playerList) ? payload.playerList : null;
+        const myId = payload.selfParticipantId || payload.myId || payload.my_id || payload.userId || payload.user_id || payload.playerId;
+        if (myId) {
+          GameMemory.myId = myId;
+        }
+        const playersList = Array.isArray(gs.participants) ? gs.participants : Array.isArray(payload.participants) ? payload.participants : Array.isArray(gs.players) ? gs.players : Array.isArray(payload.playerList) ? payload.playerList : null;
         if (playersList) {
           const me = myId ? playersList.find((p) => p.id === myId || p.userId === myId || p.isMe || p.is_me) : playersList.find((p) => p.isMe || p.is_me);
           if (me && (me.name || me.username)) {
             GameMemory.setMyName(me.name || me.username);
           }
+          const prisonIdx = gs.boardConfig?.prisonBlockIndex ?? 10;
+          const prisonBlock = Array.isArray(gs.blocks) ? gs.blocks[prisonIdx] : null;
+          const prisonSuspensions = prisonBlock && typeof prisonBlock.suspendedTurnsRemaining === "object" ? prisonBlock.suspendedTurnsRemaining : null;
           const validNames = /* @__PURE__ */ new Set();
           for (const p of playersList) {
             const pName = p.name || p.username;
             if (!pName) continue;
             validNames.add(pName);
             const rawMoney = typeof p.money === "number" ? p.money : typeof p.cash === "number" ? p.cash : typeof p.balance === "number" ? p.balance : null;
-            const isThisPlayerMe = GameMemory.isMe(pName) || myId && p.id === myId || Boolean(p.isMe || p.is_me);
+            const isThisPlayerMe = GameMemory.isMe(pName) || myId && (p.id === myId || p.userId === myId) || Boolean(p.isMe || p.is_me);
+            const pId = p.id ?? p.userId ?? p.user_id ?? p.playerId;
             const playerPos = typeof p.position === "number" ? p.position : typeof p.pos === "number" ? p.pos : GameMemory.players[pName]?.pos || 0;
+            const realJailTurns = prisonSuspensions && pId ? prisonSuspensions[pId] || 0 : 0;
+            const isReallyInJail = realJailTurns > 0 || playerPos === prisonIdx && Boolean(p.inJail || p.jailTurns || p.in_jail);
             if (rawMoney !== null) {
               GameMemory.players[pName] = {
+                id: pId,
                 cash: rawMoney,
                 pos: playerPos,
-                inJail: Boolean(p.inJail || p.jailTurns || p.in_jail),
+                inJail: isReallyInJail,
                 isMe: isThisPlayerMe,
-                bankrupt: Boolean(p.bankrupt)
+                bankrupt: Boolean(p.bankrupt || p.bankruptedAt)
               };
               if (isThisPlayerMe) {
                 GameMemory.setMyName(pName);
                 GameMemory.myCash = rawMoney;
                 GameMemory.cashVerified = true;
                 GameMemory.myPos = playerPos;
-                if (typeof p.inJail === "boolean") GameMemory.inJail = p.inJail;
+                GameMemory.inJail = isReallyInJail;
+                GameMemory.jailTurns = realJailTurns;
               }
             }
+          }
+          if (typeof gs.currentPlayerIndex === "number" && playersList[gs.currentPlayerIndex]) {
+            const curP = playersList[gs.currentPlayerIndex];
+            GameMemory.isMyTurn = Boolean(GameMemory.isMe(curP.name || curP.username) || myId && curP.id === myId);
+          }
+          if (typeof gs.cubesRolledInTurn === "boolean") {
+            if (GameMemory.isMyTurn) {
+              GameMemory.hasRolled = gs.cubesRolledInTurn;
+            }
+          }
+          if (typeof gs.canPerformTurnActions === "boolean") {
+            GameMemory.canPerformTurnActions = gs.canPerformTurnActions;
+          }
+          if (typeof gs.doublesInARow === "number") {
+            GameMemory.doublesInARow = gs.doublesInARow;
+          }
+          if (gs.turnClock) {
+            GameMemory.updateTurnClock(gs.turnClock);
+          }
+          if (Array.isArray(gs.trades)) {
+            GameMemory.trades = gs.trades;
+          }
+          if (gs.auction !== void 0) {
+            GameMemory.activeAuction = gs.auction;
           }
           if (validNames.size > 0) {
             for (const existing of Object.keys(GameMemory.players)) {
@@ -6401,8 +3899,18 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
       if (eventName.includes("roll") || eventName.includes("dice")) {
         const dice = Array.isArray(payload.dice) ? payload.dice : Array.isArray(payload) ? payload : [];
         const sum = (dice[0] || 0) + (dice[1] || 0);
+        const isDoubles = dice.length >= 2 && dice[0] === dice[1] && dice[0] > 0;
         const pName = payload.playerName || payload.username || payload.name || payload.player;
-        if (pName && GameMemory.isMe(pName) && sum > 0) {
+        const isMeRolling = pName && GameMemory.isMe(pName) || !pName && GameMemory.isMyTurn;
+        if (isMeRolling && sum > 0) {
+          if (isDoubles) {
+            GameMemory.hasRolled = false;
+            GameMemory.doublesInARow = (GameMemory.doublesInARow || 0) + 1;
+            logToBot(`[DICE] \u{1F3B2} DOUBLES ROLLED ([${dice[0]},${dice[1]}])! "Roll again" granted (Doubles #${GameMemory.doublesInARow})`);
+          } else {
+            GameMemory.hasRolled = true;
+            GameMemory.doublesInARow = 0;
+          }
           if (!GameMemory.inJail) {
             GameMemory.myPos = (GameMemory.myPos + sum) % 40;
             logToBot(`[DICE] \u{1F3B2} I rolled ${sum} ([${dice.join(",")}]) -> Moved to Tile #${GameMemory.myPos} (${BOARD_TILES[GameMemory.myPos]?.name || "Unknown"})`);
@@ -6473,14 +3981,106 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
           }
         }
       }
-      if (eventName.includes("turn")) {
+      if (eventName === "turn-ended" || eventName.includes("turn-ended")) {
+        GameMemory.hasRolled = false;
+        GameMemory.isMyTurn = false;
+      } else if (eventName.includes("turn")) {
         const active = payload.activePlayer || payload.player || payload.username || payload.name;
         if (active) {
           GameMemory.isMyTurn = GameMemory.isMe(active);
+          if (GameMemory.isMyTurn) {
+            GameMemory.hasRolled = false;
+          }
+        }
+      }
+      if (eventName === "auction-started" || eventName.includes("auction-started")) {
+        const blockIndex = typeof payload.blockIndex === "number" ? payload.blockIndex : GameMemory.myPos;
+        GameMemory.activeAuction = {
+          blockIndex,
+          currentBid: typeof payload.amount === "number" ? payload.amount : 0
+        };
+      }
+      if (eventName === "auction-bade" || eventName.includes("auction-bade")) {
+        if (GameMemory.activeAuction && typeof payload.amount === "number") {
+          GameMemory.activeAuction.currentBid = payload.amount;
+        }
+      }
+      if (eventName === "auction-ended" || eventName.includes("auction-ended")) {
+        GameMemory.activeAuction = null;
+      }
+      if (eventName === "trade-created" || eventName.includes("trade-created")) {
+        const tr = payload.trade || payload;
+        if (tr) {
+          if (!GameMemory.trades) GameMemory.trades = [];
+          if (!GameMemory.trades.some((t) => t.id === tr.id)) {
+            GameMemory.trades.push(tr);
+          }
+          if (tr.initiatorId === GameMemory.myId || GameMemory.myName && tr.initiator?.name === GameMemory.myName) {
+            GameMemory.activeOutgoingTradeId = tr.id;
+            GameMemory.activeOutgoingTradeTime = Date.now();
+            logToBot(`[TRADE] \u{1F4E4} Outgoing trade registered (ID: ${tr.id}).`);
+          }
+        }
+      }
+      if (eventName === "trade-confirmed" || eventName === "trade-declined" || eventName === "trade-deleted") {
+        const trId = payload.tradeId || payload.id;
+        if (trId) {
+          if (GameMemory.trades) {
+            GameMemory.trades = GameMemory.trades.filter((t) => t.id !== trId);
+          }
+          if (GameMemory.activeOutgoingTradeId === trId) {
+            GameMemory.activeOutgoingTradeId = null;
+            GameMemory.activeOutgoingTradeTime = 0;
+          }
+        }
+      }
+      if (eventName === "clock-time-requested" || eventName.includes("clock-time-requested")) {
+        const reqPid = payload.playerId || payload.participantId;
+        if (reqPid && reqPid !== GameMemory.myId) {
+          sendSocketAction("grant-clock-time");
+          logToBot("[TURN CLOCK] \u23F1\uFE0F Opponent requested clock time -> Automatically granted +60s extension.");
+        }
+      }
+      if (eventName === "clock-time-granted" || eventName.includes("clock-time-granted")) {
+        if (GameMemory.turnClock) {
+          GameMemory.turnClock.grantedMs = (GameMemory.turnClock.grantedMs || 0) + 6e4;
+          GameMemory.turnClock.turnExpiresAt = (GameMemory.turnClock.turnExpiresAt || Date.now()) + 6e4;
+        }
+        logToBot("[TURN CLOCK] \u23F1\uFE0F Clock time granted (+60s)!");
+      }
+      if (eventName === "new-votekick-request" || eventName.includes("votekick")) {
+        const targetId = payload.playerId || payload.votingPlayerId || payload.targetPlayerId;
+        if (targetId && targetId !== GameMemory.myId) {
+          sendSocketAction("votekick-player", { playerId: targetId });
+          logToBot(`[ANTI-STALL] \u{1F5F3}\uFE0F Voted YES on votekick request to remove AFK staller.`);
+        }
+      }
+      if (eventName === "game-ended" || eventName.includes("game-ended")) {
+        const winnerId = payload.winnerId;
+        const isMeWinner = Boolean(winnerId && (winnerId === GameMemory.myId || GameMemory.isMe(winnerId)));
+        if (isMeWinner) {
+          logToBot(`[VICTORY] \u{1F3C6} Match WON! Claiming free post-game coin rewards...`);
+          try {
+            fetch("/api/game/claim-coin-reward", {
+              method: "POST",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" }
+            }).then((r) => r.json()).then((res) => {
+              logToBot(`[VICTORY] \u{1F4B0} Coins claimed successfully: ${JSON.stringify(res)}`);
+            }).catch(() => {
+            });
+          } catch (_) {
+          }
         }
       }
       deepSyncFromObject(payload);
       deepSyncPropertiesFromPayload(payload);
+      if (onSocketMessageCallback) {
+        try {
+          onSocketMessageCallback(eventName, payload);
+        } catch (_) {
+        }
+      }
     } catch (_) {
     }
   }
@@ -6522,7 +4122,8 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     for (const name of Object.keys(GameMemory.players)) {
       playerMap.set(name, name);
     }
-    const playersList = Array.isArray(payload.players) ? payload.players : Array.isArray(payload.playerList) ? payload.playerList : null;
+    const gs = payload.gameState || payload.room || payload;
+    const playersList = Array.isArray(gs.participants) ? gs.participants : Array.isArray(payload.participants) ? payload.participants : Array.isArray(gs.players) ? gs.players : Array.isArray(payload.playerList) ? payload.playerList : null;
     if (playersList) {
       for (const p of playersList) {
         const pName = p.name || p.username;
@@ -6602,14 +4203,12 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
   }
   var state = window.__richupAuto = {
     status: false,
-    observer: null,
     timeouts: /* @__PURE__ */ new Set(),
     intervals: /* @__PURE__ */ new Set(),
     evaluateTimeout: null,
     keydownHandler: null,
     cleanup() {
       this.status = false;
-      if (this.observer) this.observer.disconnect();
       this.timeouts.forEach((id) => clearTimeout(id));
       this.intervals.forEach((id) => clearInterval(id));
       this.timeouts.clear();
@@ -6633,92 +4232,77 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     state.intervals.add(id);
     return id;
   }
-  function checkGameStarted(snapshot) {
-    return !snapshot.findExactOrIncludes(["change color", "join game", "create game", "ready up"]);
-  }
   var isEvaluating = false;
   async function evaluateAndAct() {
     try {
       if (!state.status || getIsActing() || isEvaluating) return;
       isEvaluating = true;
       try {
-        syncBoardStateFromDOM();
-      } catch (err) {
-        logToBot(`[DOM Sync Warning] ${err}`);
-      }
-      try {
         HUDPanel.updateTelemetry();
-      } catch (err) {
-        logToBot(`[Telemetry Warning] ${err}`);
+      } catch (_) {
       }
       try {
-        await ChatEngine.scanAndRespondToOpponentChat();
-      } catch (err) {
-        logToBot(`[Chat Scan Warning] ${err}`);
-      }
-      let snapshot;
-      try {
-        snapshot = createDOMSnapshot();
-      } catch (err) {
-        logToBot(`[DOM Snapshot Error] ${err}`);
-        return;
+        ChatEngine.scanAndRespondToOpponentChat().catch(() => {
+        });
+      } catch (_) {
       }
       try {
-        if (ActionExecutor.handleConfirmationModal(snapshot)) return;
+        TradeProposalExecutor.cancelStaleProposal();
+        if (ActionExecutor.handleTurnClockWatchdog()) return;
       } catch (err) {
-        logToBot(`[Confirmation Modal Warning] ${err}`);
+        logToBot(`[Clock Watchdog Warning] ${err}`);
       }
       try {
-        if (await ActionExecutor.handleTrade(snapshot)) return;
+        if (await ActionExecutor.handleTrade()) return;
       } catch (err) {
-        logToBot(`[Trade Step Warning] ${err}`);
+        logToBot(`[Trade Warning] ${err}`);
       }
       try {
-        if (ActionExecutor.handleDebtRecovery(snapshot)) return;
+        if (ActionExecutor.handleDebtRecovery()) return;
       } catch (err) {
-        logToBot(`[Debt Step Warning] ${err}`);
+        logToBot(`[Debt Warning] ${err}`);
       }
       try {
-        if (ActionExecutor.handleJail(snapshot)) return;
+        if (ActionExecutor.handleJail()) return;
       } catch (err) {
-        logToBot(`[Jail Step Warning] ${err}`);
+        logToBot(`[Jail Warning] ${err}`);
       }
       try {
-        if (ActionExecutor.handleBuyOrAuction(snapshot)) return;
+        if (ActionExecutor.handleBuyOrAuction()) return;
       } catch (err) {
-        logToBot(`[Buy/Auction Step Warning] ${err}`);
+        logToBot(`[Buy/Auction Warning] ${err}`);
       }
       try {
-        if (ActionExecutor.handleRollDice(snapshot)) return;
+        if (ActionExecutor.handleRollDice()) return;
       } catch (err) {
-        logToBot(`[Roll Step Warning] ${err}`);
+        logToBot(`[Roll Warning] ${err}`);
       }
       try {
-        if (ActionExecutor.handleAuction(snapshot)) return;
+        if (ActionExecutor.handleAuction()) return;
       } catch (err) {
-        logToBot(`[Auction Bid Step Warning] ${err}`);
+        logToBot(`[Auction Warning] ${err}`);
       }
       try {
-        if (await ActionExecutor.handleHouseBuilding(snapshot)) return;
+        if (await ActionExecutor.handleHouseBuilding()) return;
       } catch (err) {
-        logToBot(`[Build Step Warning] ${err}`);
+        logToBot(`[Build Warning] ${err}`);
       }
       try {
-        if (ActionExecutor.handleUnmortgage(snapshot)) return;
+        if (ActionExecutor.handleUnmortgage()) return;
       } catch (err) {
-        logToBot(`[Unmortgage Step Warning] ${err}`);
+        logToBot(`[Unmortgage Warning] ${err}`);
       }
       try {
-        if (ActionExecutor.handleProactiveTrade(snapshot)) return;
+        if (ActionExecutor.handleProactiveTrade()) return;
       } catch (err) {
-        logToBot(`[Proactive Trade Step Warning] ${err}`);
+        logToBot(`[Trade Swap Warning] ${err}`);
       }
       try {
-        await ActionExecutor.deliberateBeforeEndTurn(snapshot);
+        await ActionExecutor.deliberateBeforeEndTurn();
       } catch (err) {
-        logToBot(`[End Turn Step Warning] ${err}`);
+        logToBot(`[End Turn Warning] ${err}`);
         try {
-          ActionExecutor.handleEndTurn(snapshot);
+          ActionExecutor.handleEndTurn();
         } catch (_) {
         }
       }
@@ -6737,57 +4321,17 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
     state.evaluateTimeout = scheduleTimeout(async () => {
       state.evaluateTimeout = null;
       await evaluateAndAct();
-    }, CONFIG.OBSERVER_DEBOUNCE_MS);
+    }, 60);
   }
   function toggleAutomation() {
     state.status = !state.status;
     HUDPanel.updateMasterButton(state.status);
     if (state.status) {
-      const snap = createDOMSnapshot();
-      if (!checkGameStarted(snap)) {
-        logToBot("Lobby detected. Bot will activate once match starts.");
-      } else {
-        logToBot("GRANDMASTER AI ENGAGED. AUTONOMOUS GAMEPLAY ACTIVE.");
-      }
+      logToBot("\u{1F680} GRANDMASTER AI ENGAGED. PURE PROTOCOL ACTIVE.");
       evaluateAndAct();
     } else {
-      logToBot("Automation Paused (STANDBY).");
+      logToBot("\u23F8\uFE0F Automation Paused (STANDBY).");
     }
-  }
-  function startObserver() {
-    const target = document.body;
-    if (!target) return;
-    state.observer = new MutationObserver((mutations) => {
-      if (!state.status || getIsActing()) return;
-      for (let i = 0; i < mutations.length; i++) {
-        const m = mutations[i];
-        if (HUDPanel.elements.panel && HUDPanel.elements.panel.contains(m.target)) continue;
-        scheduleEvaluate();
-        return;
-      }
-    });
-    state.observer.observe(target, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      characterData: true
-    });
-    scheduleInterval(() => {
-      if (state.status && !getIsActing()) {
-        evaluateAndAct();
-      } else {
-        try {
-          syncBoardStateFromDOM();
-        } catch (err) {
-          logToBot(`[DOM Sync Warning] ${err}`);
-        }
-        try {
-          HUDPanel.updateTelemetry();
-        } catch (err) {
-          logToBot(`[Telemetry Warning] ${err}`);
-        }
-      }
-    }, CONFIG.POLL_INTERVAL_MS);
   }
   function initWhenReady() {
     if (!document.body || !document.head) {
@@ -6807,9 +4351,26 @@ Output strictly valid JSON: {"action": "END_TURN" | "UPGRADE", "rationale": "und
         }
       }
     );
-    syncBoardStateFromDOM();
     HUDPanel.updateTelemetry();
-    startObserver();
+    setSocketMessageCallback((eventName) => {
+      if (state.status) {
+        scheduleEvaluate();
+      }
+      try {
+        HUDPanel.updateTelemetry();
+      } catch (_) {
+      }
+    });
+    scheduleInterval(() => {
+      if (state.status && !getIsActing()) {
+        evaluateAndAct();
+      } else {
+        try {
+          HUDPanel.updateTelemetry();
+        } catch (_) {
+        }
+      }
+    }, 250);
     state.keydownHandler = (e) => {
       const tag = document.activeElement ? document.activeElement.tagName : "";
       if (tag === "INPUT" || tag === "TEXTAREA") return;

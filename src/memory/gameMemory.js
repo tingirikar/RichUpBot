@@ -21,8 +21,44 @@ export const GameMemory = {
     jailTurns: 0,
     turnCount: 0,
     isMyTurn: false,
+    hasRolled: false,
+    doublesInARow: 0,
+    canPerformTurnActions: false,
     isNegativeDebt: false,
     currentRoomId: null,
+
+    // Turn Clock & Anti-AFK Protection State
+    turnClock: {
+        turnStartedAt: 0,
+        graceMs: 20000,
+        bankMs: 60000,
+        grantedMs: 0,
+        turnExpiresAt: 0,
+        clockRequestedThisTurn: false
+    },
+    activeOutgoingTradeId: null,
+    activeOutgoingTradeTime: 0,
+
+    updateTurnClock(clockData) {
+        if (!clockData) return;
+        const cfg = clockData.config || {};
+        const turn = clockData.turn || {};
+        if (cfg.graceMs) this.turnClock.graceMs = cfg.graceMs;
+        if (turn.turnStartedAt) {
+            if (this.turnClock.turnStartedAt !== turn.turnStartedAt) {
+                this.turnClock.turnStartedAt = turn.turnStartedAt;
+                this.turnClock.clockRequestedThisTurn = false;
+            }
+        }
+        this.turnClock.grantedMs = turn.grantedMs || 0;
+        const totalBudget = (this.turnClock.graceMs || 20000) + (this.turnClock.grantedMs || 0) + (this.turnClock.bankMs || 60000);
+        this.turnClock.turnExpiresAt = (this.turnClock.turnStartedAt || Date.now()) + totalBudget;
+    },
+
+    getTurnClockRemainingMs() {
+        if (!this.turnClock.turnExpiresAt) return 60000;
+        return Math.max(0, this.turnClock.turnExpiresAt - Date.now());
+    },
 
     checkRoomTransition() {
         const match = (typeof window !== 'undefined' && window.location) 
@@ -109,6 +145,9 @@ export const GameMemory = {
     wsActive: false,
     wsLastMessageTime: 0,
     wsMessages: [],
+    wsOutgoing: [],
+    socketPrefix: '42/api/game,',
+    activeSocket: null,
     lastPurchasedBlock: null,
     lastDangerEV: 0,
     lastDynamicReserve: CONFIG.BASE_MIN_RESERVE,
@@ -154,9 +193,11 @@ export const GameMemory = {
 
     isMe(playerName) {
         if (!playerName) return false;
-        if (this.myName && playerName.toLowerCase() === this.myName.toLowerCase()) return true;
         if (playerName === '__ME__') return true;
-        return false;
+        if (!this.myName) return false;
+        const cleanA = playerName.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[->\]\[→←\|👑:]/g, '').replace(/[^\w\s-]/g, '').trim().toLowerCase();
+        const cleanB = this.myName.replace(/[\p{Emoji}\p{Extended_Pictographic}\u200d\uFE0F]/gu, '').replace(/[->\]\[→←\|👑:]/g, '').replace(/[^\w\s-]/g, '').trim().toLowerCase();
+        return cleanA === cleanB;
     },
 
     reset() {
@@ -167,9 +208,22 @@ export const GameMemory = {
         this.jailTurns = 0;
         this.turnCount = 0;
         this.isMyTurn = false;
+        this.hasRolled = false;
+        this.doublesInARow = 0;
+        this.canPerformTurnActions = false;
         this.players = {};
         this.ownership = {};
         this.declinedTrades = {};
+        this.activeOutgoingTradeId = null;
+        this.activeOutgoingTradeTime = 0;
+        this.turnClock = {
+            turnStartedAt: 0,
+            graceMs: 20000,
+            bankMs: 60000,
+            grantedMs: 0,
+            turnExpiresAt: 0,
+            clockRequestedThisTurn: false
+        };
         BOARD_TILES.forEach(t => {
             if (t.group) {
                 this.ownership[t.id] = { owner: null, houses: 0, mortgaged: false };

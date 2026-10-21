@@ -3,6 +3,7 @@ import { GameMemory } from '../memory/gameMemory.js';
 import { OllamaClient } from '../engine/ollamaClient.js';
 import { BOARD_TILES, GROUP_TILES } from '../data/boardTiles.js';
 import { OpponentTracker } from '../memory/opponentTracker.js';
+import { requestFullStateResync } from '../protocol/socketHook.js';
 
 /**
  * TABULAR MINIMAL HUD PANEL v5.0
@@ -60,87 +61,85 @@ export const HUDPanel = {
                 min-width: 310px; min-height: 380px;
                 max-width: 520px; max-height: 780px;
                 resize: both; overflow: hidden;
-                background: linear-gradient(165deg, rgba(13,10,26,0.96) 0%, rgba(20,13,40,0.98) 100%);
-                backdrop-filter: blur(20px) saturate(180%);
-                border: 1px solid rgba(139,92,246,0.3);
-                border-radius: 14px;
-                box-shadow: 0 10px 40px rgba(0,0,0,0.7), 0 0 50px rgba(109,40,217,0.15), inset 0 1px 0 rgba(255,255,255,0.06);
-                color: #f3e8ff;
-                font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+                background: linear-gradient(180deg, rgba(24, 19, 44, 0.96) 0%, rgba(18, 14, 33, 0.98) 100%);
+                backdrop-filter: blur(24px) saturate(180%);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 16px;
+                box-shadow: 0 16px 48px rgba(0, 0, 0, 0.7), 0 0 1px rgba(255, 255, 255, 0.12);
+                color: #f1f0f7;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
                 font-size: 11px; z-index: 9999999;
                 display: flex; flex-direction: column; user-select: none;
             }
             .rubot-header {
                 display: flex; justify-content: space-between; align-items: center;
-                padding: 10px 14px;
-                background: linear-gradient(90deg, rgba(109,40,217,0.5) 0%, rgba(76,29,149,0.4) 100%);
-                border-bottom: 1px solid rgba(139,92,246,0.2);
-                border-radius: 14px 14px 0 0; cursor: grab; flex-shrink: 0;
+                padding: 12px 16px;
+                background: rgba(30, 24, 54, 0.85);
+                border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 16px 16px 0 0; cursor: grab; flex-shrink: 0;
             }
             .rubot-title-wrap { display: flex; align-items: center; gap: 8px; }
             .rubot-logo {
-                width: 24px; height: 24px; border-radius: 6px;
-                background: linear-gradient(135deg, #8b5cf6, #6d28d9);
+                width: 24px; height: 24px; border-radius: 7px;
+                background: #7c3aed;
                 display: flex; align-items: center; justify-content: center;
-                font-size: 12px; flex-shrink: 0;
+                font-size: 12px; flex-shrink: 0; box-shadow: 0 2px 8px rgba(124,58,237,0.4);
             }
-            .rubot-title-main { font-size: 11.5px; font-weight: 800; color: #fff; letter-spacing: 1px; }
+            .rubot-title-main { font-size: 12px; font-weight: 800; color: #fff; letter-spacing: 0.8px; }
             .rubot-badge {
-                font-size: 8px; font-weight: 700; padding: 2px 7px;
-                border-radius: 12px; letter-spacing: 0.6px;
-                background: rgba(255,255,255,0.08); color: rgba(196,181,253,0.8);
-                border: 1px solid rgba(139,92,246,0.2); transition: all 0.3s ease;
+                font-size: 8.5px; font-weight: 700; padding: 3px 8px;
+                border-radius: 9999px; letter-spacing: 0.5px;
+                background: rgba(255,255,255,0.06); color: #9ca3af;
+                border: 1px solid rgba(255,255,255,0.08); transition: all 0.25s ease;
             }
             .rubot-badge.active {
-                background: #10b981; color: #fff; border-color: transparent;
-                box-shadow: 0 0 10px rgba(16,185,129,0.5);
+                background: rgba(16,185,129,0.18); color: #34d399;
+                border-color: rgba(16,185,129,0.35); box-shadow: 0 0 10px rgba(16,185,129,0.25);
             }
             .rubot-top-controls {
-                padding: 10px 12px 6px; display: flex; flex-direction: column; gap: 8px; flex-shrink: 0;
+                padding: 10px 14px 6px; display: flex; flex-direction: column; gap: 8px; flex-shrink: 0;
             }
             .rubot-master-btn {
-                background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%);
-                border: none; color: #fff; padding: 9px 14px;
-                font-family: 'Inter', sans-serif; font-weight: 800; font-size: 11px;
-                letter-spacing: 1px; border-radius: 8px; cursor: pointer;
-                box-shadow: 0 3px 12px rgba(109,40,217,0.4); transition: all 0.2s ease;
+                background: #7c3aed; border: none; color: #fff; padding: 10px 14px;
+                font-family: inherit; font-weight: 700; font-size: 11.5px;
+                letter-spacing: 0.5px; border-radius: 10px; cursor: pointer;
+                box-shadow: 0 4px 14px rgba(124,58,237,0.35); transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
             }
-            .rubot-master-btn:hover { box-shadow: 0 4px 16px rgba(109,40,217,0.6); transform: translateY(-1px); }
+            .rubot-master-btn:hover { background: #8b5cf6; box-shadow: 0 6px 20px rgba(124,58,237,0.5); transform: translateY(-1px); }
             .rubot-master-btn.active {
-                background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-                box-shadow: 0 3px 12px rgba(16,185,129,0.45);
+                background: #10b981; box-shadow: 0 4px 14px rgba(16,185,129,0.35);
             }
+            .rubot-master-btn.active:hover { background: #34d399; }
             .rubot-mode-wrap {
-                display: flex; background: rgba(0,0,0,0.3);
-                border-radius: 8px; padding: 2px;
-                border: 1px solid rgba(139,92,246,0.18); gap: 2px;
+                display: flex; background: rgba(0,0,0,0.35);
+                border-radius: 9999px; padding: 3px;
+                border: 1px solid rgba(255,255,255,0.05); gap: 2px;
             }
             .rubot-mode-btn {
                 flex: 1; background: transparent; border: none;
-                color: rgba(196,181,253,0.6); font-family: 'Inter', sans-serif;
-                font-weight: 700; font-size: 9.5px; padding: 5px 4px;
-                border-radius: 6px; cursor: pointer; transition: all 0.15s ease;
+                color: #9ca3af; font-family: inherit;
+                font-weight: 700; font-size: 9.5px; padding: 6px 6px;
+                border-radius: 9999px; cursor: pointer; transition: all 0.15s ease;
             }
             .rubot-mode-btn.active {
-                background: linear-gradient(135deg, #7c3aed, #6d28d9); color: #fff;
-                box-shadow: 0 1px 6px rgba(109,40,217,0.4);
+                background: #7c3aed; color: #fff;
+                box-shadow: 0 2px 8px rgba(124,58,237,0.35);
             }
             .rubot-tab-bar {
-                display: flex; background: rgba(0,0,0,0.25);
-                border-bottom: 1px solid rgba(139,92,246,0.18);
-                padding: 0 10px; gap: 4px; flex-shrink: 0;
+                display: flex; background: transparent;
+                border-bottom: 1px solid rgba(255,255,255,0.06);
+                padding: 0 12px; gap: 4px; flex-shrink: 0;
             }
             .rubot-tab-btn {
                 background: transparent; border: none;
-                color: rgba(196,181,253,0.6); font-family: 'Inter', sans-serif;
-                font-weight: 700; font-size: 10px; padding: 8px 10px;
+                color: #8b81a8; font-family: inherit;
+                font-weight: 700; font-size: 10.5px; padding: 9px 11px;
                 cursor: pointer; border-bottom: 2px solid transparent;
                 transition: all 0.2s; display: flex; align-items: center; gap: 5px;
             }
-            .rubot-tab-btn:hover { color: #e9d5ff; }
+            .rubot-tab-btn:hover { color: #fff; }
             .rubot-tab-btn.active {
                 color: #fff; border-bottom-color: #8b5cf6;
-                text-shadow: 0 0 10px rgba(167,139,250,0.5);
             }
             .rubot-tab-content {
                 padding: 10px 12px; display: flex; flex-direction: column;
@@ -152,106 +151,107 @@ export const HUDPanel = {
             /* Ollama Tab */
             .rubot-status-card {
                 display: flex; align-items: center; justify-content: space-between;
-                padding: 7px 10px; border-radius: 8px;
-                background: rgba(255,255,255,0.02); border: 1px solid rgba(139,92,246,0.15);
+                padding: 8px 11px; border-radius: 10px;
+                background: rgba(30, 24, 54, 0.55); border: 1px solid rgba(255,255,255,0.06);
             }
             .rubot-status-indicator { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 10px; }
             .rubot-status-dot { width: 7px; height: 7px; border-radius: 50%; background: #9ca3af; }
             .rubot-status-dot.online { background: #34d399; box-shadow: 0 0 8px rgba(52,211,153,0.8); }
             .rubot-status-dot.offline { background: #ef4444; }
             .rubot-field-group { display: flex; flex-direction: column; gap: 4px; }
-            .rubot-field-label { font-size: 9px; font-weight: 600; color: rgba(167,139,250,0.7); text-transform: uppercase; letter-spacing: 0.5px; }
+            .rubot-field-label { font-size: 9px; font-weight: 700; color: #a78bfa; text-transform: uppercase; letter-spacing: 0.5px; }
             .rubot-input {
-                background: rgba(0,0,0,0.35); border: 1px solid rgba(139,92,246,0.22);
-                border-radius: 6px; color: #fff; padding: 6px 8px;
-                font-family: 'JetBrains Mono', monospace; font-size: 10px; outline: none;
+                background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 8px; color: #fff; padding: 7px 10px;
+                font-family: inherit; font-size: 10px; outline: none;
             }
-            .rubot-input:focus { border-color: rgba(139,92,246,0.6); }
+            .rubot-input:focus { border-color: #8b5cf6; }
             .rubot-select {
-                background: #191230; border: 1px solid rgba(139,92,246,0.25);
-                border-radius: 6px; color: #fff; padding: 6px 8px;
-                font-family: 'Inter', sans-serif; font-size: 10px; outline: none;
+                background: #191428; border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 8px; color: #fff; padding: 7px 10px;
+                font-family: inherit; font-size: 10px; outline: none;
             }
             .rubot-btn-test {
-                background: linear-gradient(135deg, rgba(124,58,237,0.3) 0%, rgba(109,40,217,0.4) 100%);
-                border: 1px solid rgba(139,92,246,0.4); color: #e9d5ff;
-                padding: 7px; border-radius: 7px; font-weight: 700; font-size: 10px;
+                background: #7c3aed;
+                border: none; color: #fff;
+                padding: 8px; border-radius: 8px; font-weight: 700; font-size: 10.5px;
                 cursor: pointer; transition: all 0.2s; text-align: center; margin-top: 2px;
             }
-            .rubot-btn-test:hover { background: rgba(139,92,246,0.45); color: #fff; }
+            .rubot-btn-test:hover { background: #8b5cf6; }
             .rubot-info-box {
-                font-size: 9.5px; color: rgba(196,181,253,0.65); line-height: 1.4;
-                padding: 6px 8px; border-radius: 6px; background: rgba(139,92,246,0.06);
-                border: 1px dashed rgba(139,92,246,0.2);
+                font-size: 9.5px; color: #a5b4fc; line-height: 1.4;
+                padding: 7px 10px; border-radius: 8px; background: rgba(124,58,237,0.08);
+                border: 1px solid rgba(139,92,246,0.18);
             }
 
             /* Toggles Tab */
             .rubot-toggles-list { display: flex; flex-direction: column; gap: 5px; }
             .rubot-toggle-item {
                 display: flex; align-items: center; justify-content: space-between;
-                padding: 6px 9px; background: rgba(255,255,255,0.02);
-                border: 1px solid rgba(139,92,246,0.12); border-radius: 8px;
+                padding: 8px 11px; background: rgba(30, 24, 54, 0.55);
+                border: 1px solid rgba(255,255,255,0.06); border-radius: 10px;
                 cursor: pointer; transition: border-color 0.2s;
             }
-            .rubot-toggle-item:hover { border-color: rgba(139,92,246,0.3); }
-            .rubot-toggle-info { display: flex; flex-direction: column; gap: 1px; }
-            .rubot-toggle-name { font-size: 10px; font-weight: 700; color: #e9d5ff; }
-            .rubot-toggle-desc { font-size: 8.5px; color: rgba(196,181,253,0.55); }
-            .rubot-toggle-pill { position: relative; width: 30px; height: 16px; flex-shrink: 0; }
+            .rubot-toggle-item:hover { border-color: rgba(139,92,246,0.35); }
+            .rubot-toggle-info { display: flex; flex-direction: column; gap: 2px; }
+            .rubot-toggle-name { font-size: 10.5px; font-weight: 700; color: #fff; }
+            .rubot-toggle-desc { font-size: 9px; color: #8b81a8; }
+            .rubot-toggle-pill { position: relative; width: 32px; height: 18px; flex-shrink: 0; }
             .rubot-toggle-pill input { opacity: 0; width: 0; height: 0; position: absolute; }
             .rubot-pill-track {
                 position: absolute; inset: 0; background: rgba(255,255,255,0.1);
-                border-radius: 20px; border: 1px solid rgba(139,92,246,0.3);
+                border-radius: 20px; border: 1px solid rgba(255,255,255,0.12);
                 transition: all 0.2s ease;
             }
             .rubot-pill-track::after {
                 content: ''; position: absolute; left: 2px; top: 50%; transform: translateY(-50%);
-                width: 10px; height: 10px; border-radius: 50%;
-                background: rgba(196,181,253,0.5); transition: all 0.2s ease;
+                width: 12px; height: 12px; border-radius: 50%;
+                background: #9ca3af; transition: all 0.2s ease;
             }
             .rubot-toggle-pill input:checked + .rubot-pill-track {
-                background: #8b5cf6; border-color: #a78bfa;
+                background: #7c3aed; border-color: #8b5cf6;
             }
             .rubot-toggle-pill input:checked + .rubot-pill-track::after {
-                left: calc(100% - 12px); background: #fff;
+                left: calc(100% - 14px); background: #fff;
             }
 
             /* Intel / Memory Tab */
-            .rubot-intel-page { display: flex; flex-direction: column; gap: 6px; flex: 1; }
+            .rubot-intel-page { display: flex; flex-direction: column; gap: 7px; flex: 1; }
             .rubot-intel-card {
-                background: rgba(255,255,255,0.03); border: 1px solid rgba(139,92,246,0.18);
-                border-radius: 8px; padding: 7px 9px; display: flex; flex-direction: column; gap: 3px;
+                background: rgba(30, 24, 54, 0.55); border: 1px solid rgba(255,255,255,0.06);
+                border-radius: 12px; padding: 9px 12px; display: flex; flex-direction: column; gap: 4px;
             }
-            .rubot-intel-title { font-size: 9.5px; font-weight: 700; color: #c4b5fd; display: flex; justify-content: space-between; align-items: center; }
-            .rubot-intel-content { font-size: 8.5px; color: rgba(196,181,253,0.85); line-height: 1.35; word-break: break-word; }
-            .rubot-intel-badge { font-size: 8px; font-weight: 700; padding: 1px 5px; border-radius: 4px; display: inline-block; }
-            .rubot-intel-badge.green { background: rgba(16,185,129,0.2); color: #34d399; border: 1px solid rgba(16,185,129,0.4); }
-            .rubot-intel-badge.amber { background: rgba(245,158,11,0.2); color: #fbbf24; border: 1px solid rgba(245,158,11,0.4); }
-            .rubot-intel-badge.red { background: rgba(239,68,68,0.2); color: #f87171; border: 1px solid rgba(239,68,68,0.4); }
+            .rubot-intel-title { font-size: 10.5px; font-weight: 700; color: #e5e7eb; display: flex; justify-content: space-between; align-items: center; }
+            .rubot-intel-content { font-size: 9.5px; color: #d1d5db; line-height: 1.4; word-break: break-word; }
+            .rubot-intel-badge { font-size: 8.5px; font-weight: 700; padding: 2px 7px; border-radius: 6px; display: inline-block; }
+            .rubot-intel-badge.green { background: rgba(16,185,129,0.15); color: #34d399; border: 1px solid rgba(16,185,129,0.3); }
+            .rubot-intel-badge.amber { background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3); }
+            .rubot-intel-badge.red { background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); }
+            .rubot-intel-badge.violet { background: rgba(124,58,237,0.15); color: #c4b5fd; border: 1px solid rgba(124,58,237,0.3); }
 
             /* Activity Log Tab */
             .rubot-log-page { display: flex; flex-direction: column; height: 100%; flex: 1; }
             .rubot-log-toolbar {
                 display: flex; justify-content: space-between; align-items: center;
-                padding-bottom: 5px; border-bottom: 1px solid rgba(139,92,246,0.12); margin-bottom: 6px;
+                padding-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,0.06); margin-bottom: 6px;
             }
-            .rubot-log-title { font-size: 9px; font-weight: 700; color: rgba(167,139,250,0.7); text-transform: uppercase; }
+            .rubot-log-title { font-size: 9.5px; font-weight: 700; color: #8b81a8; text-transform: uppercase; }
             .rubot-btn-clear {
-                background: transparent; border: 1px solid rgba(139,92,246,0.25);
-                color: rgba(196,181,253,0.7); padding: 2px 7px; border-radius: 5px;
-                font-size: 8.5px; cursor: pointer; transition: all 0.15s;
+                background: transparent; border: 1px solid rgba(255,255,255,0.1);
+                color: #9ca3af; padding: 3px 8px; border-radius: 6px;
+                font-size: 9px; cursor: pointer; transition: all 0.15s;
             }
-            .rubot-btn-clear:hover { background: rgba(139,92,246,0.2); color: #fff; }
+            .rubot-btn-clear:hover { background: rgba(255,255,255,0.08); color: #fff; }
             .rubot-terminal {
-                flex: 1; overflow-y: auto; padding: 6px 8px;
-                background: rgba(0,0,0,0.4); border: 1px solid rgba(139,92,246,0.15);
-                border-radius: 8px; font-family: 'JetBrains Mono', Consolas, monospace;
-                font-size: 9.5px; color: rgba(196,181,253,0.8);
-                display: flex; flex-direction: column-reverse; gap: 2px;
+                flex: 1; overflow-y: auto; padding: 7px 9px;
+                background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.06);
+                border-radius: 10px; font-family: 'JetBrains Mono', Consolas, monospace;
+                font-size: 9.5px; color: #c4b5fd;
+                display: flex; flex-direction: column-reverse; gap: 3px;
                 scrollbar-width: thin; scrollbar-color: rgba(139,92,246,0.3) transparent;
             }
             .log-line { display: flex; gap: 6px; line-height: 1.35; word-break: break-word; }
-            .log-ts { color: rgba(139,92,246,0.6); flex-shrink: 0; font-size: 8.5px; }
+            .log-ts { color: #8b81a8; flex-shrink: 0; font-size: 8.5px; }
             .log-msg { flex: 1; }
             .log-line.green .log-msg { color: #34d399; }
             .log-line.violet .log-msg { color: #c084fc; }
@@ -260,20 +260,20 @@ export const HUDPanel = {
 
             /* Advisor Box Overlay */
             .rubot-advisor-box {
-                background: linear-gradient(135deg, rgba(124,58,237,0.2) 0%, rgba(76,29,149,0.25) 100%);
-                border: 1px solid rgba(167,139,250,0.5); border-radius: 8px;
-                padding: 9px 10px; display: none; flex-direction: column; gap: 7px; margin-bottom: 6px;
+                background: rgba(30, 24, 54, 0.85);
+                border: 1px solid rgba(139,92,246,0.4); border-radius: 10px;
+                padding: 10px 12px; display: none; flex-direction: column; gap: 7px; margin-bottom: 6px;
             }
-            .rubot-adv-title { font-weight: 700; font-size: 10px; color: #e9d5ff; }
-            .rubot-adv-desc { font-size: 9.5px; color: #ddd6fe; line-height: 1.35; }
+            .rubot-adv-title { font-weight: 700; font-size: 10.5px; color: #fff; }
+            .rubot-adv-desc { font-size: 9.5px; color: #d1d5db; line-height: 1.35; }
             .rubot-adv-btns { display: flex; gap: 6px; }
             .rubot-adv-btn {
-                flex: 1; padding: 6px; border: none; border-radius: 6px;
-                font-family: 'Inter', sans-serif; font-weight: 700; font-size: 10px;
+                flex: 1; padding: 7px; border: none; border-radius: 8px;
+                font-family: inherit; font-weight: 700; font-size: 10.5px;
                 cursor: pointer; transition: all 0.15s ease;
             }
             .rubot-adv-btn.exec { background: #10b981; color: #fff; }
-            .rubot-adv-btn.skip { background: rgba(255,255,255,0.08); color: #c4b5fd; border: 1px solid rgba(139,92,246,0.2); }
+            .rubot-adv-btn.skip { background: rgba(255,255,255,0.08); color: #c4b5fd; border: 1px solid rgba(255,255,255,0.1); }
         `;
         document.head.appendChild(style);
 
@@ -283,7 +283,7 @@ export const HUDPanel = {
         panel.innerHTML = `
             <div class="rubot-header" id="rubot-hud-drag">
                 <div class="rubot-title-wrap">
-                    <div class="rubot-logo">🎲</div>
+                    <div class="rubot-logo" id="rubot-logo-btn" title="Click to force full state resync" style="cursor: pointer;">🎲</div>
                     <span class="rubot-title-main">RICHUP BOT</span>
                 </div>
                 <div class="rubot-badge" id="rubot-badge-status">STANDBY</div>
@@ -475,8 +475,17 @@ export const HUDPanel = {
             hostInput: document.getElementById('rubot-host-ollama'),
             selectModel: document.getElementById('rubot-select-model'),
             customModel: document.getElementById('rubot-custom-model'),
-            btnPing: document.getElementById('rubot-btn-ping')
+            btnPing: document.getElementById('rubot-btn-ping'),
+            logoBtn: document.getElementById('rubot-logo-btn')
         };
+
+        // Resync button on logo click
+        if (this.elements.logoBtn) {
+            this.elements.logoBtn.addEventListener('click', () => {
+                requestFullStateResync();
+                this.logTerminal('🔄 Requested full authoritative game state resync from server!');
+            });
+        }
 
         // Master toggle
         this.elements.masterBtn.addEventListener('click', onToggleMaster);
@@ -836,15 +845,18 @@ export const HUDPanel = {
             <div class="rubot-intel-card">
                 <div class="rubot-intel-title">
                     <span>👑 ME (${myName})</span>
-                    <span class="rubot-intel-badge green">$${myCash}</span>
+                    <div style="display:flex;gap:4px;align-items:center;">
+                        <span class="rubot-intel-badge violet">Tile #${GameMemory.myPos || 0}</span>
+                        <span class="rubot-intel-badge green">$${myCash}</span>
+                    </div>
                 </div>
-                <div class="rubot-intel-content">
+                <div class="rubot-intel-content" style="margin-top:2px;">
                     <b>Properties (${myTiles.length}):</b> ${myTiles.length > 0 ? myTiles.map(t => {
                         const h = GameMemory.ownership[t.id]?.houses || 0;
                         const hStr = h === 5 ? ' [🏨]' : (h > 0 ? ` [🏠x${h}]` : '');
                         return `${t.name}${hStr}`;
-                    }).join(', ') : 'None yet'}<br>
-                    <b>Monopolies:</b> ${myMonopolies.length > 0 ? myMonopolies.map(m => `<span class="rubot-intel-badge green">${m}</span>`).join(' ') : '<span style="color:rgba(196,181,253,0.5)">None</span>'}
+                    }).join(', ') : '<span style="color:#6b7280">None yet</span>'}<br>
+                    <b>Monopolies:</b> ${myMonopolies.length > 0 ? myMonopolies.map(m => `<span class="rubot-intel-badge green">${m}</span>`).join(' ') : '<span style="color:#6b7280">None</span>'}
                 </div>
             </div>
 
@@ -858,7 +870,7 @@ export const HUDPanel = {
 
         const oppEntries = Object.entries(oppData);
         if (oppEntries.length === 0) {
-            html += `<span style="color:rgba(196,181,253,0.5)">Auto-scanning scoreboard...</span>`;
+            html += `<span style="color:#6b7280; font-style:italic;">Scanning scoreboard...</span>`;
         } else {
             for (const [pName, data] of oppEntries) {
                 const hungryStr = data.hungrySets.length > 0 
@@ -866,7 +878,7 @@ export const HUDPanel = {
                     : '';
                 const propStr = data.ownedTiles.length > 0
                     ? data.ownedTiles.map(t => t.name).join(', ')
-                    : 'None yet';
+                    : '<span style="color:#6b7280">None yet</span>';
 
                 const declCount = typeof GameMemory.getDeclinedCountForPlayer === 'function' ? GameMemory.getDeclinedCountForPlayer(pName) : 0;
                 const declBadge = declCount > 0 ? `<span class="rubot-intel-badge red">${declCount} Declined</span>` : '';
@@ -874,9 +886,17 @@ export const HUDPanel = {
                 const posStr = typeof pos === 'number' ? `Tile #${pos}` : 'Tile #0';
 
                 html += `
-                    <div style="margin-top: 4px; padding-top: 4px; border-top: 1px solid rgba(139,92,246,0.12);">
-                        <b>${pName}:</b> <span class="rubot-intel-badge green">$${data.cash}</span> <span class="rubot-intel-badge">${posStr}</span> ${hungryStr} ${declBadge}<br>
-                        <span style="color: rgba(196,181,253,0.7);">${propStr}</span>
+                    <div style="margin-top: 5px; padding-top: 5px; border-top: 1px solid rgba(255,255,255,0.06);">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <span style="font-weight:700; color:#fff;">${pName}</span>
+                            <div style="display:flex; gap:4px; align-items:center;">
+                                <span class="rubot-intel-badge violet">${posStr}</span>
+                                <span class="rubot-intel-badge green">$${data.cash}</span>
+                            </div>
+                        </div>
+                        <div style="margin-top: 2px; color: #9ca3af;">
+                            ${propStr} ${hungryStr} ${declBadge}
+                        </div>
                     </div>
                 `;
             }
@@ -889,9 +909,9 @@ export const HUDPanel = {
             <div class="rubot-intel-card">
                 <div class="rubot-intel-title">
                     <span>🗺️ BOARD & STRATEGY STATUS</span>
-                    <span class="rubot-intel-badge">${unownedCount} Unowned</span>
+                    <span class="rubot-intel-badge violet">${unownedCount} Unowned</span>
                 </div>
-                <div class="rubot-intel-content">
+                <div class="rubot-intel-content" style="margin-top:2px;">
                     <b>Chat Engagement:</b> ${CONFIG.CHAT_ENABLED ? '<span class="rubot-intel-badge green">ACTIVE (Smart/Casual)</span>' : '<span class="rubot-intel-badge red">SILENT (Off)</span>'}<br>
                     <b>Ollama Brain:</b> <span class="rubot-intel-badge green">${CONFIG.OLLAMA_MODEL}</span>
                 </div>
