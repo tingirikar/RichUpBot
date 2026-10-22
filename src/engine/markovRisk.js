@@ -1,5 +1,5 @@
 import { DICE_PROB } from '../data/diceProb.js';
-import { BOARD_TILES, HIGH_TRAFFIC_GROUPS } from '../data/boardTiles.js';
+import { HIGH_TRAFFIC_GROUPS } from '../data/boardTiles.js';
 import { GameMemory } from '../memory/gameMemory.js';
 import { OpponentTracker } from '../memory/opponentTracker.js';
 import { CONFIG } from '../config.js';
@@ -16,13 +16,21 @@ export const MarkovRisk = {
         let expectedLoss1Turn = 0;
         let maxDangerWindowLoss = 0;
         let maxAnyRollLoss = 0;
+        const bLen = GameMemory.getBoardLength();
 
         for (let roll = 2; roll <= 12; roll++) {
             const prob = DICE_PROB[roll];
-            const targetTile = (currentPos + roll) % 40;
+            const targetTile = (currentPos + roll) % bLen;
             const rent = GameMemory.getTileCurrentRent(targetTile);
 
             expectedLoss1Turn += prob * rent;
+
+            // Factor in vacationCash pot if landing on Vacation
+            if (targetTile === GameMemory.vacationBlockIndex && GameMemory.vacationCash > 0) {
+                const jackpotEV = prob * GameMemory.vacationCash;
+                expectedLoss1Turn = Math.max(0, expectedLoss1Turn - jackpotEV * 0.4);
+            }
+
             if (roll >= 5 && roll <= 9 && rent > maxDangerWindowLoss) {
                 maxDangerWindowLoss = rent;
             }
@@ -33,10 +41,10 @@ export const MarkovRisk = {
 
         let expectedLoss3Turns = expectedLoss1Turn;
         for (let step = 13; step <= 21; step++) {
-            const targetTile = (currentPos + step) % 40;
-            const tileData = BOARD_TILES[targetTile];
+            const targetTile = (currentPos + step) % bLen;
+            const tileData = GameMemory.getTile(targetTile);
             const rent = GameMemory.getTileCurrentRent(targetTile);
-            const markovWeight = tileData.markov * 0.45;
+            const markovWeight = (tileData?.markov || (1 / bLen)) * 0.45;
             expectedLoss3Turns += markovWeight * rent;
         }
 
@@ -112,7 +120,7 @@ export const MarkovRisk = {
         // 6. FINALE END GAME CHECK:
         // Only consider skipping non-set singletons in the deep late game if buying leaves us with
         // less than $60 cash while directly facing a 3-house or hotel tile within 1 to 6 steps.
-        const unownedRemaining = BOARD_TILES.filter(t => t.group && (!GameMemory.ownership[t.id] || !GameMemory.ownership[t.id].owner)).length;
+        const unownedRemaining = GameMemory.getUnownedPropertyCount();
         const isFinaleEndGame = unownedRemaining === 0 || (GameMemory.turnCount > 30 && myCash < 300);
 
         if (isFinaleEndGame) {

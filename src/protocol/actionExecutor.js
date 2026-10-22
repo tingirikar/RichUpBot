@@ -1,6 +1,6 @@
 import { CONFIG } from '../config.js';
 import { GameMemory } from '../memory/gameMemory.js';
-import { BOARD_TILES, GROUP_TILES, GROUP_POWER } from '../data/boardTiles.js';
+import { GROUP_POWER } from '../data/boardTiles.js';
 import { MarkovRisk } from '../engine/markovRisk.js';
 import { JailStrategy } from '../engine/jailStrategy.js';
 import { AuctionSniper } from '../engine/auctionSniper.js';
@@ -37,7 +37,7 @@ export function logToBot(msg) {
  * In AUTO mode: executes the network action immediately.
  * In ADVISOR mode: displays proposal in HUD for human approval.
  */
-export function executeOrAdvise({ title, reason, onExecute, onSkip }) {
+export function executeOrAdvise({ title, reason, delayMs = 600, onExecute, onSkip }) {
     if (isActing) return false;
 
     if (CONFIG.ADVISOR_MODE) {
@@ -61,12 +61,15 @@ export function executeOrAdvise({ title, reason, onExecute, onSkip }) {
         return true;
     }
 
-    // Full-Auto: Execute immediately over protocol
+    // Full-Auto: Execute with humanized timing delay
     isActing = true;
-    setTimeout(() => { isActing = false; }, 250);
+    const delay = Math.max(200, delayMs);
+    setTimeout(() => { isActing = false; }, delay + 350);
 
     logToBot(`[PROTOCOL ACTION] ${title} - ${reason}`);
-    if (onExecute) onExecute();
+    setTimeout(() => {
+        if (onExecute) onExecute();
+    }, delay);
     return true;
 }
 
@@ -94,8 +97,8 @@ export const ActionExecutor = {
 
         try {
             // Reconstruct trade data for AI / minimax evaluation
-            const givenTiles = (trade.recipientOffer?.properties || []).map(id => BOARD_TILES[id]).filter(Boolean);
-            const receivedTiles = (trade.initiatorOffer?.properties || []).map(id => BOARD_TILES[id]).filter(Boolean);
+            const givenTiles = (trade.recipientOffer?.properties || []).map(id => GameMemory.getTile(id)).filter(Boolean);
+            const receivedTiles = (trade.initiatorOffer?.properties || []).map(id => GameMemory.getTile(id)).filter(Boolean);
             const givenCash = trade.recipientOffer?.money || 0;
             const receivedCash = trade.initiatorOffer?.money || 0;
 
@@ -164,7 +167,7 @@ export const ActionExecutor = {
 
         if (bestTarget) {
             this.insolventTicks = 0;
-            if (bestTarget.action === 'sell_house') {
+            if (bestTarget.canSellHouse) {
                 return executeOrAdvise({
                     title: `SELL HOUSE: ${bestTarget.tile.name.toUpperCase()}`,
                     reason: `Negative balance ($${GameMemory.myCash}). Liquidating house to survive.`,
@@ -204,29 +207,71 @@ export const ActionExecutor = {
         return true; // Must hold turn until debt resolves
     },
 
+    findNativeRollButton() {
+        if (typeof document === 'undefined') return null;
+        const btns = Array.from(document.querySelectorAll('button'));
+        return btns.find(b => {
+            const txt = (b.textContent || '').trim().toLowerCase();
+            const isVisible = b.offsetParent !== null && !b.disabled;
+            return isVisible && (txt === 'roll the dice' || txt === 'roll again' || txt.includes('roll the dice') || txt.includes('roll again'));
+        }) || null;
+    },
+
+    findNativeEndTurnButton() {
+        if (typeof document === 'undefined') return null;
+        const btns = Array.from(document.querySelectorAll('button'));
+        return btns.find(b => {
+            const txt = (b.textContent || '').trim().toLowerCase();
+            const isVisible = b.offsetParent !== null && !b.disabled;
+            return isVisible && (txt === 'end turn' || txt.includes('end turn'));
+        }) || null;
+    },
+
+    findNativeBuyButton() {
+        if (typeof document === 'undefined') return null;
+        const btns = Array.from(document.querySelectorAll('button'));
+        return btns.find(b => {
+            const txt = (b.textContent || '').trim().toLowerCase();
+            const isVisible = b.offsetParent !== null && !b.disabled;
+            return isVisible && (txt.includes('buy for') || txt.startsWith('buy'));
+        }) || null;
+    },
+
+    findNativeAuctionButton() {
+        if (typeof document === 'undefined') return null;
+        const btns = Array.from(document.querySelectorAll('button'));
+        return btns.find(b => {
+            const txt = (b.textContent || '').trim().toLowerCase();
+            const isVisible = b.offsetParent !== null && !b.disabled;
+            return isVisible && (txt === 'auction' || txt.includes('auction'));
+        }) || null;
+    },
+
     handleJail() {
         if (!GameMemory.inJail || !GameMemory.isMyTurn) return false;
 
-        GameMemory.myPos = 10;
+        GameMemory.myPos = GameMemory.prisonBlockIndex ?? 10;
         const decision = JailStrategy.shouldPayToLeaveJail(GameMemory.myCash);
+        const hasPardon = Boolean(GameMemory.pardonCards?.treasure || GameMemory.pardonCards?.surprise);
 
         if (decision.exit) {
-            if (GameMemory.myCash >= 50) {
+            if (hasPardon) {
+                return executeOrAdvise({
+                    title: 'USE PARDON CARD (Get Out of Jail Free)',
+                    reason: decision.reason,
+                    onExecute: () => {
+                        GameMemory.inJail = false;
+                        const deck = GameMemory.pardonCards?.treasure ? 'treasure' : 'surprise';
+                        sendSocketAction('use-pardon-card', deck);
+                    }
+                });
+            } else if (GameMemory.myCash >= 50) {
                 return executeOrAdvise({
                     title: 'PAY $50 JAIL BAIL',
                     reason: decision.reason,
                     onExecute: () => {
                         GameMemory.inJail = false;
                         sendSocketAction('pay-out-of-prison');
-                    }
-                });
-            } else {
-                return executeOrAdvise({
-                    title: 'USE PARDON CARD',
-                    reason: decision.reason,
-                    onExecute: () => {
-                        GameMemory.inJail = false;
-                        sendSocketAction('use-pardon-card');
                     }
                 });
             }
@@ -239,6 +284,10 @@ export const ActionExecutor = {
                 reason: 'Rolling dice to stay safe in cell or leave on doubles.',
                 onExecute: () => {
                     GameMemory.hasRolled = true;
+                    const btn = this.findNativeRollButton();
+                    if (btn) {
+                        try { btn.click(); } catch (_) {}
+                    }
                     sendSocketAction('plz-roll-dices');
                 }
             });
@@ -249,7 +298,54 @@ export const ActionExecutor = {
     handleBuyOrAuction() {
         if (!GameMemory.isMyTurn || !GameMemory.hasRolled) return false;
 
-        const tile = BOARD_TILES[GameMemory.myPos];
+        // 1. DOM Ground Truth: If the native "Buy for $X" or "Auction" buttons are physically visible on screen,
+        // we are 100% standing on an unowned property waiting for a decision!
+        const nativeBuy = this.findNativeBuyButton();
+        const nativeAuction = this.findNativeAuctionButton();
+
+        if (nativeBuy || nativeAuction) {
+            let price = 0;
+            if (nativeBuy) {
+                const match = nativeBuy.textContent.match(/\$(\d+)/);
+                if (match) price = parseInt(match[1], 10);
+            }
+            if (!price) {
+                const tile = GameMemory.getTile(GameMemory.myPos);
+                price = tile?.price || 100;
+            }
+
+            const tile = GameMemory.getTile(GameMemory.myPos) || { name: 'Property', price, group: 'Special' };
+            const decision = MarkovRisk.shouldBuyProperty(tile, price, GameMemory.myCash);
+
+            if (decision.buy && GameMemory.myCash >= price && nativeBuy) {
+                return executeOrAdvise({
+                    title: `BUY ${tile.name.toUpperCase()} (DOM Verified $${price})`,
+                    reason: decision.reason,
+                    delayMs: 800,
+                    onExecute: () => {
+                        try { nativeBuy.click(); } catch (_) {}
+                        sendSocketAction('purchase-property', {});
+                        if (GameMemory.ownership[GameMemory.myPos]) {
+                            GameMemory.ownership[GameMemory.myPos].owner = GameMemory.myName || '__ME__';
+                        }
+                        GameMemory.myCash -= price;
+                    }
+                });
+            } else if (nativeAuction) {
+                return executeOrAdvise({
+                    title: `PASS / AUCTION ${tile.name.toUpperCase()} (DOM Verified)`,
+                    reason: decision.reason || 'Sending to auction to conserve cash reserve',
+                    delayMs: 800,
+                    onExecute: () => {
+                        try { nativeAuction.click(); } catch (_) {}
+                        sendSocketAction('start-auction', {});
+                    }
+                });
+            }
+        }
+
+        // 2. Pure Protocol Fallback
+        const tile = GameMemory.getTile(GameMemory.myPos);
         const isPurchasable = tile && tile.group && (tile.type === 'property' || tile.type === 'airport' || tile.type === 'utility');
         const isUnowned = isPurchasable && !GameMemory.ownership[tile.id]?.owner;
 
@@ -264,8 +360,9 @@ export const ActionExecutor = {
             return executeOrAdvise({
                 title: `BUY ${tile.name.toUpperCase()} ($${price})`,
                 reason: decision.reason,
+                delayMs: 800,
                 onExecute: () => {
-                    sendSocketAction('purchase-property');
+                    sendSocketAction('purchase-property', {});
                     if (GameMemory.ownership[tile.id]) {
                         GameMemory.ownership[tile.id].owner = GameMemory.myName || '__ME__';
                     }
@@ -276,21 +373,36 @@ export const ActionExecutor = {
             return executeOrAdvise({
                 title: `PASS / AUCTION ${tile.name.toUpperCase()}`,
                 reason: decision.reason || 'Sending to auction to conserve cash reserve',
+                delayMs: 800,
                 onExecute: () => {
-                    sendSocketAction('start-auction');
+                    sendSocketAction('start-auction', {});
                 }
             });
         }
     },
 
     handleRollDice() {
+        // 1. DOM Ground Truth Fallback: If native purple "Roll the dice" button is physically visible,
+        // it is 100% our turn to roll!
+        const nativeBtn = this.findNativeRollButton();
+        if (nativeBtn && !GameMemory.hasRolled && !GameMemory.inJail) {
+            GameMemory.isMyTurn = true;
+            return executeOrAdvise({
+                title: `ROLL THE DICE (DOM Verified)`,
+                reason: `Native roll button is active on screen. Executing roll.`,
+                delayMs: 900,
+                onExecute: () => {
+                    GameMemory.hasRolled = true;
+                    try { nativeBtn.click(); } catch (_) {}
+                    sendSocketAction('plz-roll-dices', {});
+                }
+            });
+        }
+
         if (!GameMemory.isMyTurn || GameMemory.hasRolled || GameMemory.inJail) return false;
 
         // Guard: Don't roll if standing on unowned property (must buy or auction first)
-        const standingTile = BOARD_TILES[GameMemory.myPos];
-        const isPurchasable = standingTile && standingTile.group && (standingTile.type === 'property' || standingTile.type === 'airport' || standingTile.type === 'utility');
-        const isUnowned = isPurchasable && !GameMemory.ownership[standingTile.id]?.owner;
-        if (isUnowned && GameMemory.canPerformTurnActions) {
+        if (this.findNativeBuyButton() || this.findNativeAuctionButton()) {
             if (this.handleBuyOrAuction()) return true;
         }
 
@@ -298,12 +410,17 @@ export const ActionExecutor = {
         return executeOrAdvise({
             title: isRollAgain ? `ROLL AGAIN (Doubles! Roll #${GameMemory.doublesInARow + 1})` : `ROLL THE DICE (Turn #${GameMemory.turnCount + 1})`,
             reason: isRollAgain ? `Doubles rolled! Extra roll granted.` : `My turn! Cash: $${GameMemory.myCash} | Pos: Tile #${GameMemory.myPos}`,
+            delayMs: 900,
             onExecute: () => {
                 GameMemory.hasRolled = true;
                 if (!isRollAgain) {
                     GameMemory.turnCount++;
                 }
-                sendSocketAction('plz-roll-dices');
+                const btn = this.findNativeRollButton();
+                if (btn) {
+                    try { btn.click(); } catch (_) {}
+                }
+                sendSocketAction('plz-roll-dices', {});
             }
         });
     },
@@ -312,7 +429,7 @@ export const ActionExecutor = {
         if (!CONFIG.AUTO_AUCTION_ENABLED || !GameMemory.activeAuction) return false;
 
         const auction = GameMemory.activeAuction;
-        const auctionedTile = BOARD_TILES[auction.blockIndex] || null;
+        const auctionedTile = GameMemory.getTile(auction.blockIndex) || null;
         const currentBid = auction.currentBid || auction.price || 0;
 
         const decision = AuctionSniper.evaluateAuctionStep(auctionedTile, currentBid, GameMemory.myCash);
@@ -336,8 +453,9 @@ export const ActionExecutor = {
         if (!CONFIG.AUTO_BUILD_ENABLED || !GameMemory.isMyTurn || !GameMemory.hasRolled) return false;
 
         const completeSets = [];
-        for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
-            if (tiles[0].type !== 'property') continue;
+        const groupTilesMap = GameMemory.getGroupTiles();
+        for (const [groupName, tiles] of Object.entries(groupTilesMap)) {
+            if (!tiles || !tiles[0] || tiles[0].type !== 'property') continue;
             const { owned, total } = GameMemory.getGroupCount(groupName, '__ME__');
             if (owned === total) {
                 const unmortgaged = tiles.every(t => !GameMemory.ownership[t.id]?.mortgaged);
@@ -355,7 +473,6 @@ export const ActionExecutor = {
                 }
             }
         }
-
         if (completeSets.length === 0) return false;
 
         const dynamicReserve = MarkovRisk.computeDynamicReserve(GameMemory.myPos);
@@ -458,8 +575,16 @@ export const ActionExecutor = {
             return false;
         }
 
+        // CRITICAL GUARD: If native Buy/Auction button is on screen, NEVER end turn!
+        // We MUST buy or auction first!
+        if (this.findNativeBuyButton() || this.findNativeAuctionButton()) {
+            logToBot(`[TURN GUARD] Purchase/Auction decision pending on screen. Resolving before ending turn.`);
+            if (this.handleBuyOrAuction()) return true;
+            return false;
+        }
+
         // Purchase guard: never skip buying an unowned property we can afford
-        const standingTile = BOARD_TILES[GameMemory.myPos];
+        const standingTile = GameMemory.getTile(GameMemory.myPos);
         const isPurchasable = standingTile && standingTile.group && (standingTile.type === 'property' || standingTile.type === 'airport' || standingTile.type === 'utility');
         const isUnowned = isPurchasable && !GameMemory.ownership[standingTile.id]?.owner;
         if (isUnowned && GameMemory.myCash >= (standingTile.price || 0)) {
@@ -469,9 +594,14 @@ export const ActionExecutor = {
         return executeOrAdvise({
             title: 'END TURN',
             reason: `Turn actions complete. Passing priority to next player.`,
+            delayMs: 700,
             onExecute: () => {
                 TradeProposalExecutor.cancelPendingTrade();
-                sendSocketAction('end-turn');
+                const endBtn = this.findNativeEndTurnButton();
+                if (endBtn) {
+                    try { endBtn.click(); } catch (_) {}
+                }
+                sendSocketAction('end-turn', {});
                 GameMemory.isMyTurn = false;
                 GameMemory.hasRolled = false;
             }
@@ -481,20 +611,30 @@ export const ActionExecutor = {
     handleTurnClockWatchdog() {
         if (!GameMemory.isMyTurn) return false;
         const leftMs = GameMemory.getTurnClockRemainingMs();
+        const autoActed = GameMemory.autoActedTurns || 0;
 
-        // 1. Clock Request: If < 7 seconds left and haven't asked for time this turn, ask for +60s
-        if (leftMs < 7000 && !GameMemory.turnClock.clockRequestedThisTurn) {
+        // 2-Strike Watchdog: If server already auto-acted for us >= 1 time, we are at risk of removal!
+        const isUrgentStrikeRisk = autoActed >= 1;
+        const clockRequestThreshold = isUrgentStrikeRisk ? 12000 : 7000;
+        const emergencyThreshold = isUrgentStrikeRisk ? 5000 : 2500;
+
+        // 1. Clock Request: If running low on time and haven't asked this turn, request +60s extension
+        if (leftMs < clockRequestThreshold && !GameMemory.turnClock.clockRequestedThisTurn) {
             GameMemory.turnClock.clockRequestedThisTurn = true;
-            logToBot(`[TURN CLOCK] ⚠️ Turn timer low (${Math.round(leftMs / 1000)}s)! Requesting +60s extension from table...`);
+            logToBot(`[TURN CLOCK] ⚠️ Turn timer low (${Math.round(leftMs / 1000)}s${isUrgentStrikeRisk ? ' [STRIKE RISK!]' : ''})! Requesting +60s extension...`);
             sendSocketAction('request-clock-time');
             return true;
         }
 
-        // 2. Emergency Fallback: If < 2.5 seconds left, take emergency safe move to avoid AFK strike
-        if (leftMs < 2500) {
-            logToBot(`[TURN CLOCK] 🚨 EMERGENCY FALLBACK (${Math.round(leftMs / 1000)}s left)! Auto-acting to prevent kick.`);
+        // 2. Emergency Fallback: auto-act to prevent AFK kick/strike
+        if (leftMs < emergencyThreshold) {
+            logToBot(`[TURN CLOCK] 🚨 EMERGENCY FALLBACK (${Math.round(leftMs / 1000)}s left${isUrgentStrikeRisk ? ' - 2ND STRIKE PREVENTION' : ''})! Auto-acting.`);
             if (!GameMemory.hasRolled && !GameMemory.inJail) {
                 GameMemory.hasRolled = true;
+                const btn = this.findNativeRollButton();
+                if (btn) {
+                    try { btn.click(); } catch (_) {}
+                }
                 sendSocketAction('plz-roll-dices');
                 return true;
             } else {

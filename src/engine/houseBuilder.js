@@ -1,4 +1,3 @@
-import { GROUP_TILES, BOARD_TILES } from '../data/boardTiles.js';
 import { GameMemory } from '../memory/gameMemory.js';
 import { MarkovRisk } from './markovRisk.js';
 import { CONFIG } from '../config.js';
@@ -21,9 +20,10 @@ export const HouseBuilder = {
     isPlayerInEnemyHotelZone() {
         const myPos = GameMemory.myPos || 0;
 
+        const bLen = GameMemory.getBoardLength();
         for (let roll = 2; roll <= 12; roll++) {
-            const targetTileId = (myPos + roll) % 40;
-            const tile = BOARD_TILES[targetTileId];
+            const targetTileId = (myPos + roll) % bLen;
+            const tile = GameMemory.getTile(targetTileId);
             if (!tile || !tile.group) continue;
 
             const info = GameMemory.ownership[targetTileId];
@@ -45,12 +45,13 @@ export const HouseBuilder = {
     areOpponentsInStrikeZone(groupTiles) {
         const tileIds = new Set(groupTiles.map(t => t.id));
 
+        const bLen = GameMemory.getBoardLength();
         for (const [pName, pData] of Object.entries(GameMemory.players)) {
             if (GameMemory.isMe(pName) || pData.bankrupt || pData.inJail) continue;
 
             const oppPos = pData.pos || 0;
             for (const tileId of tileIds) {
-                const dist = (tileId - oppPos + 40) % 40;
+                const dist = (tileId - oppPos + bLen) % bLen;
                 if (dist >= 2 && dist <= 12) {
                     return { oppApproaching: true, opponentName: pName, distance: dist };
                 }
@@ -76,7 +77,7 @@ export const HouseBuilder = {
             }
         }
 
-        for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
+        for (const [groupName, tiles] of Object.entries(GameMemory.getGroupTiles())) {
             if (tiles[0].type !== 'property') continue;
 
             const { owned, total } = GameMemory.getGroupCount(groupName, '__ME__');

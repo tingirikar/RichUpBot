@@ -1,5 +1,4 @@
 import { GameMemory } from '../memory/gameMemory.js';
-import { BOARD_TILES } from '../data/boardTiles.js';
 import { logToBot } from './actionExecutor.js';
 
 /**
@@ -23,11 +22,15 @@ export function sendSocketAction(eventName, payload) {
         return false;
     }
 
-    const prefix = GameMemory.socketPrefix || '42/api/game,';
-    const packet = payload !== undefined 
-        ? `${prefix}${JSON.stringify([eventName, payload])}`
-        : `${prefix}${JSON.stringify([eventName])}`;
-    logToBot(`[ZERO-UI WS] 🚀 Sent: ${eventName}${payload !== undefined ? ' ' + JSON.stringify(payload) : ''}`);
+    // Strictly ensure prefix has no trailing digits from previous ACKs (e.g. '42/api/game,')
+    let prefix = GameMemory.socketPrefix || '42/api/game,';
+    prefix = prefix.replace(/(,\d+)$/, ',');
+    if (!prefix.includes('/api/game')) prefix = '42/api/game,';
+    GameMemory.socketPrefix = prefix;
+
+    const body = payload !== undefined ? payload : {};
+    const packet = `${prefix}${JSON.stringify([eventName, body])}`;
+    logToBot(`[ZERO-UI WS] 🚀 Sent: ${eventName} ${JSON.stringify(body)}`);
     ws.send(packet);
     return true;
 }
@@ -85,9 +88,11 @@ function parseOutgoingSocketIOFrame(raw) {
     const bracketIdx = raw.indexOf('[');
     if (bracketIdx === -1) return;
 
-    // Sniff prefix (e.g. "42/api/game,")
-    const prefix = raw.slice(0, bracketIdx);
+    // Sniff prefix (e.g. "42/api/game,") - strip any trailing digits after comma
+    let prefix = raw.slice(0, bracketIdx);
     if (prefix) {
+        prefix = prefix.replace(/(,\d+)$/, ',');
+        if (!prefix.includes('/api/game')) prefix = '42/api/game,';
         GameMemory.socketPrefix = prefix;
     }
 
@@ -227,17 +232,132 @@ function parseSocketIOFrame(raw) {
                 if (me && (me.name || me.username)) {
                     GameMemory.setMyName(me.name || me.username);
                 }
+                if (me?.clock?.autoActedTurns !== undefined) {
+                    GameMemory.autoActedTurns = me.clock.autoActedTurns;
+                }
+
+                // Ingest Universal Board Map from gs.blocks & boardConfig
+                if (Array.isArray(gs.blocks) && gs.blocks.length > 0) {
+                    GameMemory.boardLength = gs.blocks.length;
+
+                    const cfg = gs.boardConfig || {};
+                    GameMemory.prisonBlockIndex = cfg.prisonBlockIndex ?? 
+                        (gs.blocks.findIndex(b => b.type === 'corner' && b.cornerType === 'prison') !== -1 
+                            ? gs.blocks.findIndex(b => b.type === 'corner' && b.cornerType === 'prison') : 10);
+                    GameMemory.vacationBlockIndex = cfg.vacationBlockIndex ?? 
+                        (gs.blocks.findIndex(b => b.type === 'corner' && b.cornerType === 'vacation') !== -1 
+                            ? gs.blocks.findIndex(b => b.type === 'corner' && b.cornerType === 'vacation') : 20);
+                    GameMemory.goToPrisonBlockIndex = cfg.goToPrisonBlockIndex ?? 
+                        (gs.blocks.findIndex(b => b.type === 'corner' && b.cornerType === 'go-to-prison') !== -1 
+                            ? gs.blocks.findIndex(b => b.type === 'corner' && b.cornerType === 'go-to-prison') : 30);
+
+                    // Build lookup map for owner IDs
+                    const pMap = new Map();
+                    for (const p of playersList) {
+                        const pName = p.name || p.username;
+                        const pId = p.id ?? p.userId ?? p.user_id ?? p.playerId;
+                        if (pName) {
+                            if (pId !== undefined) pMap.set(String(pId), pName);
+                            pMap.set(pName, pName);
+                        }
+                    }
+
+                    GameMemory.boardTiles = gs.blocks.map((b, idx) => {
+                        let type = b.type;
+                        if (type === 'city') type = 'property';
+                        else if (type === 'company') type = 'utility';
+
+                        let group = b.countryId;
+                        if (!group) {
+                            if (type === 'airport') group = 'Airport';
+                            else if (type === 'utility') group = 'Utility';
+                            else group = null;
+                        } else {
+                            group = group.charAt(0).toUpperCase() + group.slice(1);
+                        }
+
+                        let rent = [];
+                        if (Array.isArray(b.rentPrices)) {
+                            rent = [...b.rentPrices];
+                        } else if (b.rentPrices && typeof b.rentPrices === 'object') {
+                            rent = [
+                                b.rentPrices[0] || b.rentPrices['0'] || 0,
+                                b.rentPrices[1] || b.rentPrices['1'] || 0,
+                                b.rentPrices[2] || b.rentPrices['2'] || 0,
+                                b.rentPrices[3] || b.rentPrices['3'] || 0,
+                                b.rentPrices[4] || b.rentPrices['4'] || 0,
+                                b.rentPrices[5] || b.rentPrices['5'] || 0
+                            ];
+                        }
+
+                        // Ingest authoritative property ownership directly from block data
+                        const ownerId = b.ownerId || b.userId || null;
+                        let resolvedOwner = null;
+                        if (ownerId) {
+                            resolvedOwner = pMap.get(String(ownerId)) || 
+                                            (myId && String(ownerId) === String(myId) ? (GameMemory.myName || '__ME__') : String(ownerId));
+                        }
+                        GameMemory.ownership[idx] = {
+                            owner: resolvedOwner,
+                            houses: typeof b.level === 'number' ? b.level : (typeof b.houses === 'number' ? b.houses : 0),
+                            mortgaged: Boolean(b.isMortgaged || b.mortgaged)
+                        };
+
+                        return {
+                            id: idx,
+                            name: b.name || `Tile #${idx}`,
+                            type,
+                            group,
+                            price: b.price || 0,
+                            houseCost: b.housePrice || b.hotelPrice || Math.round(b.price || 50),
+                            rent,
+                            markov: (idx >= 14 && idx <= 26) ? (1.3 / gs.blocks.length) : (1.0 / gs.blocks.length)
+                        };
+                    });
+
+                    const gTiles = {};
+                    GameMemory.boardTiles.forEach(t => {
+                        if (t.group) {
+                            if (!gTiles[t.group]) gTiles[t.group] = [];
+                            gTiles[t.group].push(t);
+                        }
+                    });
+                    GameMemory.groupTiles = gTiles;
+                }
+
+                // Ingest Vacation Cash pot
+                if (typeof gs.vacationCash === 'number') {
+                    GameMemory.vacationCash = gs.vacationCash;
+                }
+
+                // Ingest Pardon Cards
+                if (gs.bonusCards) {
+                    const meId = GameMemory.myId;
+                    GameMemory.pardonCards = {
+                        treasure: Boolean(meId && gs.bonusCards.treasure?.pardonCardHolderId === meId),
+                        surprise: Boolean(meId && gs.bonusCards.surprise?.pardonCardHolderId === meId)
+                    };
+                }
 
                 // Exact jail suspension detection from RichUp boardConfig & corner block
-                const prisonIdx = gs.boardConfig?.prisonBlockIndex ?? 10;
+                const prisonIdx = GameMemory.prisonBlockIndex;
                 const prisonBlock = Array.isArray(gs.blocks) ? gs.blocks[prisonIdx] : null;
                 const prisonSuspensions = (prisonBlock && typeof prisonBlock.suspendedTurnsRemaining === 'object') ? prisonBlock.suspendedTurnsRemaining : null;
 
                 const validNames = new Set();
+                GameMemory.participantsOrder = [];
+
                 for (const p of playersList) {
                     const pName = p.name || p.username;
                     if (!pName) continue;
                     validNames.add(pName);
+                    const isBankrupt = Boolean(p.bankrupt || p.bankruptedAt);
+                    GameMemory.participantsOrder.push({
+                        id: p.id ?? p.userId ?? p.user_id ?? p.playerId,
+                        name: pName,
+                        bankrupt: isBankrupt
+                    });
+
                     const rawMoney = typeof p.money === 'number' ? p.money : 
                                      (typeof p.cash === 'number' ? p.cash : 
                                      (typeof p.balance === 'number' ? p.balance : null));
@@ -257,7 +377,7 @@ function parseSocketIOFrame(raw) {
                             pos: playerPos,
                             inJail: isReallyInJail,
                             isMe: isThisPlayerMe,
-                            bankrupt: Boolean(p.bankrupt || p.bankruptedAt)
+                            bankrupt: isBankrupt
                         };
 
                         if (isThisPlayerMe) {
@@ -267,14 +387,20 @@ function parseSocketIOFrame(raw) {
                             GameMemory.myPos = playerPos;
                             GameMemory.inJail = isReallyInJail;
                             GameMemory.jailTurns = realJailTurns;
+                            if (p.clock?.autoActedTurns !== undefined) {
+                                GameMemory.autoActedTurns = p.clock.autoActedTurns;
+                            }
                         }
                     }
                 }
 
                 // Turn tracking via currentPlayerIndex
-                if (typeof gs.currentPlayerIndex === 'number' && playersList[gs.currentPlayerIndex]) {
-                    const curP = playersList[gs.currentPlayerIndex];
-                    GameMemory.isMyTurn = Boolean(GameMemory.isMe(curP.name || curP.username) || (myId && curP.id === myId));
+                if (typeof gs.currentPlayerIndex === 'number') {
+                    GameMemory.currentPlayerIndex = gs.currentPlayerIndex;
+                    if (playersList[gs.currentPlayerIndex]) {
+                        const curP = playersList[gs.currentPlayerIndex];
+                        GameMemory.isMyTurn = Boolean(GameMemory.isMe(curP.name || curP.username) || (myId && curP.id === myId));
+                    }
                 }
 
                 // Authoritative roll & turn action state from gameState
@@ -322,6 +448,19 @@ function parseSocketIOFrame(raw) {
             }
         }
 
+        // Game Started event: reset state for new match
+        if (eventName === 'game-started' || eventName.includes('game-started')) {
+            logToBot(`[WS TELEMETRY] 🏁 New game started! Resetting memory.`);
+            GameMemory.reset();
+            if (payload && Array.isArray(payload.participantsOrder)) {
+                GameMemory.participantsOrder = payload.participantsOrder.map(p => ({
+                    id: p.id,
+                    name: p.name || p.username,
+                    bankrupt: false
+                }));
+            }
+        }
+
         // 2. Dice Rolled: Advance positions and detect doubles ("Roll again")
         if (eventName.includes('roll') || eventName.includes('dice')) {
             const dice = Array.isArray(payload.dice) ? payload.dice : (Array.isArray(payload) ? payload : []);
@@ -343,31 +482,34 @@ function parseSocketIOFrame(raw) {
                 }
 
                 if (!GameMemory.inJail) {
-                    GameMemory.myPos = (GameMemory.myPos + sum) % 40;
-                    logToBot(`[DICE] 🎲 I rolled ${sum} ([${dice.join(',')}]) -> Moved to Tile #${GameMemory.myPos} (${BOARD_TILES[GameMemory.myPos]?.name || 'Unknown'})`);
+                    const bLen = GameMemory.getBoardLength();
+                    GameMemory.myPos = (GameMemory.myPos + sum) % bLen;
+                    const tileName = GameMemory.getTile(GameMemory.myPos)?.name || 'Unknown';
+                    logToBot(`[DICE] 🎲 I rolled ${sum} ([${dice.join(',')}]) -> Moved to Tile #${GameMemory.myPos} (${tileName})`);
                 }
             } else if (pName && GameMemory.players[pName]) {
                 if (!GameMemory.players[pName].inJail && sum > 0) {
+                    const bLen = GameMemory.getBoardLength();
                     const currentOppPos = GameMemory.players[pName].pos || 0;
-                    GameMemory.players[pName].pos = (currentOppPos + sum) % 40;
+                    GameMemory.players[pName].pos = (currentOppPos + sum) % bLen;
                     logToBot(`[DICE] 🎲 ${pName} rolled ${sum} -> Tile #${GameMemory.players[pName].pos}`);
                 }
             }
         }
 
-        // 3. Property Purchases: Strictly assign owner ONLY if pName is explicitly verified!
+        // 3. Property Purchases
         if (eventName.includes('purchase') || eventName.includes('buy')) {
             const tileId = typeof payload.blockIndex === 'number' ? payload.blockIndex : 
                            (typeof payload.tileId === 'number' ? payload.tileId : payload.tileIndex);
             const pName = payload.playerName || payload.username || payload.name || payload.player;
+            const buyer = pName ? (GameMemory.isMe(pName) ? (GameMemory.myName || '__ME__') : pName)
+                                : (GameMemory.isMyTurn ? (GameMemory.myName || '__ME__') : null);
 
-            if (typeof tileId === 'number' && pName) {
+            if (typeof tileId === 'number') {
                 GameMemory.lastPurchasedBlock = tileId;
-                const isMe = GameMemory.isMe(pName);
-                const buyer = isMe ? (GameMemory.myName || '__ME__') : pName;
                 if (GameMemory.ownership[tileId]) {
-                    GameMemory.ownership[tileId].owner = buyer;
-                    logToBot(`[WS TELEMETRY] 🏷️ Tile #${tileId} (${BOARD_TILES[tileId]?.name || 'Unknown'}) acquired by ${buyer}`);
+                    if (buyer) GameMemory.ownership[tileId].owner = buyer;
+                    logToBot(`[WS TELEMETRY] 🏷️ Tile #${tileId} (${GameMemory.getTile(tileId)?.name || 'Unknown'}) acquired by ${buyer || 'Active Player'}`);
                 }
             }
         }
@@ -381,7 +523,7 @@ function parseSocketIOFrame(raw) {
                 const isMe = GameMemory.isMe(winner);
                 const buyer = isMe ? (GameMemory.myName || '__ME__') : winner;
                 GameMemory.ownership[tileId].owner = buyer;
-                logToBot(`[WS TELEMETRY] 🔨 Tile #${tileId} won at auction by ${buyer}`);
+                logToBot(`[WS TELEMETRY] 🔨 Tile #${tileId} (${GameMemory.getTile(tileId)?.name || 'Unknown'}) won at auction by ${buyer}`);
             }
         }
 
@@ -428,10 +570,36 @@ function parseSocketIOFrame(raw) {
             }
         }
 
-        // 8. Turn Ended / Started
+        // 8. Turn Ended / Started: Advancing participant pointer & Authoritative Resync
         if (eventName === 'turn-ended' || eventName.includes('turn-ended')) {
             GameMemory.hasRolled = false;
             GameMemory.isMyTurn = false;
+
+            // Locally advance participant pointer to next non-bankrupt participant
+            if (Array.isArray(GameMemory.participantsOrder) && GameMemory.participantsOrder.length > 0) {
+                let nextIdx = (GameMemory.currentPlayerIndex + 1) % GameMemory.participantsOrder.length;
+                let loops = 0;
+                while (loops < GameMemory.participantsOrder.length) {
+                    const candidate = GameMemory.participantsOrder[nextIdx];
+                    const pData = GameMemory.players[candidate.name] || candidate;
+                    if (!pData.bankrupt && !pData.bankruptedAt) {
+                        break;
+                    }
+                    nextIdx = (nextIdx + 1) % GameMemory.participantsOrder.length;
+                    loops++;
+                }
+                GameMemory.currentPlayerIndex = nextIdx;
+                const nextPlayer = GameMemory.participantsOrder[nextIdx];
+                if (nextPlayer) {
+                    GameMemory.isMyTurn = Boolean(GameMemory.isMe(nextPlayer.name) || (GameMemory.myId && nextPlayer.id === GameMemory.myId));
+                    if (GameMemory.isMyTurn) {
+                        GameMemory.hasRolled = false;
+                        logToBot(`[TURN ADVANCE] 🎯 Advanced to Player #${nextIdx} (${nextPlayer.name}) -> It is MY TURN!`);
+                    } else {
+                        logToBot(`[TURN ADVANCE] ⏭️ Advanced to Player #${nextIdx} (${nextPlayer.name})`);
+                    }
+                }
+            }
         } else if (eventName.includes('turn')) {
             const active = payload.activePlayer || payload.player || payload.username || payload.name;
             if (active) {
@@ -645,11 +813,12 @@ function deepSyncPropertiesFromPayload(payload) {
         visited.add(obj);
 
         if (Array.isArray(obj)) {
+            const bLen = GameMemory.getBoardLength();
             for (let i = 0; i < obj.length; i++) {
                 const item = obj[i];
                 if (!item) continue;
 
-                if (typeof item === 'string' && obj.length >= 35 && i < 40 && GameMemory.ownership[i]) {
+                if (typeof item === 'string' && obj.length >= 30 && i < bLen && GameMemory.ownership[i]) {
                     const resolved = resolveOwner(item);
                     if (resolved) GameMemory.ownership[i].owner = resolved;
                     continue;
@@ -658,9 +827,9 @@ function deepSyncPropertiesFromPayload(payload) {
                 if (typeof item === 'object') {
                     const tileId = typeof item.blockIndex === 'number' ? item.blockIndex : 
                                    (typeof item.tileId === 'number' ? item.tileId : 
-                                   (typeof item.index === 'number' ? item.index : (typeof item.id === 'number' && item.id < 40 ? item.id : null)));
+                                   (typeof item.index === 'number' ? item.index : (typeof item.id === 'number' && item.id < bLen ? item.id : null)));
 
-                    const targetId = tileId !== null ? tileId : (obj.length >= 35 && i < 40 ? i : null);
+                    const targetId = tileId !== null ? tileId : (obj.length >= 30 && i < bLen ? i : null);
 
                     if (targetId !== null && GameMemory.ownership[targetId]) {
                         if (item.owner !== undefined || item.ownerName !== undefined || item.ownerId !== undefined || item.userId !== undefined) {

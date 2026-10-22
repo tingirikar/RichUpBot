@@ -1,6 +1,5 @@
 import { GameMemory } from '../memory/gameMemory.js';
 import { MarkovRisk } from './markovRisk.js';
-import { BOARD_TILES } from '../data/boardTiles.js';
 
 /**
  * CONTEXT-AWARE JAIL STRATEGY ENGINE
@@ -38,8 +37,9 @@ export const JailStrategy = {
         }
 
         // 3. LATE GAME EVALUATION
-        const dangerOutside = MarkovRisk.analyzeDangerAhead(10); // Jail is Tile 10
-        const reserve = MarkovRisk.computeDynamicReserve(10);
+        const prisonPos = GameMemory.prisonBlockIndex ?? 10;
+        const dangerOutside = MarkovRisk.analyzeDangerAhead(prisonPos);
+        const reserve = MarkovRisk.computeDynamicReserve(prisonPos);
         const canCollectRentInJail = GameMemory.roomSettings.collectRentInJail;
 
         // If room setting prohibits rent collection in jail:
@@ -88,7 +88,8 @@ export const JailStrategy = {
     areOpponentsApproachingOurProperties() {
         // Collect tile IDs of our developed properties
         const myHotels = [];
-        for (const tile of BOARD_TILES) {
+        const allTiles = GameMemory.getAllTiles();
+        for (const tile of allTiles) {
             const info = GameMemory.ownership[tile.id];
             if (info && GameMemory.isMe(info.owner) && info.houses >= 1) {
                 myHotels.push(tile.id);
@@ -97,12 +98,13 @@ export const JailStrategy = {
 
         if (myHotels.length === 0) return false;
 
+        const bLen = GameMemory.getBoardLength();
         for (const [pName, pData] of Object.entries(GameMemory.players)) {
             if (GameMemory.isMe(pName) || pData.bankrupt || pData.inJail) continue;
 
             const oppPos = pData.pos || 0;
             for (const hotelTileId of myHotels) {
-                const distance = (hotelTileId - oppPos + 40) % 40;
+                const distance = (hotelTileId - oppPos + bLen) % bLen;
                 // High probability 2-12 roll window
                 if (distance >= 2 && distance <= 12) {
                     return true;
@@ -117,7 +119,8 @@ export const JailStrategy = {
      */
     countOpponentHouses() {
         let count = 0;
-        for (const tile of BOARD_TILES) {
+        const allTiles = GameMemory.getAllTiles();
+        for (const tile of allTiles) {
             const info = GameMemory.ownership[tile.id];
             if (info && info.owner && !GameMemory.isMe(info.owner)) {
                 count += (info.houses || 0);

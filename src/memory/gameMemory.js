@@ -27,10 +27,44 @@ export const GameMemory = {
     isNegativeDebt: false,
     currentRoomId: null,
 
+    // Universal Dynamic Map State (40-tile classic, 48-tile expanded, or arbitrary custom boards)
+    boardLength: 40,
+    prisonBlockIndex: 10,
+    vacationBlockIndex: 20,
+    goToPrisonBlockIndex: 30,
+    boardTiles: [],
+    groupTiles: {},
+    vacationCash: 0,
+    autoActedTurns: 0,
+    pardonCards: { treasure: false, surprise: false },
+    currentPlayerIndex: 0,
+    participantsOrder: [],
+
+    getBoardLength() {
+        return (this.boardTiles && this.boardTiles.length > 0) ? this.boardTiles.length : (this.boardLength || 40);
+    },
+
+    getAllTiles() {
+        return (this.boardTiles && this.boardTiles.length > 0) ? this.boardTiles : BOARD_TILES;
+    },
+
+    getGroupTiles() {
+        return (this.groupTiles && Object.keys(this.groupTiles).length > 0) ? this.groupTiles : GROUP_TILES;
+    },
+
+    getTile(tileId) {
+        if (typeof tileId !== 'number') return null;
+        if (this.boardTiles && this.boardTiles[tileId]) {
+            return this.boardTiles[tileId];
+        }
+        return BOARD_TILES[tileId % BOARD_TILES.length] || null;
+    },
+
     // Turn Clock & Anti-AFK Protection State
     turnClock: {
         turnStartedAt: 0,
         graceMs: 20000,
+        debtGraceMs: 60000,
         bankMs: 60000,
         grantedMs: 0,
         turnExpiresAt: 0,
@@ -44,6 +78,7 @@ export const GameMemory = {
         const cfg = clockData.config || {};
         const turn = clockData.turn || {};
         if (cfg.graceMs) this.turnClock.graceMs = cfg.graceMs;
+        if (cfg.debtGraceMs) this.turnClock.debtGraceMs = cfg.debtGraceMs;
         if (turn.turnStartedAt) {
             if (this.turnClock.turnStartedAt !== turn.turnStartedAt) {
                 this.turnClock.turnStartedAt = turn.turnStartedAt;
@@ -51,7 +86,8 @@ export const GameMemory = {
             }
         }
         this.turnClock.grantedMs = turn.grantedMs || 0;
-        const totalBudget = (this.turnClock.graceMs || 20000) + (this.turnClock.grantedMs || 0) + (this.turnClock.bankMs || 60000);
+        const grace = turn.debtGraceLatched ? (this.turnClock.debtGraceMs || 60000) : (this.turnClock.graceMs || 20000);
+        const totalBudget = grace + (this.turnClock.grantedMs || 0) + (this.turnClock.bankMs || 60000);
         this.turnClock.turnExpiresAt = (this.turnClock.turnStartedAt || Date.now()) + totalBudget;
     },
 
@@ -216,15 +252,22 @@ export const GameMemory = {
         this.declinedTrades = {};
         this.activeOutgoingTradeId = null;
         this.activeOutgoingTradeTime = 0;
+        this.vacationCash = 0;
+        this.autoActedTurns = 0;
+        this.pardonCards = { treasure: false, surprise: false };
+        this.currentPlayerIndex = 0;
+        this.participantsOrder = [];
         this.turnClock = {
             turnStartedAt: 0,
             graceMs: 20000,
+            debtGraceMs: 60000,
             bankMs: 60000,
             grantedMs: 0,
             turnExpiresAt: 0,
             clockRequestedThisTurn: false
         };
-        BOARD_TILES.forEach(t => {
+        const tiles = this.getAllTiles();
+        tiles.forEach(t => {
             if (t.group) {
                 this.ownership[t.id] = { owner: null, houses: 0, mortgaged: false };
             }
@@ -233,7 +276,8 @@ export const GameMemory = {
     },
 
     getGroupCount(groupName, ownerName) {
-        const tiles = GROUP_TILES[groupName] || [];
+        const gMap = this.getGroupTiles();
+        const tiles = gMap[groupName] || [];
         let count = 0;
         for (const t of tiles) {
             const info = this.ownership[t.id];
@@ -247,7 +291,8 @@ export const GameMemory = {
 
     getUnownedPropertyCount() {
         let unowned = 0;
-        for (const t of BOARD_TILES) {
+        const tiles = this.getAllTiles();
+        for (const t of tiles) {
             if (t.group && (!this.ownership[t.id] || !this.ownership[t.id].owner)) {
                 unowned++;
             }
@@ -256,9 +301,9 @@ export const GameMemory = {
     },
 
     getTileCurrentRent(tileId, visitorName = null) {
-        const tile = BOARD_TILES[tileId];
+        const tile = this.getTile(tileId);
         if (!tile) return 0;
-        if (tile.type === 'tax') return tile.rent[0] || 0;
+        if (tile.type === 'tax' || tile.type === 'bonus') return (tile.rent && tile.rent[0]) || 0;
         if (!tile.group) return 0;
 
         const info = this.ownership[tileId];
@@ -279,15 +324,22 @@ export const GameMemory = {
         }
 
         if (tile.type === 'airport') {
-            return tile.rent[Math.max(0, Math.min(owned - 1, 3))] || 25;
+            if (Array.isArray(tile.rent)) {
+                return tile.rent[Math.max(0, Math.min(owned - 1, tile.rent.length - 1))] || 25;
+            }
+            return 25 * Math.pow(2, Math.max(0, owned - 1));
         }
         if (tile.type === 'utility') {
             return owned >= 2 ? 70 : 28;
         }
         if (info.houses > 0) {
-            return tile.rent[Math.min(info.houses, 5)] || tile.rent[0];
+            if (Array.isArray(tile.rent)) {
+                return tile.rent[Math.min(info.houses, tile.rent.length - 1)] || tile.rent[0] || 0;
+            }
+            return (tile.rent && tile.rent[info.houses]) || 0;
         }
-        return owned === total ? tile.rent[0] * 2 : tile.rent[0];
+        const baseRent = (tile.rent && tile.rent[0]) || 0;
+        return (total > 0 && owned === total) ? baseRent * 2 : baseRent;
     }
 };
 

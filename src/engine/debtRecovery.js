@@ -1,4 +1,3 @@
-import { BOARD_TILES } from '../data/boardTiles.js';
 import { GameMemory } from '../memory/gameMemory.js';
 import { OpponentTracker } from '../memory/opponentTracker.js';
 
@@ -15,7 +14,7 @@ export const DebtRecovery = {
 
         // Calculate max houses per group for Even Build compliance
         const groupMaxHouses = {};
-        for (const tile of BOARD_TILES) {
+        for (const tile of GameMemory.getAllTiles()) {
             if (!tile.group) continue;
             const info = GameMemory.ownership[tile.id];
             if (info && GameMemory.isMe(info.owner)) {
@@ -23,7 +22,7 @@ export const DebtRecovery = {
             }
         }
 
-        for (const tile of BOARD_TILES) {
+        for (const tile of GameMemory.getAllTiles()) {
             if (!tile.group) continue;
             const info = GameMemory.ownership[tile.id];
             if (!info || !GameMemory.isMe(info.owner) || info.mortgaged) continue;
@@ -95,7 +94,7 @@ export const DebtRecovery = {
      */
     rankUnmortgageCandidates(myCash, reserve) {
         const candidates = [];
-        for (const tile of BOARD_TILES) {
+        for (const tile of GameMemory.getAllTiles()) {
             if (!tile.group) continue;
             const info = GameMemory.ownership[tile.id];
             if (!info || !GameMemory.isMe(info.owner) || !info.mortgaged) continue;

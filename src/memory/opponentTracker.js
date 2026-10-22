@@ -1,4 +1,3 @@
-import { BOARD_TILES, GROUP_TILES } from '../data/boardTiles.js';
 import { GameMemory } from './gameMemory.js';
 
 /**
@@ -41,7 +40,7 @@ export const OpponentTracker = {
             const hungrySets = []; // Color groups where opponent has total - 1
             let totalPropertyNetWorth = 0;
 
-            for (const tile of BOARD_TILES) {
+            for (const tile of GameMemory.getAllTiles()) {
                 if (!tile.group) continue;
                 const info = GameMemory.ownership[tile.id];
                 if (info && isSamePlayer(info.owner, pName)) {
@@ -51,7 +50,7 @@ export const OpponentTracker = {
             }
 
             // Check each color group for monopoly threats
-            for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
+            for (const [groupName, tiles] of Object.entries(GameMemory.getGroupTiles())) {
                 if (tiles[0].type !== 'property') continue;
                 const ownedCount = tiles.filter(t => isSamePlayer(GameMemory.ownership[t.id]?.owner, pName)).length;
                 if (ownedCount === tiles.length - 1) {
@@ -116,7 +115,7 @@ export const OpponentTracker = {
     getMyMissingCards() {
         const myMissing = [];
 
-        for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
+        for (const [groupName, tiles] of Object.entries(GameMemory.getGroupTiles())) {
             if (tiles[0].type !== 'property' && tiles[0].type !== 'airport') continue;
             const myCount = tiles.filter(t => GameMemory.isMe(GameMemory.ownership[t.id]?.owner)).length;
 
@@ -142,7 +141,7 @@ export const OpponentTracker = {
      */
     getMyAdvancingNeeds() {
         const needs = [];
-        for (const [groupName, tiles] of Object.entries(GROUP_TILES)) {
+        for (const [groupName, tiles] of Object.entries(GameMemory.getGroupTiles())) {
             if (tiles[0].type !== 'property' || tiles.length !== 3) continue;
             const myCount = tiles.filter(t => GameMemory.isMe(GameMemory.ownership[t.id]?.owner)).length;
             if (myCount === 1) {
@@ -173,7 +172,7 @@ export const OpponentTracker = {
         const safe = [];
         const tradable = [];
 
-        for (const tile of BOARD_TILES) {
+        for (const tile of GameMemory.getAllTiles()) {
             if (!tile.group) continue;
             const info = GameMemory.ownership[tile.id];
             if (info && GameMemory.isMe(info.owner) && info.houses === 0) {
@@ -197,7 +196,7 @@ export const OpponentTracker = {
      */
     getAllTradableSingletons() {
         const tradable = [];
-        for (const tile of BOARD_TILES) {
+        for (const tile of GameMemory.getAllTiles()) {
             if (!tile.group) continue;
             const info = GameMemory.ownership[tile.id];
             if (info && GameMemory.isMe(info.owner) && info.houses === 0) {

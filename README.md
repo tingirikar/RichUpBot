@@ -2,17 +2,12 @@
 
 an intelligent bot, which autonomously plays richup.io games!
 
-## features
-
-- it can roll dice
-
-
 
 ## 🚀 Installation & Setup
 
 1. **Prerequisites:**
    * Install the [Tampermonkey](https://www.tampermonkey.net/) browser extension.
-   * *(Optional for AI Brain)* Install [Ollama](https://ollama.com/) and run `ollama run qwen2.5:7b`.
+   * Install [Ollama](https://ollama.com/) and run `ollama run qwen2.5:7b`.
 
 2. **Build the Userscript:**
    ```bash

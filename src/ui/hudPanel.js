@@ -1,7 +1,6 @@
 import { CONFIG } from '../config.js';
 import { GameMemory } from '../memory/gameMemory.js';
 import { OllamaClient } from '../engine/ollamaClient.js';
-import { BOARD_TILES, GROUP_TILES } from '../data/boardTiles.js';
 import { OpponentTracker } from '../memory/opponentTracker.js';
 import { requestFullStateResync } from '../protocol/socketHook.js';
 
@@ -446,6 +445,7 @@ export const HUDPanel = {
                         <div class="rubot-log-toolbar">
                             <span class="rubot-log-title">Live Action Stream</span>
                             <div style="display:flex;gap:5px;">
+                                <button class="rubot-btn-clear" id="rubot-btn-export-log" title="Export Match Trace to JSONL">Export JSONL</button>
                                 <button class="rubot-btn-clear" id="rubot-btn-copy-log">Copy</button>
                                 <button class="rubot-btn-clear" id="rubot-btn-clear-log">Clear</button>
                             </div>
@@ -649,6 +649,43 @@ export const HUDPanel = {
             this.logTerminal(`Chat Engagement: ${e.target.checked ? 'ENABLED (Casual human replies)' : 'DISABLED (100% silent)'}`);
         });
 
+        // Toolbar Action Listeners (Export JSONL, Copy, Clear)
+        const exportBtn = document.getElementById('rubot-btn-export-log');
+        if (exportBtn) {
+            exportBtn.addEventListener('click', () => {
+                const logs = Array.from(this.elements.terminal?.querySelectorAll('.log-line') || [])
+                    .reverse()
+                    .map(el => ({
+                        ts: el.querySelector('.log-ts')?.textContent || '',
+                        msg: el.querySelector('.log-msg')?.textContent || ''
+                    }));
+                const trace = {
+                    exportedAt: new Date().toISOString(),
+                    room: GameMemory.currentRoomId,
+                    boardLength: GameMemory.getBoardLength(),
+                    myName: GameMemory.myName,
+                    myCash: GameMemory.myCash,
+                    myPos: GameMemory.myPos,
+                    autoActedTurns: GameMemory.autoActedTurns,
+                    vacationCash: GameMemory.vacationCash,
+                    pardonCards: GameMemory.pardonCards,
+                    players: GameMemory.players,
+                    ownership: GameMemory.ownership,
+                    roomSettings: GameMemory.roomSettings,
+                    logs
+                };
+                const jsonl = JSON.stringify(trace, null, 2);
+                const blob = new Blob([jsonl], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `richup_trace_${GameMemory.currentRoomId || 'match'}_${Date.now()}.jsonl`;
+                a.click();
+                URL.revokeObjectURL(url);
+                this.logTerminal(`Match trace exported: ${a.download}`);
+            });
+        }
+
         this.initDragAndPersistence();
 
         window.__richupLogTerminal = (msg) => this.logTerminal(msg);
@@ -826,9 +863,9 @@ export const HUDPanel = {
         const myCash = GameMemory.myCash;
         
         // 1. My Holdings
-        const myTiles = BOARD_TILES.filter(t => t.group && GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
+        const myTiles = GameMemory.getAllTiles().filter(t => t.group && GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
         const myMonopolies = [];
-        for (const [groupName, groupTiles] of Object.entries(GROUP_TILES)) {
+        for (const [groupName, groupTiles] of Object.entries(GameMemory.getGroupTiles())) {
             if (groupName === 'Airport' || groupName === 'Utility') continue;
             if (groupTiles.every(t => GameMemory.isMe(GameMemory.ownership[t.id]?.owner))) {
                 myMonopolies.push(groupName);
@@ -846,11 +883,17 @@ export const HUDPanel = {
                 <div class="rubot-intel-title">
                     <span>👑 ME (${myName})</span>
                     <div style="display:flex;gap:4px;align-items:center;">
+                        <span class="rubot-intel-badge ${GameMemory.autoActedTurns >= 1 ? 'rose' : 'green'}">Strikes: ${GameMemory.autoActedTurns || 0}/2</span>
                         <span class="rubot-intel-badge violet">Tile #${GameMemory.myPos || 0}</span>
                         <span class="rubot-intel-badge green">$${myCash}</span>
                     </div>
                 </div>
                 <div class="rubot-intel-content" style="margin-top:2px;">
+                    <div style="display:flex;gap:6px;margin-bottom:4px;font-size:9.5px;color:#c4b5fd;">
+                        <span>🗺️ Board: <b>${GameMemory.getBoardLength()} Tiles</b></span>
+                        <span>🏖️ Vacation Pot: <b>$${GameMemory.vacationCash || 0}</b></span>
+                        <span>🛡️ Pardon: <b>${GameMemory.pardonCards.treasure || GameMemory.pardonCards.surprise ? 'YES' : 'No'}</b></span>
+                    </div>
                     <b>Properties (${myTiles.length}):</b> ${myTiles.length > 0 ? myTiles.map(t => {
                         const h = GameMemory.ownership[t.id]?.houses || 0;
                         const hStr = h === 5 ? ' [🏨]' : (h > 0 ? ` [🏠x${h}]` : '');

@@ -1,6 +1,5 @@
 import { CONFIG } from '../config.js';
 import { GameMemory } from '../memory/gameMemory.js';
-import { BOARD_TILES, GROUP_TILES } from '../data/boardTiles.js';
 import { TradeEngine } from './tradeEngine.js';
 
 /**
@@ -259,7 +258,7 @@ export const OllamaClient = {
         // Tally properties, houses, hotels, and monopolies
         for (const [tileId, ownInfo] of Object.entries(GameMemory.ownership)) {
             if (!ownInfo || !ownInfo.owner) continue;
-            const tile = BOARD_TILES[tileId];
+            const tile = GameMemory.getTile(tileId);
             if (!tile) continue;
 
             const ownerKey = Object.keys(playerStats).find(k => 
@@ -291,8 +290,9 @@ export const OllamaClient = {
         }
 
         // Identify complete monopolies and house counts on each
+        const gTilesMap = GameMemory.getGroupTiles();
         for (const [pName, pEntry] of Object.entries(playerStats)) {
-            for (const [groupName, groupTiles] of Object.entries(GROUP_TILES)) {
+            for (const [groupName, groupTiles] of Object.entries(gTilesMap)) {
                 if (groupName === 'Airport' || groupName === 'Utility') continue;
                 const ownsAll = groupTiles.every(t => {
                     const o = GameMemory.ownership[t.id];
@@ -331,8 +331,8 @@ export const OllamaClient = {
         // Check if trade completes monopolies
         const partnerCompletedGroups = [];
         for (const t of givenTiles) {
-            if (t.group && GROUP_TILES[t.group]) {
-                const groupTiles = GROUP_TILES[t.group];
+            if (t.group && gTilesMap[t.group]) {
+                const groupTiles = gTilesMap[t.group];
                 const othersOwned = groupTiles.filter(gid => gid !== t.id).every(gid => {
                     const o = GameMemory.ownership[gid];
                     return o && (o.owner?.toLowerCase() === partner.toLowerCase());
@@ -343,8 +343,8 @@ export const OllamaClient = {
 
         const myCompletedGroups = [];
         for (const t of receivedTiles) {
-            if (t.group && GROUP_TILES[t.group]) {
-                const groupTiles = GROUP_TILES[t.group];
+            if (t.group && gTilesMap[t.group]) {
+                const groupTiles = gTilesMap[t.group];
                 const othersOwned = groupTiles.filter(gid => gid !== t.id).every(gid => {
                     const o = GameMemory.ownership[gid];
                     return o && GameMemory.isMe(o.owner);
@@ -572,7 +572,7 @@ Output strictly valid JSON:
         }
 
         const monopolies = [];
-        for (const [groupName, groupTiles] of Object.entries(GROUP_TILES)) {
+        for (const [groupName, groupTiles] of Object.entries(GameMemory.getGroupTiles())) {
             if (groupName === 'Airport' || groupName === 'Utility') continue;
             const ownsAll = groupTiles.every(t => GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
             if (ownsAll) monopolies.push(groupName);

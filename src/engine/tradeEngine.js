@@ -1,4 +1,4 @@
-import { GROUP_TILES, BOARD_TILES, GROUP_POWER } from '../data/boardTiles.js';
+import { GROUP_POWER } from '../data/boardTiles.js';
 import { GameMemory } from '../memory/gameMemory.js';
 import { OpponentTracker } from '../memory/opponentTracker.js';
 import { CONFIG } from '../config.js';
@@ -73,15 +73,17 @@ export const TradeEngine = {
             let myBankrupt = myCash < 0;
             let oppBankrupt = oppCash < 0;
 
+            const bLen = GameMemory.getBoardLength();
+            const groupTilesMap = GameMemory.getGroupTiles();
             for (let r = 1; r <= numRounds; r++) {
                 // Player My Turn
                 if (!myBankrupt) {
                     const roll = Math.floor(Math.random() * 6 + 1) + Math.floor(Math.random() * 6 + 1);
-                    const newPos = (myPos + roll) % 40;
+                    const newPos = (myPos + roll) % bLen;
                     if (newPos < myPos) myCash += 200; // Salary for passing GO
                     myPos = newPos;
 
-                    const tile = BOARD_TILES[myPos];
+                    const tile = GameMemory.getTile(myPos);
                     if (tile?.group) {
                         const info = simOwnership[tile.id];
                         if (info?.owner === partnerName && !info.mortgaged) {
@@ -89,13 +91,13 @@ export const TradeEngine = {
                             if (tile.type === 'property' && tile.rent) {
                                 rent = tile.rent[info.houses || 0] || tile.rent[0];
                                 if ((info.houses || 0) === 0 && tile.group) {
-                                    const gTiles = GROUP_TILES[tile.group] || [];
+                                    const gTiles = groupTilesMap[tile.group] || [];
                                     if (gTiles.length > 0 && gTiles.every(gt => simOwnership[gt.id]?.owner === partnerName)) {
                                         rent *= 2;
                                     }
                                 }
                             } else if (tile.type === 'airport') {
-                                const count = Object.values(simOwnership).filter(x => x.owner === partnerName && BOARD_TILES[x.id]?.type === 'airport').length;
+                                const count = Object.values(simOwnership).filter(x => x.owner === partnerName && GameMemory.getTile(x.id)?.type === 'airport').length;
                                 rent = 25 * Math.pow(2, Math.max(0, count - 1));
                             }
                             myCash -= rent;
@@ -108,11 +110,11 @@ export const TradeEngine = {
                 // Opponent Turn
                 if (!oppBankrupt) {
                     const roll = Math.floor(Math.random() * 6 + 1) + Math.floor(Math.random() * 6 + 1);
-                    const newPos = (oppPos + roll) % 40;
+                    const newPos = (oppPos + roll) % bLen;
                     if (newPos < oppPos) oppCash += 200;
                     oppPos = newPos;
 
-                    const tile = BOARD_TILES[oppPos];
+                    const tile = GameMemory.getTile(oppPos);
                     if (tile?.group) {
                         const info = simOwnership[tile.id];
                         if (info && GameMemory.isMe(info.owner) && !info.mortgaged) {
@@ -120,13 +122,13 @@ export const TradeEngine = {
                             if (tile.type === 'property' && tile.rent) {
                                 rent = tile.rent[info.houses || 0] || tile.rent[0];
                                 if ((info.houses || 0) === 0 && tile.group) {
-                                    const gTiles = GROUP_TILES[tile.group] || [];
+                                    const gTiles = groupTilesMap[tile.group] || [];
                                     if (gTiles.length > 0 && gTiles.every(gt => GameMemory.isMe(simOwnership[gt.id]?.owner))) {
                                         rent *= 2;
                                     }
                                 }
                             } else if (tile.type === 'airport') {
-                                const count = Object.values(simOwnership).filter(x => GameMemory.isMe(x.owner) && BOARD_TILES[x.id]?.type === 'airport').length;
+                                const count = Object.values(simOwnership).filter(x => GameMemory.isMe(x.owner) && GameMemory.getTile(x.id)?.type === 'airport').length;
                                 rent = 25 * Math.pow(2, Math.max(0, count - 1));
                             }
                             oppCash -= rent;
@@ -223,7 +225,7 @@ export const TradeEngine = {
 
         // Check our current monopoly status (Phase 1: Need monopoly vs Phase 2: Already hold monopoly)
         const myExistingMonopolies = [];
-        for (const [groupName, groupTiles] of Object.entries(GROUP_TILES)) {
+        for (const [groupName, groupTiles] of Object.entries(GameMemory.getGroupTiles())) {
             if (groupName === 'Airport' || groupName === 'Utility') continue;
             if (groupTiles.every(t => GameMemory.isMe(GameMemory.ownership[t.id]?.owner))) {
                 myExistingMonopolies.push(groupName);
@@ -263,7 +265,7 @@ export const TradeEngine = {
         // If opponent ALREADY owns a monopoly, NEVER give them another set!
         if (givesOppMonopoly) {
             const oppMonopolies = [];
-            for (const [gName, gTiles] of Object.entries(GROUP_TILES)) {
+            for (const [gName, gTiles] of Object.entries(GameMemory.getGroupTiles())) {
                 if (gName === 'Airport' || gName === 'Utility') continue;
                 if (gTiles.every(t => GameMemory.ownership[t.id]?.owner === partnerName)) {
                     oppMonopolies.push(gName);
@@ -531,7 +533,7 @@ export const TradeEngine = {
         const safeSacrifices = OpponentTracker.getSafeTradeSacrifices();
 
         const myExistingMonopolies = [];
-        for (const [groupName, groupTiles] of Object.entries(GROUP_TILES)) {
+        for (const [groupName, groupTiles] of Object.entries(GameMemory.getGroupTiles())) {
             if (groupName === 'Airport' || groupName === 'Utility') continue;
             if (groupTiles.every(t => GameMemory.isMe(GameMemory.ownership[t.id]?.owner))) {
                 myExistingMonopolies.push(groupName);
@@ -696,9 +698,10 @@ export const TradeEngine = {
 
         // 4. AIRPORT ACQUISITION (Airport synergy - only in Phase 1 before securing a monopoly)
         if (!weAlreadyHaveMonopoly) {
-            const myAirports = BOARD_TILES.filter(t => t.type === 'airport' && GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
+            const allTiles = GameMemory.getAllTiles();
+            const myAirports = allTiles.filter(t => t.type === 'airport' && GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
             if (myAirports.length >= 1 && myAirports.length < 4) {
-                const otherAirports = BOARD_TILES.filter(t => t.type === 'airport' && !GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
+                const otherAirports = allTiles.filter(t => t.type === 'airport' && !GameMemory.isMe(GameMemory.ownership[t.id]?.owner));
                 for (const air of otherAirports) {
                     const holder = GameMemory.ownership[air.id]?.owner;
                     if (holder && !opportunities.some(o => o.targetOwner === holder && o.myReceivedTile.id === air.id)) {
